@@ -6,6 +6,9 @@ public record GenerationSettings(int contextLimit, int responseLength, double te
 {
     public static GenerationSettings defaults()
     {
-        return new GenerationSettings(8192, 256, 0.8, 40, 0.95, 0.0, 0.0, 1024, 8, 2);
+        int contextLimit = 8192;
+        int minStoryWindow = (int) Math.round(contextLimit * 0.9);
+        return new GenerationSettings(contextLimit, 200, 0.8, 200, 0.95, 0.25, 0.0, minStoryWindow, 5,
+                2);
     }
 }
