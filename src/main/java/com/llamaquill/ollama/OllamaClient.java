@@ -37,6 +37,8 @@ public class OllamaClient
             throws IOException, InterruptedException
     {
         String payload = buildPayload(prompt, settings);
+        System.out.println("Ollama payload:");
+        System.out.println(payload);
         HttpRequest request = HttpRequest.newBuilder().uri(URI.create(host + "/api/generate"))
                 .timeout(Duration.ofMinutes(2)).header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8)).build();
@@ -49,6 +51,7 @@ public class OllamaClient
         }
 
         StringBuilder sb = new StringBuilder();
+        String doneLine = null;
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(response.body(), StandardCharsets.UTF_8)))
         {
@@ -62,9 +65,15 @@ public class OllamaClient
                 }
                 if (Json.isDone(line))
                 {
+                    doneLine = line;
                     break;
                 }
             }
+        }
+        if (doneLine != null)
+        {
+            System.out.println("Ollama final response:");
+            System.out.println(doneLine);
         }
         return sb.toString();
     }
@@ -75,6 +84,7 @@ public class OllamaClient
         sb.append('{');
         sb.append("\"model\":\"").append(Json.escape(model)).append("\"");
         sb.append(",\"prompt\":\"").append(Json.escape(prompt)).append("\"");
+        sb.append(",\"raw\":true");
         sb.append(",\"stream\":true");
         sb.append(",\"options\":{");
         sb.append("\"num_ctx\":").append(settings.contextLimit());

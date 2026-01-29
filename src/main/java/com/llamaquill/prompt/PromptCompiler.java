@@ -18,6 +18,7 @@ public class PromptCompiler
 {
     private static final int CHARS_PER_TOKEN = 4;
     private static final boolean PREFIX_USER_LINES = true;
+    private static final int ASSISTANT_TAIL_MERGE = 2;
 
     public PromptCompilation compile(Story story, List<Block> blocks, List<StoryCard> storyCards,
             GenerationSettings settings)
@@ -40,10 +41,22 @@ public class PromptCompiler
         {
             List<Block> windowWithNote = insertAuthorNote(window, settings.anPlacement(),
                     safeText(story.authorNote()));
-            String systemText = buildSystemText(safeText(story.systemPrompt()), plotEssentials,
-                    selection.pinned, selection.triggered);
+            String systemText = safeText(story.systemPrompt());
 
-            List<Message> messages = groupMessages(windowWithNote);
+            List<Message> messages = new ArrayList<>();
+            if (!plotEssentials.isBlank())
+            {
+                messages.add(new Message(Role.USER, plotEssentials.trim()));
+            }
+            for (StoryCard card : selection.pinned)
+            {
+                messages.add(new Message(Role.USER, formatStoryCard(card)));
+            }
+            for (StoryCard card : selection.triggered)
+            {
+                messages.add(new Message(Role.USER, formatStoryCard(card)));
+            }
+            messages.addAll(groupMessages(windowWithNote));
             String prompt = ChatMl.format(systemText, messages);
             int estimatedTokens = estimateTokens(prompt);
 
@@ -84,19 +97,7 @@ public class PromptCompiler
 
     private static List<Block> buildStoryWindow(List<Block> blocks, int minWindowChars)
     {
-        List<Block> window = new ArrayList<>();
-        int totalChars = 0;
-        for (int i = blocks.size() - 1; i >= 0; i--)
-        {
-            Block block = blocks.get(i);
-            window.add(0, block);
-            totalChars += block.text().length();
-            if (totalChars >= minWindowChars)
-            {
-                break;
-            }
-        }
-        return window;
+        return new ArrayList<>(blocks);
     }
 
     private static int windowSizeChars(List<Block> window)
@@ -112,7 +113,7 @@ public class PromptCompiler
     private static List<Block> trimStoryWindow(List<Block> window, int minWindowChars)
     {
         List<Block> trimmed = new ArrayList<>(window);
-        while (trimmed.size() > 1 && windowSizeChars(trimmed) > minWindowChars)
+        if (trimmed.size() > 1 && windowSizeChars(trimmed) > minWindowChars)
         {
             trimmed.remove(0);
         }
@@ -218,37 +219,18 @@ public class PromptCompiler
         return sb.toString();
     }
 
-    private static String buildSystemText(String systemPrompt, String plotEssentials,
-            List<StoryCard> pinned, List<StoryCard> triggered)
+    private static String formatStoryCard(StoryCard card)
     {
-        StringBuilder sb = new StringBuilder();
-        if (!systemPrompt.isBlank())
+        if (card == null)
         {
-            sb.append(systemPrompt.trim());
+            return "";
         }
-        if (!plotEssentials.isBlank())
+        String content = safeText(card.content()).trim();
+        if (!content.isBlank())
         {
-            sb.append("\n\nPlot Essentials:\n").append(plotEssentials.trim());
+            return content;
         }
-        if (!pinned.isEmpty())
-        {
-            sb.append("\n\nStory Cards (Pinned):\n");
-            appendCards(sb, pinned);
-        }
-        if (!triggered.isEmpty())
-        {
-            sb.append("\n\nStory Cards (Triggered):\n");
-            appendCards(sb, triggered);
-        }
-        return sb.toString().trim();
-    }
-
-    private static void appendCards(StringBuilder sb, List<StoryCard> cards)
-    {
-        for (StoryCard card : cards)
-        {
-            sb.append("- ").append(card.title()).append(": ").append(card.content()).append('\n');
-        }
+        return safeText(card.title()).trim();
     }
 
     private static List<Message> groupMessages(List<Block> window)
@@ -259,38 +241,88 @@ public class PromptCompiler
             return messages;
         }
 
-        Role currentRole = null;
-        StringBuilder currentText = new StringBuilder();
-
-        for (Block block : window)
+        int index = 0;
+        while (index < window.size())
         {
+            Block block = window.get(index);
             Role role = block.role();
-            String text = normalizeBlockText(block);
-
-            if (currentRole == null)
+            if (role == Role.USER)
             {
-                currentRole = role;
-                currentText.append(text);
+                StringBuilder currentText = new StringBuilder(normalizeBlockText(block));
+                index++;
+                while (index < window.size() && window.get(index).role() == Role.USER)
+                {
+                    currentText.append("\n\n").append(normalizeBlockText(window.get(index)));
+                    index++;
+                }
+                messages.add(new Message(Role.USER, currentText.toString()));
                 continue;
             }
 
-            if (currentRole == role)
+            List<Block> assistantRun = new ArrayList<>();
+            while (index < window.size() && window.get(index).role() == Role.ASSISTANT)
             {
-                currentText.append("\n\n").append(text);
+                assistantRun.add(window.get(index));
+                index++;
             }
-            else
-            {
-                messages.add(new Message(currentRole, currentText.toString()));
-                currentRole = role;
-                currentText = new StringBuilder(text);
-            }
-        }
 
-        if (currentRole != null)
-        {
-            messages.add(new Message(currentRole, currentText.toString()));
+            int mergeCount = Math.max(1, ASSISTANT_TAIL_MERGE);
+            int splitIndex = Math.max(0, assistantRun.size() - mergeCount);
+            for (int i = 0; i < splitIndex; i++)
+            {
+                messages.add(new Message(Role.ASSISTANT, normalizeBlockText(assistantRun.get(i))));
+            }
+
+            StringBuilder tail = new StringBuilder();
+            for (int i = splitIndex; i < assistantRun.size(); i++)
+            {
+                String text = normalizeBlockText(assistantRun.get(i));
+                if (tail.length() == 0)
+                {
+                    tail.append(text);
+                }
+                else
+                {
+                    appendContinuous(tail, text);
+                }
+            }
+            if (tail.length() > 0)
+            {
+                messages.add(new Message(Role.ASSISTANT, tail.toString()));
+            }
         }
         return messages;
+    }
+
+    private static void appendContinuous(StringBuilder currentText, String nextText)
+    {
+        if (nextText == null || nextText.isEmpty())
+        {
+            return;
+        }
+        if (currentText.length() == 0)
+        {
+            currentText.append(nextText);
+            return;
+        }
+        char last = currentText.charAt(currentText.length() - 1);
+        char first = nextText.charAt(0);
+        if (!Character.isWhitespace(last) && !Character.isWhitespace(first)
+                && !startsWithPunctuation(nextText))
+        {
+            currentText.append(' ');
+        }
+        currentText.append(nextText);
+    }
+
+    private static boolean startsWithPunctuation(String text)
+    {
+        if (text == null || text.isEmpty())
+        {
+            return false;
+        }
+        char first = text.charAt(0);
+        return ",.;:!?)]}\"'".indexOf(first) >= 0;
     }
 
     private static String normalizeBlockText(Block block)
@@ -368,23 +400,29 @@ public class PromptCompiler
             StringBuilder sb = new StringBuilder();
             if (systemText != null && !systemText.isBlank())
             {
-                appendMessage(sb, "system", systemText.trim());
+                appendMessage(sb, "system", systemText.trim(), true);
             }
-            for (Message message : messages)
+            for (int i = 0; i < messages.size(); i++)
             {
-                appendMessage(sb, message.role().wire(), message.content());
+                Message message = messages.get(i);
+                boolean isLast = i == messages.size() - 1;
+                boolean close = !(isLast && message.role() == Role.ASSISTANT);
+                appendMessage(sb, message.role().wire(), message.content(), close);
             }
-            return sb.toString().trim();
+            return sb.toString();
         }
 
-        private static void appendMessage(StringBuilder sb, String role, String content)
+        private static void appendMessage(StringBuilder sb, String role, String content, boolean close)
         {
             if (sb.length() > 0)
             {
                 sb.append('\n');
             }
-            sb.append("<|im_start|>").append(role).append('\n').append(content).append('\n')
-                    .append("<|im_end|>");
+            sb.append("<|im_start|>").append(role).append('\n').append(content);
+            if (close)
+            {
+                sb.append("<|im_end|>");
+            }
         }
     }
 }

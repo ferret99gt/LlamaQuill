@@ -70,8 +70,8 @@ public class App extends Application
             + "Write in second person present tense (You are), crafting vivid, engaging narratives with authority and confidence.";
 
     private static final int MAX_STORY_LINES = 20;
-    private static final int SIDEBAR_WIDTH = 240;
-    private static final int RIGHT_SIDEBAR_WIDTH = 320;
+    private static final int LEFT_SIDEBAR_WIDTH = 480;
+    private static final int RIGHT_SIDEBAR_WIDTH = 480;
 
     private Connection connection;
     private StoryRepository storyRepository;
@@ -102,7 +102,7 @@ public class App extends Application
     private Button newStoryButton;
     private Button collapseLeftButton;
     private ListView<Story> storyList;
-    private VBox storySidebar;
+    private VBox leftSideBar;
     private Label storyHeader;
 
     private Button collapseRightButton;
@@ -126,6 +126,7 @@ public class App extends Application
     private String activeAssistantEditId;
     private TextFlow activeAssistantFlow;
     private TextArea activeAssistantEditor;
+    private StackPane activeAssistantEditorContainer;
 
     private Slider contextLimitSlider;
     private Slider responseLengthSlider;
@@ -146,6 +147,7 @@ public class App extends Application
     private double restoreW;
     private double restoreH;
     private boolean customMaximized;
+    private boolean forceScrollPending;
 
     @Override
     public void start(Stage stage)
@@ -175,6 +177,13 @@ public class App extends Application
 
         storyContent = new VBox(6);
         storyContent.getStyleClass().add("story-content");
+        storyContent.heightProperty().addListener((obs, oldValue, newValue) -> {
+            if (forceScrollPending)
+            {
+                scrollToBottom();
+                forceScrollPending = false;
+            }
+        });
         storyScroll = new ScrollPane(storyContent);
         storyScroll.setFitToWidth(true);
         storyScroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
@@ -280,14 +289,14 @@ public class App extends Application
         headerRow.setAlignment(Pos.CENTER_LEFT);
         HBox.setHgrow(storyHeader, Priority.ALWAYS);
 
-        storySidebar = new VBox(8, headerRow, newStoryButton, storyList);
-        storySidebar.getStyleClass().add("sidebar");
-        storySidebar.setPadding(new Insets(10));
-        storySidebar.setPrefWidth(SIDEBAR_WIDTH);
-        storySidebar.setMinWidth(200);
+        leftSideBar = new VBox(8, headerRow, newStoryButton, storyList);
+        leftSideBar.getStyleClass().add("sidebar");
+        leftSideBar.setPadding(new Insets(10));
+        leftSideBar.setPrefWidth(LEFT_SIDEBAR_WIDTH);
+        leftSideBar.setMinWidth(200);
 
         VBox.setVgrow(storyList, Priority.ALWAYS);
-        return storySidebar;
+        return leftSideBar;
     }
 
     private BorderPane buildCenterPane()
@@ -621,14 +630,14 @@ public class App extends Application
 
         if (collapsing)
         {
-            storySidebar.setPrefWidth(48);
-            storySidebar.setMinWidth(48);
+            leftSideBar.setPrefWidth(48);
+            leftSideBar.setMinWidth(48);
             collapseLeftButton.setText(">>");
         }
         else
         {
-            storySidebar.setPrefWidth(SIDEBAR_WIDTH);
-            storySidebar.setMinWidth(200);
+            leftSideBar.setPrefWidth(LEFT_SIDEBAR_WIDTH);
+            leftSideBar.setMinWidth(200);
             collapseLeftButton.setText("<<");
         }
     }
@@ -1390,12 +1399,16 @@ public class App extends Application
             @Override
             protected Block call() throws Exception
             {
-                int position = blockRepository.nextPosition(activeStory.id());
-                Block userBlock = new Block(Ids.newId(), activeStory.id(), Role.USER, userText, Timestamps.now(),
-                        position);
-                blockRepository.insert(userBlock);
-
                 List<Block> currentBlocks = blockRepository.listForStory(activeStory.id());
+                boolean isFirstTurn = currentBlocks.isEmpty();
+
+                int position = blockRepository.nextPosition(activeStory.id());
+                Role seedRole = isFirstTurn ? Role.ASSISTANT : Role.USER;
+                Block seedBlock = new Block(Ids.newId(), activeStory.id(), seedRole, userText, Timestamps.now(),
+                        position);
+                blockRepository.insert(seedBlock);
+
+                currentBlocks = blockRepository.listForStory(activeStory.id());
                 List<StoryCard> currentCards = cardRepository.listForStory(activeStory.id());
 
                 PromptCompilation compilation = promptCompiler.compile(activeStory, currentBlocks, currentCards,
@@ -1691,6 +1704,7 @@ public class App extends Application
         {
             if (forceScroll)
             {
+                forceScrollPending = true;
                 scrollToBottom();
             }
             return;
@@ -1716,6 +1730,7 @@ public class App extends Application
 
         if (forceScroll)
         {
+            forceScrollPending = true;
             scrollToBottom();
         }
     }
@@ -1752,7 +1767,9 @@ public class App extends Application
             textNode.setOnMouseClicked(event -> beginAssistantInlineEdit(block, flow, textNode));
             flow.getChildren().add(textNode);
 
-            if (i < group.size() - 1 && !endsWithWhitespace(block.text()))
+            if (i < group.size() - 1
+                    && !endsWithWhitespace(block.text())
+                    && !startsWithPunctuation(group.get(i + 1).text()))
             {
                 flow.getChildren().add(new Text(" "));
             }
@@ -1779,42 +1796,54 @@ public class App extends Application
         {
             commitAssistantEdit(activeAssistantEditor.getText());
         }
-
-        int index = flow.getChildren().indexOf(textNode);
-        if (index < 0)
-        {
-            return;
-        }
+        activeAssistantEditId = block.id();
+        activeAssistantFlow = flow;
 
         TextArea editor = new TextArea(block.text());
         editor.setWrapText(true);
         editor.setPrefRowCount(4);
         editor.setMinHeight(Region.USE_PREF_SIZE);
+        editor.setPrefHeight(Region.USE_COMPUTED_SIZE);
+        editor.setMaxHeight(Double.MAX_VALUE);
         editor.prefWidthProperty().bind(contentWidthBinding());
         editor.maxWidthProperty().bind(contentWidthBinding());
 
+        StackPane editorContainer = new StackPane(editor);
+        editorContainer.prefWidthProperty().bind(contentWidthBinding());
+        editorContainer.maxWidthProperty().bind(contentWidthBinding());
+
+        int index = flow.getChildren().indexOf(textNode);
+        if (index < 0)
+        {
+            activeAssistantEditId = null;
+            activeAssistantFlow = null;
+            return;
+        }
+        flow.getChildren().set(index, editorContainer);
+
+        activeAssistantEditor = editor;
+        activeAssistantEditorContainer = editorContainer;
+
         editor.focusedProperty().addListener((obs, oldValue, newValue) -> {
-            if (!newValue)
+            if (!newValue && activeAssistantEditor == editor)
             {
                 commitAssistantEdit(editor.getText());
             }
         });
 
-        flow.getChildren().set(index, editor);
-        activeAssistantEditId = block.id();
-        activeAssistantFlow = flow;
-        activeAssistantEditor = editor;
-        editor.requestFocus();
-        editor.positionCaret(editor.getText().length());
+        javafx.application.Platform.runLater(() -> {
+            editor.requestFocus();
+            editor.positionCaret(editor.getText().length());
+        });
     }
 
     private void commitAssistantEdit(String newText)
     {
-        if (activeAssistantEditId == null || activeAssistantFlow == null || activeAssistantEditor == null)
+        if (activeAssistantEditId == null || activeAssistantEditor == null
+                || activeAssistantFlow == null || activeAssistantEditorContainer == null)
         {
             return;
         }
-        TextFlow flow = activeAssistantFlow;
         String blockId = activeAssistantEditId;
         String normalized = newText == null ? "" : newText;
         try
@@ -1826,6 +1855,21 @@ public class App extends Application
             showError("Failed to update block", e);
         }
 
+        Block updatedBlock = null;
+        for (Block block : blocks)
+        {
+            if (block.id().equals(blockId))
+            {
+                updatedBlock = block;
+                break;
+            }
+        }
+        if (updatedBlock == null)
+        {
+            return;
+        }
+
+        TextFlow flow = activeAssistantFlow;
         Text updatedText = new Text(normalized);
         updatedText.setFill(javafx.scene.paint.Color.web("#e6e1d8"));
         String latestId = findLatestAssistantId();
@@ -1841,19 +1885,19 @@ public class App extends Application
                 updatedText.setUnderline(false);
             }
         });
-        updatedText.setOnMouseClicked(event -> beginAssistantInlineEdit(
-                new Block(blockId, "", Role.ASSISTANT, normalized, "", 0),
-                flow, updatedText));
+        Block finalUpdatedBlock = updatedBlock;
+        updatedText.setOnMouseClicked(event -> beginAssistantInlineEdit(finalUpdatedBlock, flow,
+                updatedText));
 
-        int index = flow.getChildren().indexOf(activeAssistantEditor);
+        int index = flow.getChildren().indexOf(activeAssistantEditorContainer);
         if (index >= 0)
         {
             flow.getChildren().set(index, updatedText);
         }
-
         activeAssistantEditId = null;
-        activeAssistantFlow = null;
         activeAssistantEditor = null;
+        activeAssistantFlow = null;
+        activeAssistantEditorContainer = null;
     }
 
     private Region buildUserBlockNode(Block block)
@@ -1973,16 +2017,6 @@ public class App extends Application
         return text;
     }
 
-    private void scrollToBottom()
-    {
-        javafx.application.Platform.runLater(() -> storyScroll.setVvalue(1.0));
-    }
-
-    private DoubleBinding contentWidthBinding()
-    {
-        return storyScroll.widthProperty().subtract(32);
-    }
-
     private static boolean endsWithWhitespace(String text)
     {
         if (text == null || text.isEmpty())
@@ -1991,6 +2025,30 @@ public class App extends Application
         }
         char last = text.charAt(text.length() - 1);
         return Character.isWhitespace(last);
+    }
+
+    private static boolean startsWithPunctuation(String text)
+    {
+        if (text == null || text.isEmpty())
+        {
+            return false;
+        }
+        char first = text.charAt(0);
+        return ",.;:!?)]}\"'".indexOf(first) >= 0;
+    }
+
+    private void scrollToBottom()
+    {
+        javafx.application.Platform.runLater(() -> {
+            storyScroll.applyCss();
+            storyScroll.layout();
+            storyScroll.setVvalue(1.0);
+        });
+    }
+
+    private DoubleBinding contentWidthBinding()
+    {
+        return storyScroll.widthProperty().subtract(32);
     }
 
     private static String normalizeOutput(String output)
