@@ -4,6 +4,7 @@ import com.llamaquill.db.BlockRepository;
 import com.llamaquill.db.Database;
 import com.llamaquill.db.StoryCardRepository;
 import com.llamaquill.db.StoryRepository;
+import com.llamaquill.db.SettingsRepository;
 import com.llamaquill.model.Block;
 import com.llamaquill.model.GenerationSettings;
 import com.llamaquill.model.Role;
@@ -68,6 +69,7 @@ public class App extends Application
     private StoryRepository storyRepository;
     private BlockRepository blockRepository;
     private StoryCardRepository cardRepository;
+    private SettingsRepository settingsRepository;
     private PromptCompiler promptCompiler;
     private OllamaClient ollamaClient;
     private GenerationSettings settings;
@@ -124,9 +126,10 @@ public class App extends Application
             storyRepository = new StoryRepository(connection);
             blockRepository = new BlockRepository(connection);
             cardRepository = new StoryCardRepository(connection);
+            settingsRepository = new SettingsRepository(connection);
             promptCompiler = new PromptCompiler();
             ollamaClient = new OllamaClient();
-            settings = GenerationSettings.defaults();
+            settings = loadOrCreateSettings();
             executor = Executors.newSingleThreadExecutor();
 
             activeStory = loadOrCreateStory();
@@ -239,7 +242,7 @@ public class App extends Application
         collapseRightButton.setOnAction(event -> toggleRightSidebar());
 
         rightTabs = new TabPane();
-        rightTabs.getTabs().addAll(buildPlotTab(), buildStoryCardsTab(), buildOptionsTab());
+        rightTabs.getTabs().addAll(buildStoryTab(), buildStoryCardsTab(), buildOptionsTab());
         rightTabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
 
         Label rightHeader = new Label("Details");
@@ -259,11 +262,11 @@ public class App extends Application
         return rightSidebar;
     }
 
-    private Tab buildPlotTab()
+    private Tab buildStoryTab()
     {
-        systemPromptArea = buildPlotArea();
-        plotEssentialsArea = buildPlotArea();
-        authorNoteArea = buildPlotArea();
+        systemPromptArea = buildStoryArea();
+        plotEssentialsArea = buildStoryArea();
+        authorNoteArea = buildStoryArea();
 
         attachSaveOnBlur(systemPromptArea);
         attachSaveOnBlur(plotEssentialsArea);
@@ -280,7 +283,7 @@ public class App extends Application
 
         ScrollPane scrollPane = new ScrollPane(content);
         scrollPane.setFitToWidth(true);
-        return new Tab("Plot", scrollPane);
+        return new Tab("Story", scrollPane);
     }
 
     private Tab buildStoryCardsTab()
@@ -378,7 +381,7 @@ public class App extends Application
         return new Tab("Options", scrollPane);
     }
 
-    private TextArea buildPlotArea()
+    private TextArea buildStoryArea()
     {
         TextArea area = new TextArea();
         area.setWrapText(true);
@@ -453,6 +456,22 @@ public class App extends Application
         Story story = new Story(Ids.newId(), "Untitled Story", DEFAULT_SYSTEM_PROMPT, "", "", now, now);
         storyRepository.insert(story);
         return story;
+    }
+
+    private GenerationSettings loadOrCreateSettings() throws SQLException
+    {
+        return settingsRepository.load().orElseGet(() -> {
+            GenerationSettings defaults = GenerationSettings.defaults();
+            try
+            {
+                settingsRepository.save(defaults);
+            }
+            catch (SQLException e)
+            {
+                showError("Failed to save default settings", e);
+            }
+            return defaults;
+        });
     }
 
     private void refreshStoryList(String selectedId)
@@ -1042,6 +1061,7 @@ public class App extends Application
         settings = new GenerationSettings(capped, settings.responseLength(), settings.temperature(), settings.topK(),
                 settings.topP(), settings.presencePenalty(), settings.frequencyPenalty(), minWindow,
                 settings.storyCardLookback(), settings.anPlacement());
+        persistSettings();
     }
 
     private void updateResponseLength(int value)
@@ -1050,6 +1070,7 @@ public class App extends Application
         settings = new GenerationSettings(settings.contextLimit(), capped, settings.temperature(), settings.topK(),
                 settings.topP(), settings.presencePenalty(), settings.frequencyPenalty(), settings.minStoryWindow(),
                 settings.storyCardLookback(), settings.anPlacement());
+        persistSettings();
     }
 
     private void updateTemperature(double value)
@@ -1057,6 +1078,7 @@ public class App extends Application
         settings = new GenerationSettings(settings.contextLimit(), settings.responseLength(), value, settings.topK(),
                 settings.topP(), settings.presencePenalty(), settings.frequencyPenalty(), settings.minStoryWindow(),
                 settings.storyCardLookback(), settings.anPlacement());
+        persistSettings();
     }
 
     private void updateTopK(int value)
@@ -1064,6 +1086,7 @@ public class App extends Application
         settings = new GenerationSettings(settings.contextLimit(), settings.responseLength(), settings.temperature(),
                 value, settings.topP(), settings.presencePenalty(), settings.frequencyPenalty(),
                 settings.minStoryWindow(), settings.storyCardLookback(), settings.anPlacement());
+        persistSettings();
     }
 
     private void updateTopP(double value)
@@ -1071,6 +1094,7 @@ public class App extends Application
         settings = new GenerationSettings(settings.contextLimit(), settings.responseLength(), settings.temperature(),
                 settings.topK(), value, settings.presencePenalty(), settings.frequencyPenalty(),
                 settings.minStoryWindow(), settings.storyCardLookback(), settings.anPlacement());
+        persistSettings();
     }
 
     private void updatePresencePenalty(double value)
@@ -1078,6 +1102,7 @@ public class App extends Application
         settings = new GenerationSettings(settings.contextLimit(), settings.responseLength(), settings.temperature(),
                 settings.topK(), settings.topP(), value, settings.frequencyPenalty(), settings.minStoryWindow(),
                 settings.storyCardLookback(), settings.anPlacement());
+        persistSettings();
     }
 
     private void updateFrequencyPenalty(double value)
@@ -1085,6 +1110,7 @@ public class App extends Application
         settings = new GenerationSettings(settings.contextLimit(), settings.responseLength(), settings.temperature(),
                 settings.topK(), settings.topP(), settings.presencePenalty(), value, settings.minStoryWindow(),
                 settings.storyCardLookback(), settings.anPlacement());
+        persistSettings();
     }
 
     private void updateMinStoryPercent(int percent)
@@ -1094,6 +1120,7 @@ public class App extends Application
         settings = new GenerationSettings(settings.contextLimit(), settings.responseLength(), settings.temperature(),
                 settings.topK(), settings.topP(), settings.presencePenalty(), settings.frequencyPenalty(), minWindow,
                 settings.storyCardLookback(), settings.anPlacement());
+        persistSettings();
     }
 
     private void updateStoryCardLookback(int value)
@@ -1101,6 +1128,7 @@ public class App extends Application
         settings = new GenerationSettings(settings.contextLimit(), settings.responseLength(), settings.temperature(),
                 settings.topK(), settings.topP(), settings.presencePenalty(), settings.frequencyPenalty(),
                 settings.minStoryWindow(), value, settings.anPlacement());
+        persistSettings();
     }
 
     private void updateAnPlacement(int value)
@@ -1108,6 +1136,23 @@ public class App extends Application
         settings = new GenerationSettings(settings.contextLimit(), settings.responseLength(), settings.temperature(),
                 settings.topK(), settings.topP(), settings.presencePenalty(), settings.frequencyPenalty(),
                 settings.minStoryWindow(), settings.storyCardLookback(), value);
+        persistSettings();
+    }
+
+    private void persistSettings()
+    {
+        if (settingsRepository == null)
+        {
+            return;
+        }
+        try
+        {
+            settingsRepository.save(settings);
+        }
+        catch (SQLException e)
+        {
+            showError("Failed to save settings", e);
+        }
     }
 
     private static double roundTo(double value, double step)

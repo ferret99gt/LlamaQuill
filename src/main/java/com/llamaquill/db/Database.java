@@ -70,6 +70,22 @@ public final class Database
                     """);
 
             stmt.execute("""
+                    CREATE TABLE IF NOT EXISTS generation_settings (
+                        id INTEGER PRIMARY KEY CHECK (id = 1),
+                        context_limit INTEGER NOT NULL,
+                        response_length INTEGER NOT NULL,
+                        temperature REAL NOT NULL,
+                        top_k INTEGER NOT NULL,
+                        top_p REAL NOT NULL,
+                        presence_penalty REAL NOT NULL,
+                        frequency_penalty REAL NOT NULL,
+                        min_story_window INTEGER NOT NULL,
+                        story_card_lookback INTEGER NOT NULL,
+                        an_placement INTEGER NOT NULL
+                    )
+                    """);
+
+            stmt.execute("""
                     CREATE INDEX IF NOT EXISTS idx_blocks_story_position
                     ON blocks(story_id, position)
                     """);
