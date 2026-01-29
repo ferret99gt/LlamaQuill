@@ -52,7 +52,10 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.text.Text;
 import javafx.scene.text.TextFlow;
+import javafx.stage.Screen;
 import javafx.stage.Stage;
+import javafx.stage.StageStyle;
+import javafx.geometry.Rectangle2D;
 
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -135,10 +138,20 @@ public class App extends Application
     private Spinner<Integer> storyCardLookbackSpinner;
     private Spinner<Integer> anPlacementSpinner;
 
+    private HBox titleBar;
+    private double dragOffsetX;
+    private double dragOffsetY;
+    private double restoreX;
+    private double restoreY;
+    private double restoreW;
+    private double restoreH;
+    private boolean customMaximized;
+
     @Override
     public void start(Stage stage)
     {
         this.primaryStage = stage;
+        stage.initStyle(StageStyle.UNDECORATED);
         try
         {
             connection = Database.open();
@@ -161,9 +174,11 @@ public class App extends Application
         }
 
         storyContent = new VBox(6);
+        storyContent.getStyleClass().add("story-content");
         storyScroll = new ScrollPane(storyContent);
         storyScroll.setFitToWidth(true);
         storyScroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        storyScroll.getStyleClass().add("story-scroll");
 
         continueButton = new Button("Continue");
         continueButton.setOnAction(event -> runContinue());
@@ -184,12 +199,15 @@ public class App extends Application
         statusLabel = new Label("Ready");
 
         var statusBar = new HBox(statusLabel);
+        statusBar.getStyleClass().add("status-bar");
         statusBar.setPadding(new Insets(8, 12, 8, 12));
 
         var root = new BorderPane();
+        root.getStyleClass().add("app-root");
         root.setLeft(buildStorySidebar());
         root.setCenter(buildCenterPane());
         root.setRight(buildRightSidebar());
+        root.setTop(buildTitleBar());
         root.setBottom(statusBar);
 
         refreshStoryList(activeStory.id());
@@ -199,6 +217,7 @@ public class App extends Application
         setStoryDependentControlsEnabled(activeStory != null);
 
         var scene = new Scene(root, 1280, 720);
+        scene.getStylesheets().add(getClass().getResource("/styles.css").toExternalForm());
         stage.setTitle("LlamaQuill");
         stage.setScene(scene);
         stage.show();
@@ -262,6 +281,7 @@ public class App extends Application
         HBox.setHgrow(storyHeader, Priority.ALWAYS);
 
         storySidebar = new VBox(8, headerRow, newStoryButton, storyList);
+        storySidebar.getStyleClass().add("sidebar");
         storySidebar.setPadding(new Insets(10));
         storySidebar.setPrefWidth(SIDEBAR_WIDTH);
         storySidebar.setMinWidth(200);
@@ -273,6 +293,7 @@ public class App extends Application
     private BorderPane buildCenterPane()
     {
         var centerPane = new BorderPane();
+        centerPane.getStyleClass().add("center-pane");
         centerPane.setCenter(storyScroll);
 
         turnInputArea = new TextArea();
@@ -293,6 +314,7 @@ public class App extends Application
         showTurnInput(false);
 
         var actionRow = new HBox(8, takeTurnButton, continueButton, retryButton, retryHistoryButton, deleteButton);
+        actionRow.getStyleClass().add("action-row");
         actionRow.setAlignment(Pos.CENTER_LEFT);
         actionRow.setPadding(new Insets(10));
 
@@ -300,6 +322,98 @@ public class App extends Application
         centerPane.setBottom(bottomBox);
 
         return centerPane;
+    }
+
+    private HBox buildTitleBar()
+    {
+        Label title = new Label("LlamaQuill");
+        title.getStyleClass().add("title-text");
+        title.setMaxWidth(Double.MAX_VALUE);
+
+        Button minimize = new Button("–");
+        minimize.getStyleClass().add("title-button");
+        minimize.setOnAction(event -> primaryStage.setIconified(true));
+
+        Button maximize = new Button("□");
+        maximize.getStyleClass().add("title-button");
+        maximize.setOnAction(event -> toggleMaximize());
+
+        Button close = new Button("×");
+        close.getStyleClass().add("title-button");
+        close.setOnAction(event -> primaryStage.close());
+
+        HBox buttons = new HBox(6, minimize, maximize, close);
+        buttons.setAlignment(Pos.CENTER_RIGHT);
+
+        titleBar = new HBox(title, buttons);
+        titleBar.getStyleClass().add("title-bar");
+        titleBar.setAlignment(Pos.CENTER_LEFT);
+        titleBar.setPadding(new Insets(6, 10, 6, 10));
+        HBox.setHgrow(title, Priority.ALWAYS);
+
+        titleBar.setOnMousePressed(event -> {
+            dragOffsetX = event.getSceneX();
+            dragOffsetY = event.getSceneY();
+        });
+        titleBar.setOnMouseDragged(event -> {
+            if (customMaximized)
+            {
+                return;
+            }
+            primaryStage.setX(event.getScreenX() - dragOffsetX);
+            primaryStage.setY(event.getScreenY() - dragOffsetY);
+        });
+        titleBar.setOnMouseClicked(event -> {
+            if (event.getClickCount() == 2)
+            {
+                toggleMaximize();
+            }
+        });
+
+        primaryStage.focusedProperty().addListener((obs, oldValue, newValue) -> {
+            if (newValue)
+            {
+                titleBar.getStyleClass().remove("inactive");
+            }
+            else if (!titleBar.getStyleClass().contains("inactive"))
+            {
+                titleBar.getStyleClass().add("inactive");
+            }
+        });
+
+        return titleBar;
+    }
+
+    private void toggleMaximize()
+    {
+        if (!customMaximized)
+        {
+            restoreX = primaryStage.getX();
+            restoreY = primaryStage.getY();
+            restoreW = primaryStage.getWidth();
+            restoreH = primaryStage.getHeight();
+
+            Rectangle2D bounds = Screen.getScreensForRectangle(
+                    primaryStage.getX(), primaryStage.getY(),
+                    primaryStage.getWidth(), primaryStage.getHeight())
+                    .stream()
+                    .findFirst()
+                    .map(Screen::getVisualBounds)
+                    .orElse(Screen.getPrimary().getVisualBounds());
+            primaryStage.setX(bounds.getMinX());
+            primaryStage.setY(bounds.getMinY());
+            primaryStage.setWidth(bounds.getWidth());
+            primaryStage.setHeight(bounds.getHeight());
+            customMaximized = true;
+        }
+        else
+        {
+            primaryStage.setX(restoreX);
+            primaryStage.setY(restoreY);
+            primaryStage.setWidth(restoreW);
+            primaryStage.setHeight(restoreH);
+            customMaximized = false;
+        }
     }
 
     private void showTurnInput(boolean show)
@@ -320,6 +434,12 @@ public class App extends Application
         rightTabs = new TabPane();
         rightTabs.getTabs().addAll(buildStoryTab(), buildStoryCardsTab(), buildOptionsTab());
         rightTabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+        rightTabs.skinProperty().addListener((obs, oldSkin, newSkin) -> {
+            if (newSkin != null)
+            {
+                forceTabHeaderDark();
+            }
+        });
 
         Label rightHeader = new Label("Details");
         rightHeader.setStyle("-fx-font-size: 14px; -fx-font-weight: bold;");
@@ -330,6 +450,7 @@ public class App extends Application
         HBox.setHgrow(rightHeader, Priority.ALWAYS);
 
         rightSidebar = new VBox(8, headerRow, rightTabs);
+        rightSidebar.getStyleClass().add("sidebar");
         rightSidebar.setPadding(new Insets(10));
         rightSidebar.setPrefWidth(RIGHT_SIDEBAR_WIDTH);
         rightSidebar.setMinWidth(240);
@@ -455,6 +576,17 @@ public class App extends Application
         ScrollPane scrollPane = new ScrollPane(content);
         scrollPane.setFitToWidth(true);
         return new Tab("Options", scrollPane);
+    }
+
+    private void forceTabHeaderDark()
+    {
+        javafx.application.Platform.runLater(() -> {
+            var header = rightTabs.lookup(".tab-header-background");
+            if (header != null)
+            {
+                header.setStyle("-fx-background-color: #242424;");
+            }
+        });
     }
 
     private TextArea buildStoryArea()
@@ -1605,6 +1737,7 @@ public class App extends Application
             Block block = group.get(i);
             boolean highlight = block.id().equals(latestAssistantId);
             Text textNode = new Text(block.text());
+            textNode.setFill(javafx.scene.paint.Color.web("#e6e1d8"));
             if (highlight)
             {
                 textNode.setStyle("-fx-underline: true;");
@@ -1694,6 +1827,7 @@ public class App extends Application
         }
 
         Text updatedText = new Text(normalized);
+        updatedText.setFill(javafx.scene.paint.Color.web("#e6e1d8"));
         String latestId = findLatestAssistantId();
         boolean highlight = blockId.equals(latestId);
         if (highlight)
