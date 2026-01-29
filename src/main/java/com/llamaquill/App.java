@@ -86,6 +86,10 @@ public class App extends Application
     private TextArea storyArea;
     private Label statusLabel;
     private Button continueButton;
+    private Button takeTurnButton;
+    private Button retryButton;
+    private Button deleteButton;
+    private Button retryHistoryButton;
 
     private Button newStoryButton;
     private Button collapseLeftButton;
@@ -103,6 +107,14 @@ public class App extends Application
 
     private Button newCardButton;
     private ListView<StoryCard> cardList;
+
+    private TextArea turnInputArea;
+    private VBox turnInputBox;
+    private Button submitTurnButton;
+    private Button cancelTurnButton;
+
+    private final List<String> retryHistory = new ArrayList<>();
+    private int retryIndex = -1;
 
     private Slider contextLimitSlider;
     private Slider responseLengthSlider;
@@ -148,16 +160,29 @@ public class App extends Application
         continueButton = new Button("Continue");
         continueButton.setOnAction(event -> runContinue());
 
+        takeTurnButton = new Button("Take A Turn");
+        takeTurnButton.setOnAction(event -> showTurnInput(true));
+
+        retryButton = new Button("Retry");
+        retryButton.setOnAction(event -> runRetry());
+
+        deleteButton = new Button("Erase");
+        deleteButton.setOnAction(event -> deleteHeadBlock());
+
+        retryHistoryButton = new Button("");
+        retryHistoryButton.setOnAction(event -> showRetryDialog());
+        updateRetryCountLabel();
+
         statusLabel = new Label("Ready");
 
-        var controls = new HBox(12, continueButton, statusLabel);
-        controls.setPadding(new Insets(10));
+        var statusBar = new HBox(statusLabel);
+        statusBar.setPadding(new Insets(8, 12, 8, 12));
 
         var root = new BorderPane();
         root.setLeft(buildStorySidebar());
-        root.setCenter(storyArea);
+        root.setCenter(buildCenterPane());
         root.setRight(buildRightSidebar());
-        root.setBottom(controls);
+        root.setBottom(statusBar);
 
         refreshStoryList(activeStory.id());
         refreshCardList(activeStory.id());
@@ -234,6 +259,48 @@ public class App extends Application
 
         VBox.setVgrow(storyList, Priority.ALWAYS);
         return storySidebar;
+    }
+
+    private BorderPane buildCenterPane()
+    {
+        var centerPane = new BorderPane();
+        centerPane.setCenter(storyArea);
+
+        turnInputArea = new TextArea();
+        turnInputArea.setWrapText(true);
+        turnInputArea.setPrefRowCount(4);
+
+        submitTurnButton = new Button("Submit");
+        submitTurnButton.setOnAction(event -> submitTurn());
+
+        cancelTurnButton = new Button("Cancel");
+        cancelTurnButton.setOnAction(event -> showTurnInput(false));
+
+        var turnButtons = new HBox(8, submitTurnButton, cancelTurnButton);
+        turnButtons.setAlignment(Pos.CENTER_RIGHT);
+
+        turnInputBox = new VBox(6, new Label("Your turn"), turnInputArea, turnButtons);
+        turnInputBox.setPadding(new Insets(10, 10, 0, 10));
+        showTurnInput(false);
+
+        var actionRow = new HBox(8, takeTurnButton, continueButton, retryButton, retryHistoryButton, deleteButton);
+        actionRow.setAlignment(Pos.CENTER_LEFT);
+        actionRow.setPadding(new Insets(10));
+
+        var bottomBox = new VBox(8, turnInputBox, actionRow);
+        centerPane.setBottom(bottomBox);
+
+        return centerPane;
+    }
+
+    private void showTurnInput(boolean show)
+    {
+        turnInputBox.setVisible(show);
+        turnInputBox.setManaged(show);
+        if (show)
+        {
+            turnInputArea.requestFocus();
+        }
     }
 
     private VBox buildRightSidebar()
@@ -823,7 +890,7 @@ public class App extends Application
                 activeStory = null;
                 blocks = new ArrayList<>();
                 cards = new ArrayList<>();
-                storyArea.setText("");
+                updateStoryArea("");
                 statusLabel.setText("Select a story");
                 populateStoryDetails(null);
                 refreshCardList(null);
@@ -833,6 +900,30 @@ public class App extends Application
         catch (SQLException e)
         {
             showError("Failed to delete story", e);
+        }
+    }
+
+    private void deleteHeadBlock()
+    {
+        if (activeStory == null)
+        {
+            showInfo("Select a story first.");
+            return;
+        }
+        if (blocks.isEmpty())
+        {
+            return;
+        }
+        try
+        {
+            blockRepository.deleteHead(activeStory.id());
+            blocks = blockRepository.listForStory(activeStory.id());
+            updateStoryArea(renderBlocks(blocks));
+            clearRetryHistory();
+        }
+        catch (SQLException e)
+        {
+            showError("Failed to delete block", e);
         }
     }
 
@@ -860,7 +951,7 @@ public class App extends Application
             activeStory = story;
             blocks = blockRepository.listForStory(story.id());
             cards = cardRepository.listForStory(story.id());
-            storyArea.setText(renderBlocks(blocks));
+            updateStoryArea(renderBlocks(blocks));
             statusLabel.setText("Ready");
             populateStoryDetails(story);
             refreshCardList(story.id());
@@ -874,6 +965,174 @@ public class App extends Application
         {
             showError("Failed to load story", e);
         }
+    }
+
+    private void runRetry()
+    {
+        if (activeStory == null)
+        {
+            showInfo("Select a story first.");
+            return;
+        }
+        if (blocks.isEmpty())
+        {
+            return;
+        }
+        Block head = blocks.get(blocks.size() - 1);
+        if (head.role() != Role.ASSISTANT)
+        {
+            showInfo("The last block is not an assistant response.");
+            return;
+        }
+
+        continueButton.setDisable(true);
+        takeTurnButton.setDisable(true);
+        retryButton.setDisable(true);
+        deleteButton.setDisable(true);
+        statusLabel.setText("Generating...");
+
+        Task<Block> task = new Task<>()
+        {
+            @Override
+            protected Block call() throws Exception
+            {
+                if (retryHistory.isEmpty())
+                {
+                    retryHistory.add(head.text());
+                    retryIndex = 0;
+                }
+
+                List<Block> promptBlocks = new ArrayList<>(blocks);
+                promptBlocks.remove(promptBlocks.size() - 1);
+                List<StoryCard> currentCards = cardRepository.listForStory(activeStory.id());
+
+                PromptCompilation compilation = promptCompiler.compile(activeStory, promptBlocks, currentCards,
+                        settings);
+                String response = ollamaClient.generate(compilation.prompt(), settings);
+                String cleaned = normalizeOutput(response);
+
+                Block updated = new Block(head.id(), head.storyId(), Role.ASSISTANT, cleaned, Timestamps.now(),
+                        head.position());
+                blockRepository.replaceHead(updated);
+                retryHistory.add(cleaned);
+                retryIndex = retryHistory.size() - 1;
+                return updated;
+            }
+        };
+
+        task.setOnSucceeded(event -> {
+            Block updated = task.getValue();
+            blocks.set(blocks.size() - 1, updated);
+            updateStoryArea(renderBlocks(blocks));
+            statusLabel.setText("Ready");
+            updateRetryCountLabel();
+            continueButton.setDisable(false);
+            takeTurnButton.setDisable(false);
+            retryButton.setDisable(false);
+            deleteButton.setDisable(false);
+        });
+
+        task.setOnFailed(event -> {
+            Throwable error = task.getException();
+            continueButton.setDisable(false);
+            takeTurnButton.setDisable(false);
+            retryButton.setDisable(false);
+            deleteButton.setDisable(false);
+            statusLabel.setText("Error: " + (error == null ? "Unknown" : error.getMessage()));
+        });
+
+        executor.submit(task);
+    }
+
+    private void showRetryDialog()
+    {
+        if (retryHistory.size() < 2)
+        {
+            return;
+        }
+
+        Dialog<Void> dialog = new Dialog<>();
+        dialog.setTitle("Retry History");
+        dialog.setHeaderText("Select a retry");
+        dialog.initOwner(primaryStage);
+
+        TextArea preview = new TextArea(retryHistory.get(retryIndex));
+        preview.setWrapText(true);
+        preview.setEditable(false);
+        preview.setPrefRowCount(8);
+
+        VBox content = new VBox(8, preview);
+        content.setPadding(new Insets(10));
+        dialog.getDialogPane().setContent(content);
+
+        ButtonType prevType = new ButtonType("<", ButtonBar.ButtonData.LEFT);
+        ButtonType nextType = new ButtonType(">", ButtonBar.ButtonData.LEFT);
+        ButtonType selectType = new ButtonType("Select", ButtonBar.ButtonData.OK_DONE);
+        ButtonType closeType = new ButtonType("Close", ButtonBar.ButtonData.CANCEL_CLOSE);
+        dialog.getDialogPane().getButtonTypes().addAll(prevType, nextType, selectType, closeType);
+
+        Button prevButton = (Button) dialog.getDialogPane().lookupButton(prevType);
+        Button nextButton = (Button) dialog.getDialogPane().lookupButton(nextType);
+        Button selectButton = (Button) dialog.getDialogPane().lookupButton(selectType);
+
+        Runnable refresh = () -> {
+            preview.setText(retryHistory.get(retryIndex));
+            prevButton.setDisable(retryIndex <= 0);
+            nextButton.setDisable(retryIndex >= retryHistory.size() - 1);
+        };
+        refresh.run();
+
+        prevButton.addEventFilter(ActionEvent.ACTION, event -> {
+            event.consume();
+            if (retryIndex > 0)
+            {
+                retryIndex--;
+                refresh.run();
+            }
+        });
+
+        nextButton.addEventFilter(ActionEvent.ACTION, event -> {
+            event.consume();
+            if (retryIndex < retryHistory.size() - 1)
+            {
+                retryIndex++;
+                refresh.run();
+            }
+        });
+
+        selectButton.addEventFilter(ActionEvent.ACTION, event -> {
+            event.consume();
+            if (blocks.isEmpty())
+            {
+                dialog.close();
+                return;
+            }
+            Block head = blocks.get(blocks.size() - 1);
+            if (head.role() != Role.ASSISTANT)
+            {
+                dialog.close();
+                return;
+            }
+            String chosen = retryHistory.get(retryIndex);
+            if (!chosen.equals(head.text()))
+            {
+                Block updated = new Block(head.id(), head.storyId(), Role.ASSISTANT, chosen, Timestamps.now(),
+                        head.position());
+                try
+                {
+                    blockRepository.replaceHead(updated);
+                    blocks.set(blocks.size() - 1, updated);
+                    updateStoryArea(renderBlocks(blocks));
+                }
+                catch (SQLException e)
+                {
+                    showError("Failed to apply retry selection", e);
+                }
+            }
+            dialog.close();
+        });
+
+        dialog.showAndWait();
     }
 
     private void populateStoryDetails(Story story)
@@ -893,11 +1152,34 @@ public class App extends Application
     private void setStoryDependentControlsEnabled(boolean enabled)
     {
         continueButton.setDisable(!enabled);
+        takeTurnButton.setDisable(!enabled);
+        retryButton.setDisable(!enabled);
+        deleteButton.setDisable(!enabled);
+        retryHistoryButton.setDisable(!enabled || retryHistory.size() < 2);
         systemPromptArea.setDisable(!enabled);
         plotEssentialsArea.setDisable(!enabled);
         authorNoteArea.setDisable(!enabled);
         newCardButton.setDisable(!enabled);
         cardList.setDisable(!enabled);
+    }
+
+    private void submitTurn()
+    {
+        if (activeStory == null)
+        {
+            showInfo("Select a story first.");
+            return;
+        }
+        String text = turnInputArea.getText().trim();
+        if (text.isEmpty())
+        {
+            showInfo("Turn text cannot be empty.");
+            return;
+        }
+        showTurnInput(false);
+        turnInputArea.clear();
+        clearRetryHistory();
+        runTurn(text);
     }
 
     private void runContinue()
@@ -908,6 +1190,7 @@ public class App extends Application
             return;
         }
 
+        clearRetryHistory();
         continueButton.setDisable(true);
         statusLabel.setText("Generating...");
 
@@ -940,7 +1223,7 @@ public class App extends Application
         task.setOnSucceeded(event -> {
             Block block = task.getValue();
             blocks.add(block);
-            storyArea.setText(renderBlocks(blocks));
+            updateStoryArea(renderBlocks(blocks));
             continueButton.setDisable(false);
             statusLabel.setText("Ready");
             refreshStoryList(activeStory.id());
@@ -949,6 +1232,78 @@ public class App extends Application
         task.setOnFailed(event -> {
             Throwable error = task.getException();
             continueButton.setDisable(false);
+            statusLabel.setText("Error: " + (error == null ? "Unknown" : error.getMessage()));
+        });
+
+        executor.submit(task);
+    }
+
+    private void runTurn(String userText)
+    {
+        continueButton.setDisable(true);
+        takeTurnButton.setDisable(true);
+        retryButton.setDisable(true);
+        deleteButton.setDisable(true);
+        statusLabel.setText("Generating...");
+
+        Task<Block> task = new Task<>()
+        {
+            @Override
+            protected Block call() throws Exception
+            {
+                int position = blockRepository.nextPosition(activeStory.id());
+                Block userBlock = new Block(Ids.newId(), activeStory.id(), Role.USER, userText, Timestamps.now(),
+                        position);
+                blockRepository.insert(userBlock);
+
+                List<Block> currentBlocks = blockRepository.listForStory(activeStory.id());
+                List<StoryCard> currentCards = cardRepository.listForStory(activeStory.id());
+
+                PromptCompilation compilation = promptCompiler.compile(activeStory, currentBlocks, currentCards,
+                        settings);
+                String response = ollamaClient.generate(compilation.prompt(), settings);
+                String cleaned = normalizeOutput(response);
+
+                int assistantPosition = blockRepository.nextPosition(activeStory.id());
+                Block assistantBlock = new Block(Ids.newId(), activeStory.id(), Role.ASSISTANT, cleaned,
+                        Timestamps.now(), assistantPosition);
+                blockRepository.insert(assistantBlock);
+
+                String now = Timestamps.now();
+                activeStory = new Story(activeStory.id(), activeStory.title(), activeStory.systemPrompt(),
+                        activeStory.plotEssentials(), activeStory.authorNote(), activeStory.createdAt(), now);
+                storyRepository.update(activeStory);
+                return assistantBlock;
+            }
+        };
+
+        task.setOnSucceeded(event -> {
+            try
+            {
+                blocks = blockRepository.listForStory(activeStory.id());
+                updateStoryArea(renderBlocks(blocks));
+                statusLabel.setText("Ready");
+                refreshStoryList(activeStory.id());
+            }
+            catch (SQLException e)
+            {
+                showError("Failed to reload story", e);
+            }
+            finally
+            {
+                continueButton.setDisable(false);
+                takeTurnButton.setDisable(false);
+                retryButton.setDisable(false);
+                deleteButton.setDisable(false);
+            }
+        });
+
+        task.setOnFailed(event -> {
+            Throwable error = task.getException();
+            continueButton.setDisable(false);
+            takeTurnButton.setDisable(false);
+            retryButton.setDisable(false);
+            deleteButton.setDisable(false);
             statusLabel.setText("Error: " + (error == null ? "Unknown" : error.getMessage()));
         });
 
@@ -1155,6 +1510,22 @@ public class App extends Application
         }
     }
 
+    private void clearRetryHistory()
+    {
+        retryHistory.clear();
+        retryIndex = -1;
+        updateRetryCountLabel();
+    }
+
+    private void updateRetryCountLabel()
+    {
+        int count = Math.max(0, retryHistory.size() - 1);
+        boolean hasRetries = count > 0;
+        retryHistoryButton.setText(hasRetries ? String.valueOf(count) : "");
+        retryHistoryButton.setVisible(hasRetries);
+        retryHistoryButton.setManaged(hasRetries);
+    }
+
     private static double roundTo(double value, double step)
     {
         return Math.round(value / step) * step;
@@ -1186,6 +1557,15 @@ public class App extends Application
             sb.append(blocks.get(i).text());
         }
         return sb.toString();
+    }
+
+    private void updateStoryArea(String text)
+    {
+        storyArea.setText(text);
+        javafx.application.Platform.runLater(() -> {
+            storyArea.positionCaret(text == null ? 0 : text.length());
+            storyArea.setScrollTop(Double.MAX_VALUE);
+        });
     }
 
     private static String normalizeOutput(String output)
