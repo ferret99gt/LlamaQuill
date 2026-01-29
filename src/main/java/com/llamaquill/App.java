@@ -16,6 +16,7 @@ import com.llamaquill.prompt.PromptCompiler;
 import com.llamaquill.util.Ids;
 import com.llamaquill.util.Timestamps;
 import javafx.application.Application;
+import javafx.beans.binding.DoubleBinding;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.concurrent.Task;
@@ -35,6 +36,7 @@ import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.Slider;
+import javafx.scene.control.OverrunStyle;
 import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
 import javafx.scene.control.TextArea;
@@ -46,7 +48,10 @@ import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
+import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
+import javafx.scene.text.Text;
+import javafx.scene.text.TextFlow;
 import javafx.stage.Stage;
 
 import java.sql.Connection;
@@ -77,13 +82,13 @@ public class App extends Application
 
     private Story activeStory;
     private List<Block> blocks = new ArrayList<>();
-    private List<StoryCard> cards = new ArrayList<>();
 
     private final ObservableList<Story> storyItems = FXCollections.observableArrayList();
     private final ObservableList<StoryCard> cardItems = FXCollections.observableArrayList();
 
     private Stage primaryStage;
-    private TextArea storyArea;
+    private ScrollPane storyScroll;
+    private VBox storyContent;
     private Label statusLabel;
     private Button continueButton;
     private Button takeTurnButton;
@@ -115,6 +120,9 @@ public class App extends Application
 
     private final List<String> retryHistory = new ArrayList<>();
     private int retryIndex = -1;
+    private String activeAssistantEditId;
+    private TextFlow activeAssistantFlow;
+    private TextArea activeAssistantEditor;
 
     private Slider contextLimitSlider;
     private Slider responseLengthSlider;
@@ -146,16 +154,16 @@ public class App extends Application
 
             activeStory = loadOrCreateStory();
             blocks = blockRepository.listForStory(activeStory.id());
-            cards = cardRepository.listForStory(activeStory.id());
         }
         catch (SQLException e)
         {
             throw new IllegalStateException("Failed to initialize database", e);
         }
 
-        storyArea = new TextArea(renderBlocks(blocks));
-        storyArea.setWrapText(true);
-        storyArea.setEditable(false);
+        storyContent = new VBox(6);
+        storyScroll = new ScrollPane(storyContent);
+        storyScroll.setFitToWidth(true);
+        storyScroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
 
         continueButton = new Button("Continue");
         continueButton.setOnAction(event -> runContinue());
@@ -187,6 +195,7 @@ public class App extends Application
         refreshStoryList(activeStory.id());
         refreshCardList(activeStory.id());
         populateStoryDetails(activeStory);
+        renderStoryBlocks(true);
         setStoryDependentControlsEnabled(activeStory != null);
 
         var scene = new Scene(root, 1280, 720);
@@ -264,7 +273,7 @@ public class App extends Application
     private BorderPane buildCenterPane()
     {
         var centerPane = new BorderPane();
-        centerPane.setCenter(storyArea);
+        centerPane.setCenter(storyScroll);
 
         turnInputArea = new TextArea();
         turnInputArea.setWrapText(true);
@@ -452,7 +461,7 @@ public class App extends Application
     {
         TextArea area = new TextArea();
         area.setWrapText(true);
-        area.setPrefRowCount(6);
+        area.setPrefRowCount(8);
         area.setMinHeight(Region.USE_PREF_SIZE);
         area.setMaxHeight(MAX_STORY_LINES * 18.0);
         return area;
@@ -889,8 +898,7 @@ public class App extends Application
             {
                 activeStory = null;
                 blocks = new ArrayList<>();
-                cards = new ArrayList<>();
-                updateStoryArea("");
+                renderStoryBlocks(false);
                 statusLabel.setText("Select a story");
                 populateStoryDetails(null);
                 refreshCardList(null);
@@ -918,7 +926,7 @@ public class App extends Application
         {
             blockRepository.deleteHead(activeStory.id());
             blocks = blockRepository.listForStory(activeStory.id());
-            updateStoryArea(renderBlocks(blocks));
+            renderStoryBlocks(true);
             clearRetryHistory();
         }
         catch (SQLException e)
@@ -950,8 +958,7 @@ public class App extends Application
         {
             activeStory = story;
             blocks = blockRepository.listForStory(story.id());
-            cards = cardRepository.listForStory(story.id());
-            updateStoryArea(renderBlocks(blocks));
+            renderStoryBlocks(true);
             statusLabel.setText("Ready");
             populateStoryDetails(story);
             refreshCardList(story.id());
@@ -1023,7 +1030,7 @@ public class App extends Application
         task.setOnSucceeded(event -> {
             Block updated = task.getValue();
             blocks.set(blocks.size() - 1, updated);
-            updateStoryArea(renderBlocks(blocks));
+            renderStoryBlocks(true);
             statusLabel.setText("Ready");
             updateRetryCountLabel();
             continueButton.setDisable(false);
@@ -1122,7 +1129,7 @@ public class App extends Application
                 {
                     blockRepository.replaceHead(updated);
                     blocks.set(blocks.size() - 1, updated);
-                    updateStoryArea(renderBlocks(blocks));
+                    renderStoryBlocks(true);
                 }
                 catch (SQLException e)
                 {
@@ -1223,7 +1230,7 @@ public class App extends Application
         task.setOnSucceeded(event -> {
             Block block = task.getValue();
             blocks.add(block);
-            updateStoryArea(renderBlocks(blocks));
+            renderStoryBlocks(true);
             continueButton.setDisable(false);
             statusLabel.setText("Ready");
             refreshStoryList(activeStory.id());
@@ -1281,7 +1288,7 @@ public class App extends Application
             try
             {
                 blocks = blockRepository.listForStory(activeStory.id());
-                updateStoryArea(renderBlocks(blocks));
+                renderStoryBlocks(true);
                 statusLabel.setText("Ready");
                 refreshStoryList(activeStory.id());
             }
@@ -1545,27 +1552,311 @@ public class App extends Application
         return single.substring(0, 77) + "...";
     }
 
-    private static String renderBlocks(List<Block> blocks)
+    private void renderStoryBlocks(boolean forceScroll)
     {
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < blocks.size(); i++)
+        storyContent.getChildren().clear();
+        if (blocks.isEmpty())
         {
-            if (i > 0)
+            if (forceScroll)
             {
-                sb.append("\n\n");
+                scrollToBottom();
             }
-            sb.append(blocks.get(i).text());
+            return;
         }
-        return sb.toString();
+
+        String latestAssistantId = findLatestAssistantId();
+        List<Block> assistantGroup = new ArrayList<>();
+
+        for (Block block : blocks)
+        {
+            if (block.role() == Role.ASSISTANT)
+            {
+                assistantGroup.add(block);
+                continue;
+            }
+
+            addAssistantGroup(assistantGroup, latestAssistantId);
+            assistantGroup.clear();
+            storyContent.getChildren().add(buildUserBlockNode(block));
+        }
+
+        addAssistantGroup(assistantGroup, latestAssistantId);
+
+        if (forceScroll)
+        {
+            scrollToBottom();
+        }
     }
 
-    private void updateStoryArea(String text)
+    private void addAssistantGroup(List<Block> group, String latestAssistantId)
     {
-        storyArea.setText(text);
-        javafx.application.Platform.runLater(() -> {
-            storyArea.positionCaret(text == null ? 0 : text.length());
-            storyArea.setScrollTop(Double.MAX_VALUE);
+        if (group.isEmpty())
+        {
+            return;
+        }
+        TextFlow flow = new TextFlow();
+        flow.setLineSpacing(6);
+        flow.setPadding(new Insets(2, 10, 2, 10));
+        flow.prefWidthProperty().bind(contentWidthBinding());
+        flow.maxWidthProperty().bind(contentWidthBinding());
+
+        for (int i = 0; i < group.size(); i++)
+        {
+            Block block = group.get(i);
+            boolean highlight = block.id().equals(latestAssistantId);
+            Text textNode = new Text(block.text());
+            if (highlight)
+            {
+                textNode.setStyle("-fx-underline: true;");
+            }
+            textNode.setOnMouseEntered(event -> textNode.setUnderline(true));
+            textNode.setOnMouseExited(event -> {
+                if (!highlight)
+                {
+                    textNode.setUnderline(false);
+                }
+            });
+            textNode.setOnMouseClicked(event -> beginAssistantInlineEdit(block, flow, textNode));
+            flow.getChildren().add(textNode);
+
+            if (i < group.size() - 1 && !endsWithWhitespace(block.text()))
+            {
+                flow.getChildren().add(new Text(" "));
+            }
+        }
+        storyContent.getChildren().add(flow);
+    }
+
+    private String findLatestAssistantId()
+    {
+        for (int i = blocks.size() - 1; i >= 0; i--)
+        {
+            Block block = blocks.get(i);
+            if (block.role() == Role.ASSISTANT)
+            {
+                return block.id();
+            }
+        }
+        return null;
+    }
+
+    private void beginAssistantInlineEdit(Block block, TextFlow flow, Text textNode)
+    {
+        if (activeAssistantEditor != null)
+        {
+            commitAssistantEdit(activeAssistantEditor.getText());
+        }
+
+        int index = flow.getChildren().indexOf(textNode);
+        if (index < 0)
+        {
+            return;
+        }
+
+        TextArea editor = new TextArea(block.text());
+        editor.setWrapText(true);
+        editor.setPrefRowCount(4);
+        editor.setMinHeight(Region.USE_PREF_SIZE);
+        editor.prefWidthProperty().bind(contentWidthBinding());
+        editor.maxWidthProperty().bind(contentWidthBinding());
+
+        editor.focusedProperty().addListener((obs, oldValue, newValue) -> {
+            if (!newValue)
+            {
+                commitAssistantEdit(editor.getText());
+            }
         });
+
+        flow.getChildren().set(index, editor);
+        activeAssistantEditId = block.id();
+        activeAssistantFlow = flow;
+        activeAssistantEditor = editor;
+        editor.requestFocus();
+        editor.positionCaret(editor.getText().length());
+    }
+
+    private void commitAssistantEdit(String newText)
+    {
+        if (activeAssistantEditId == null || activeAssistantFlow == null || activeAssistantEditor == null)
+        {
+            return;
+        }
+        TextFlow flow = activeAssistantFlow;
+        String blockId = activeAssistantEditId;
+        String normalized = newText == null ? "" : newText;
+        try
+        {
+            updateBlockText(blockId, normalized);
+        }
+        catch (SQLException e)
+        {
+            showError("Failed to update block", e);
+        }
+
+        Text updatedText = new Text(normalized);
+        String latestId = findLatestAssistantId();
+        boolean highlight = blockId.equals(latestId);
+        if (highlight)
+        {
+            updatedText.setStyle("-fx-underline: true;");
+        }
+        updatedText.setOnMouseEntered(event -> updatedText.setUnderline(true));
+        updatedText.setOnMouseExited(event -> {
+            if (!highlight)
+            {
+                updatedText.setUnderline(false);
+            }
+        });
+        updatedText.setOnMouseClicked(event -> beginAssistantInlineEdit(
+                new Block(blockId, "", Role.ASSISTANT, normalized, "", 0),
+                flow, updatedText));
+
+        int index = flow.getChildren().indexOf(activeAssistantEditor);
+        if (index >= 0)
+        {
+            flow.getChildren().set(index, updatedText);
+        }
+
+        activeAssistantEditId = null;
+        activeAssistantFlow = null;
+        activeAssistantEditor = null;
+    }
+
+    private Region buildUserBlockNode(Block block)
+    {
+        Label icon = new Label(">");
+        icon.setStyle("-fx-padding: 4 6 0 0;");
+        icon.setTextOverrun(OverrunStyle.CLIP);
+        icon.setMinWidth(Region.USE_PREF_SIZE);
+        icon.setPrefWidth(Region.USE_COMPUTED_SIZE);
+        icon.setMaxWidth(Region.USE_PREF_SIZE);
+
+        Label label = new Label(block.text());
+        label.setWrapText(true);
+        label.setPadding(Insets.EMPTY);
+        label.setTextOverrun(OverrunStyle.CLIP);
+        label.setMinWidth(0);
+        label.prefWidthProperty().bind(contentWidthBinding());
+        label.maxWidthProperty().bind(contentWidthBinding());
+        label.setMinHeight(Region.USE_PREF_SIZE);
+        label.setPrefHeight(Region.USE_COMPUTED_SIZE);
+        label.setMaxHeight(Double.MAX_VALUE);
+
+        TextArea editor = new TextArea(block.text());
+        editor.setWrapText(true);
+        editor.setVisible(false);
+        editor.setManaged(false);
+        editor.setPrefRowCount(3);
+        editor.setMinHeight(Region.USE_PREF_SIZE);
+        editor.prefWidthProperty().bind(contentWidthBinding());
+        editor.maxWidthProperty().bind(contentWidthBinding());
+
+        label.setOnMouseClicked(event -> beginInlineEdit(label, editor));
+        label.setOnMouseEntered(event -> label.setUnderline(true));
+        label.setOnMouseExited(event -> label.setUnderline(false));
+        editor.focusedProperty().addListener((obs, oldValue, newValue) -> {
+            if (!newValue)
+            {
+                String newText = editor.getText();
+                commitInlineEdit(block.id(), newText, label, editor, false);
+            }
+        });
+
+        StackPane textStack = new StackPane(label, editor);
+        textStack.prefWidthProperty().bind(contentWidthBinding().subtract(24));
+        textStack.maxWidthProperty().bind(contentWidthBinding().subtract(24));
+        HBox row = new HBox(6, icon, textStack);
+        HBox.setHgrow(textStack, Priority.ALWAYS);
+        row.setAlignment(Pos.TOP_LEFT);
+        row.setPadding(new Insets(6, 8, 6, 8));
+        row.setStyle("-fx-border-color: rgba(255,255,255,0.25); -fx-border-width: 0 0 0 2;");
+        row.prefWidthProperty().bind(contentWidthBinding());
+        row.maxWidthProperty().bind(contentWidthBinding());
+        return row;
+    }
+
+    private void beginInlineEdit(Label label, TextArea editor)
+    {
+        String current = stripTrailingSpace(label.getText());
+        editor.setText(current);
+        label.setVisible(false);
+        label.setManaged(false);
+        editor.setVisible(true);
+        editor.setManaged(true);
+        editor.requestFocus();
+        editor.positionCaret(editor.getText().length());
+    }
+
+    private void commitInlineEdit(String blockId, String newText, Label label, TextArea editor, boolean trailingSpace)
+    {
+        String normalized = newText == null ? "" : newText;
+        try
+        {
+            updateBlockText(blockId, normalized);
+            label.setText(trailingSpace ? normalized + " " : normalized);
+        }
+        catch (SQLException e)
+        {
+            showError("Failed to update block", e);
+        }
+        label.setVisible(true);
+        label.setManaged(true);
+        editor.setVisible(false);
+        editor.setManaged(false);
+    }
+
+    private void updateBlockText(String blockId, String text) throws SQLException
+    {
+        for (int i = 0; i < blocks.size(); i++)
+        {
+            Block block = blocks.get(i);
+            if (!block.id().equals(blockId))
+            {
+                continue;
+            }
+            if (text.equals(block.text()))
+            {
+                return;
+            }
+            blockRepository.updateText(blockId, text);
+            Block updated = new Block(block.id(), block.storyId(), block.role(), text, block.createdAt(),
+                    block.position());
+            blocks.set(i, updated);
+            return;
+        }
+    }
+
+    private static String stripTrailingSpace(String text)
+    {
+        if (text == null || text.isEmpty())
+        {
+            return "";
+        }
+        if (text.endsWith(" "))
+        {
+            return text.substring(0, text.length() - 1);
+        }
+        return text;
+    }
+
+    private void scrollToBottom()
+    {
+        javafx.application.Platform.runLater(() -> storyScroll.setVvalue(1.0));
+    }
+
+    private DoubleBinding contentWidthBinding()
+    {
+        return storyScroll.widthProperty().subtract(32);
+    }
+
+    private static boolean endsWithWhitespace(String text)
+    {
+        if (text == null || text.isEmpty())
+        {
+            return true;
+        }
+        char last = text.charAt(text.length() - 1);
+        return Character.isWhitespace(last);
     }
 
     private static String normalizeOutput(String output)
