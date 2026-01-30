@@ -18,7 +18,7 @@ public class PromptCompiler
 {
     private static final int CHARS_PER_TOKEN = 4;
     private static final boolean PREFIX_USER_LINES = true;
-    private static final int ASSISTANT_TAIL_MERGE = 2;
+    private static final int ASSISTANT_TAIL_MERGE = 3;
 
     public PromptCompilation compile(Story story, List<Block> blocks, List<StoryCard> storyCards,
             GenerationSettings settings)

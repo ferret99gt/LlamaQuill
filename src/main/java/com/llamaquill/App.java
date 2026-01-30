@@ -126,7 +126,6 @@ public class App extends Application
     private String activeAssistantEditId;
     private TextFlow activeAssistantFlow;
     private TextArea activeAssistantEditor;
-    private StackPane activeAssistantEditorContainer;
 
     private Slider contextLimitSlider;
     private Slider responseLengthSlider;
@@ -1137,6 +1136,7 @@ public class App extends Application
         takeTurnButton.setDisable(true);
         retryButton.setDisable(true);
         deleteButton.setDisable(true);
+        retryHistoryButton.setDisable(true);
         statusLabel.setText("Generating...");
 
         Task<Block> task = new Task<>()
@@ -1158,6 +1158,10 @@ public class App extends Application
                         settings);
                 String response = ollamaClient.generate(compilation.prompt(), settings);
                 String cleaned = normalizeOutput(response);
+                if (cleaned.isBlank())
+                {
+                    return null;
+                }
 
                 Block updated = new Block(head.id(), head.storyId(), Role.ASSISTANT, cleaned, Timestamps.now(),
                         head.position());
@@ -1170,6 +1174,15 @@ public class App extends Application
 
         task.setOnSucceeded(event -> {
             Block updated = task.getValue();
+            if (updated == null)
+            {
+                statusLabel.setText("Last generation was empty.");
+                continueButton.setDisable(false);
+                takeTurnButton.setDisable(false);
+                retryButton.setDisable(false);
+                deleteButton.setDisable(false);
+                return;
+            }
             blocks.set(blocks.size() - 1, updated);
             renderStoryBlocks(true);
             statusLabel.setText("Ready");
@@ -1178,6 +1191,7 @@ public class App extends Application
             takeTurnButton.setDisable(false);
             retryButton.setDisable(false);
             deleteButton.setDisable(false);
+            retryHistoryButton.setDisable(retryHistory.size() < 2);
         });
 
         task.setOnFailed(event -> {
@@ -1186,6 +1200,7 @@ public class App extends Application
             takeTurnButton.setDisable(false);
             retryButton.setDisable(false);
             deleteButton.setDisable(false);
+            retryHistoryButton.setDisable(retryHistory.size() < 2);
             statusLabel.setText("Error: " + (error == null ? "Unknown" : error.getMessage()));
         });
 
@@ -1354,6 +1369,10 @@ public class App extends Application
                         settings);
                 String response = ollamaClient.generate(compilation.prompt(), settings);
                 String cleaned = normalizeOutput(response);
+                if (cleaned.isBlank())
+                {
+                    return null;
+                }
 
                 int position = blockRepository.nextPosition(activeStory.id());
                 Block block = new Block(Ids.newId(), activeStory.id(), Role.ASSISTANT, cleaned, Timestamps.now(),
@@ -1370,6 +1389,12 @@ public class App extends Application
 
         task.setOnSucceeded(event -> {
             Block block = task.getValue();
+            if (block == null)
+            {
+                continueButton.setDisable(false);
+                statusLabel.setText("Last generation was empty.");
+                return;
+            }
             blocks.add(block);
             renderStoryBlocks(true);
             continueButton.setDisable(false);
@@ -1394,10 +1419,10 @@ public class App extends Application
         deleteButton.setDisable(true);
         statusLabel.setText("Generating...");
 
-        Task<Block> task = new Task<>()
+        Task<Boolean> task = new Task<>()
         {
             @Override
-            protected Block call() throws Exception
+            protected Boolean call() throws Exception
             {
                 List<Block> currentBlocks = blockRepository.listForStory(activeStory.id());
                 boolean isFirstTurn = currentBlocks.isEmpty();
@@ -1415,6 +1440,10 @@ public class App extends Application
                         settings);
                 String response = ollamaClient.generate(compilation.prompt(), settings);
                 String cleaned = normalizeOutput(response);
+                if (cleaned.isBlank())
+                {
+                    return Boolean.FALSE;
+                }
 
                 int assistantPosition = blockRepository.nextPosition(activeStory.id());
                 Block assistantBlock = new Block(Ids.newId(), activeStory.id(), Role.ASSISTANT, cleaned,
@@ -1425,16 +1454,17 @@ public class App extends Application
                 activeStory = new Story(activeStory.id(), activeStory.title(), activeStory.systemPrompt(),
                         activeStory.plotEssentials(), activeStory.authorNote(), activeStory.createdAt(), now);
                 storyRepository.update(activeStory);
-                return assistantBlock;
+                return Boolean.TRUE;
             }
         };
 
         task.setOnSucceeded(event -> {
             try
             {
+                boolean generated = Boolean.TRUE.equals(task.getValue());
                 blocks = blockRepository.listForStory(activeStory.id());
                 renderStoryBlocks(true);
-                statusLabel.setText("Ready");
+                statusLabel.setText(generated ? "Ready" : "Last generation was empty.");
                 refreshStoryList(activeStory.id());
             }
             catch (SQLException e)
@@ -1774,6 +1804,9 @@ public class App extends Application
                 flow.getChildren().add(new Text(" "));
             }
         }
+        Text sentinel = new Text("");
+        sentinel.setUserData("sentinel");
+        flow.getChildren().add(sentinel);
         storyContent.getChildren().add(flow);
     }
 
@@ -1801,16 +1834,12 @@ public class App extends Application
 
         TextArea editor = new TextArea(block.text());
         editor.setWrapText(true);
-        editor.setPrefRowCount(4);
+        //editor.setPrefRowCount(4);
         editor.setMinHeight(Region.USE_PREF_SIZE);
-        editor.setPrefHeight(Region.USE_COMPUTED_SIZE);
+        //editor.setPrefHeight(Region.USE_COMPUTED_SIZE);
         editor.setMaxHeight(Double.MAX_VALUE);
         editor.prefWidthProperty().bind(contentWidthBinding());
         editor.maxWidthProperty().bind(contentWidthBinding());
-
-        StackPane editorContainer = new StackPane(editor);
-        editorContainer.prefWidthProperty().bind(contentWidthBinding());
-        editorContainer.maxWidthProperty().bind(contentWidthBinding());
 
         int index = flow.getChildren().indexOf(textNode);
         if (index < 0)
@@ -1819,10 +1848,12 @@ public class App extends Application
             activeAssistantFlow = null;
             return;
         }
-        flow.getChildren().set(index, editorContainer);
+        flow.getChildren().set(index, editor);
+        javafx.application.Platform.runLater(() -> {
+            flow.requestLayout();
+        });
 
         activeAssistantEditor = editor;
-        activeAssistantEditorContainer = editorContainer;
 
         editor.focusedProperty().addListener((obs, oldValue, newValue) -> {
             if (!newValue && activeAssistantEditor == editor)
@@ -1840,7 +1871,7 @@ public class App extends Application
     private void commitAssistantEdit(String newText)
     {
         if (activeAssistantEditId == null || activeAssistantEditor == null
-                || activeAssistantFlow == null || activeAssistantEditorContainer == null)
+                || activeAssistantFlow == null)
         {
             return;
         }
@@ -1889,15 +1920,15 @@ public class App extends Application
         updatedText.setOnMouseClicked(event -> beginAssistantInlineEdit(finalUpdatedBlock, flow,
                 updatedText));
 
-        int index = flow.getChildren().indexOf(activeAssistantEditorContainer);
+        int index = flow.getChildren().indexOf(activeAssistantEditor);
         if (index >= 0)
         {
             flow.getChildren().set(index, updatedText);
+            flow.requestLayout();
         }
         activeAssistantEditId = null;
         activeAssistantEditor = null;
         activeAssistantFlow = null;
-        activeAssistantEditorContainer = null;
     }
 
     private Region buildUserBlockNode(Block block)
