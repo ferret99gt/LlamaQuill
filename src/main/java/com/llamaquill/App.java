@@ -588,14 +588,14 @@ public class App extends Application
             }
         });
 
-        contextLimitSlider = buildIntSlider(1024, 32768, appSettings.contextLimit(), 1024);
+        contextLimitSlider = buildIntSlider(1024, 32768, appSettings.contextLimit(), 512);
         responseLengthSlider = buildIntSlider(1, 250, appSettings.responseLength(), 1);
         temperatureSlider = buildDoubleSlider(0.1, 2.0, activeModelSettings.temperature(), 0.1);
         topKSlider = buildIntSlider(1, 999, activeModelSettings.topK(), 1);
         topPSlider = buildDoubleSlider(0.1, 1.0, activeModelSettings.topP(), 0.01);
         minPSlider = buildDoubleSlider(0.01, 0.2, activeModelSettings.minP(), 0.001);
-        presencePenaltySlider = buildDoubleSlider(-2.0, 2.0, activeModelSettings.presencePenalty(), 0.1);
-        frequencyPenaltySlider = buildDoubleSlider(-2.0, 2.0, activeModelSettings.frequencyPenalty(), 0.1);
+        presencePenaltySlider = buildDoubleSlider(-2.0, 2.0, activeModelSettings.presencePenalty(), 0.01);
+        frequencyPenaltySlider = buildDoubleSlider(-2.0, 2.0, activeModelSettings.frequencyPenalty(), 0.01);
         repetitionPenaltySlider = buildDoubleSlider(-2.0, 2.0, activeModelSettings.repetitionPenalty(), 0.01);
         minStoryPercentSlider = buildIntSlider(10, 100, percentFromSettings(), 1);
         storyCardLookbackSpinner = buildSpinner(0, 20, appSettings.storyCardLookback());
@@ -609,19 +609,19 @@ public class App extends Application
                 sliderRow("Response Length", responseLengthSlider,
                         valueLabel(appSettings.responseLength(), "tokens"), value -> updateResponseLength(value.intValue())),
                 sliderRow("Temperature", temperatureSlider,
-                        valueLabel(activeModelSettings.temperature(), ""), value -> updateTemperature(roundTo(value.doubleValue(), 0.1))),
+                        valueLabel(activeModelSettings.temperature(), "", 1), value -> updateTemperature(roundTo(value.doubleValue(), 0.1))),
                 sliderRow("Top K", topKSlider,
                         valueLabel(activeModelSettings.topK(), ""), value -> updateTopK(value.intValue())),
                 sliderRow("Top P", topPSlider,
-                        valueLabel(activeModelSettings.topP(), ""), value -> updateTopP(roundTo(value.doubleValue(), 0.01))),
+                        valueLabel(activeModelSettings.topP(), "", 2), value -> updateTopP(roundTo(value.doubleValue(), 0.01))),
                 sliderRow("Min P", minPSlider,
-                        valueLabel(activeModelSettings.minP(), ""), value -> updateMinP(roundTo(value.doubleValue(), 0.001))),
+                        valueLabel(activeModelSettings.minP(), "", 3), value -> updateMinP(roundTo(value.doubleValue(), 0.001))),
                 sliderRow("Presence Penalty", presencePenaltySlider,
-                        valueLabel(activeModelSettings.presencePenalty(), ""), value -> updatePresencePenalty(roundTo(value.doubleValue(), 0.1))),
+                        valueLabel(activeModelSettings.presencePenalty(), "", 2), value -> updatePresencePenalty(roundTo(value.doubleValue(), 0.01))),
                 sliderRow("Frequency Penalty", frequencyPenaltySlider,
-                        valueLabel(activeModelSettings.frequencyPenalty(), ""), value -> updateFrequencyPenalty(roundTo(value.doubleValue(), 0.1))),
+                        valueLabel(activeModelSettings.frequencyPenalty(), "", 2), value -> updateFrequencyPenalty(roundTo(value.doubleValue(), 0.01))),
                 sliderRow("Repetition Penalty", repetitionPenaltySlider,
-                        valueLabel(activeModelSettings.repetitionPenalty(), ""), value -> updateRepetitionPenalty(roundTo(value.doubleValue(), 0.01))),
+                        valueLabel(activeModelSettings.repetitionPenalty(), "", 2), value -> updateRepetitionPenalty(roundTo(value.doubleValue(), 0.01))),
                 sliderRow("Context to Use for Story", minStoryPercentSlider,
                         valueLabel(percentFromSettings(), "%"), value -> updateMinStoryPercent(value.intValue())),
                 spinnerRow("Story Card Look Back", storyCardLookbackSpinner, this::updateStoryCardLookback),
@@ -1678,12 +1678,12 @@ public class App extends Application
     private Slider buildIntSlider(int min, int max, int value, int step)
     {
         Slider slider = new Slider(min, max, value);
-        slider.setShowTickMarks(true);
-        slider.setShowTickLabels(true);
+        slider.setShowTickMarks(false);
+        slider.setShowTickLabels(false);
         slider.setBlockIncrement(step);
         slider.setSnapToTicks(true);
-        slider.setMajorTickUnit(step * 4.0);
-        slider.setMinorTickCount(3);
+        slider.setMajorTickUnit(step);
+        slider.setMinorTickCount(0);
         slider.setOrientation(Orientation.HORIZONTAL);
         return slider;
     }
@@ -1691,12 +1691,12 @@ public class App extends Application
     private Slider buildDoubleSlider(double min, double max, double value, double step)
     {
         Slider slider = new Slider(min, max, value);
-        slider.setShowTickMarks(true);
-        slider.setShowTickLabels(true);
+        slider.setShowTickMarks(false);
+        slider.setShowTickLabels(false);
         slider.setBlockIncrement(step);
         slider.setSnapToTicks(true);
-        slider.setMajorTickUnit(step * 4.0);
-        slider.setMinorTickCount(3);
+        slider.setMajorTickUnit(step);
+        slider.setMinorTickCount(0);
         slider.setOrientation(Orientation.HORIZONTAL);
         return slider;
     }
@@ -1704,7 +1704,11 @@ public class App extends Application
     private VBox sliderRow(String labelText, Slider slider, Label valueLabel, java.util.function.Consumer<Number> handler)
     {
         Label label = new Label(labelText);
-        VBox box = new VBox(6, label, slider, valueLabel);
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+        HBox header = new HBox(8, label, spacer, valueLabel);
+        header.setAlignment(Pos.CENTER_LEFT);
+        VBox box = new VBox(6, header, slider);
         slider.valueProperty().addListener((obs, oldValue, newValue) -> {
             valueLabel.setText(formatValue(newValue, valueLabel));
             handler.accept(newValue);
@@ -1749,6 +1753,13 @@ public class App extends Application
         return label;
     }
 
+    private Label valueLabel(double value, String suffix, int decimals)
+    {
+        Label label = new Label(formatValue(value, suffix, decimals));
+        label.setUserData(decimals);
+        return label;
+    }
+
     private String formatValue(Number value, Label label)
     {
         String text = label.getText();
@@ -1758,10 +1769,21 @@ public class App extends Application
         {
             suffix = text.substring(space + 1);
         }
-        return formatValue(value.doubleValue(), suffix.equals("") ? "" : suffix);
+        int decimals = 2;
+        Object data = label.getUserData();
+        if (data instanceof Integer)
+        {
+            decimals = (int) data;
+        }
+        return formatValue(value.doubleValue(), suffix.equals("") ? "" : suffix, decimals);
     }
 
     private String formatValue(double value, String suffix)
+    {
+        return formatValue(value, suffix, 2);
+    }
+
+    private String formatValue(double value, String suffix, int decimals)
     {
         String formatted;
         if (Math.abs(value - Math.round(value)) < 0.0001)
@@ -1770,7 +1792,8 @@ public class App extends Application
         }
         else
         {
-            formatted = String.format(java.util.Locale.US, "%.2f", value);
+            String pattern = "%." + Math.max(0, decimals) + "f";
+            formatted = String.format(java.util.Locale.US, pattern, value);
         }
         if (!suffix.isEmpty())
         {
