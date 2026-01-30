@@ -17,6 +17,7 @@ import java.util.regex.Pattern;
 public class PromptCompiler
 {
     private static final int CHARS_PER_TOKEN = 4;
+    private static final double TOKEN_ESTIMATE_MULTIPLIER = 0.90;
     private static final boolean PREFIX_USER_LINES = true;
     private static final int ASSISTANT_TAIL_MERGE = 3;
 
@@ -373,7 +374,8 @@ public class PromptCompiler
         {
             return 0;
         }
-        return Math.max(1, (int) Math.ceil(text.length() / (double) CHARS_PER_TOKEN));
+        double raw = text.length() / (double) CHARS_PER_TOKEN;
+        return Math.max(1, (int) Math.ceil(raw * TOKEN_ESTIMATE_MULTIPLIER));
     }
 
     private static String safeText(String text)
