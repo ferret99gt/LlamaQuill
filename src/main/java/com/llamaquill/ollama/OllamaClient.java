@@ -52,8 +52,8 @@ public class OllamaClient
 
     public List<String> listModels() throws IOException, InterruptedException
     {
-        HttpRequest request = HttpRequest.newBuilder().uri(URI.create(host + "/api/tags"))
-                .timeout(Duration.ofSeconds(10)).GET().build();
+        HttpRequest request = HttpRequest.newBuilder().uri(URI.create(host + "/api/tags")).timeout(Duration.ofSeconds(10)).GET()
+                .build();
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() < 200 || response.statusCode() >= 300)
         {
@@ -62,18 +62,16 @@ public class OllamaClient
         return Json.extractStringArray(response.body(), "name");
     }
 
-    public String generate(String prompt, GenerationSettings settings)
-            throws IOException, InterruptedException
+    public String generate(String prompt, GenerationSettings settings) throws IOException, InterruptedException
     {
         String payload = buildPayload(prompt, settings);
         System.out.println("Ollama payload:");
         System.out.println(payload);
-        HttpRequest request = HttpRequest.newBuilder().uri(URI.create(host + "/api/generate"))
-                .timeout(Duration.ofMinutes(2)).header("Content-Type", "application/json")
+        HttpRequest request = HttpRequest.newBuilder().uri(URI.create(host + "/api/generate")).timeout(Duration.ofMinutes(2))
+                .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8)).build();
 
-        HttpResponse<java.io.InputStream> response = client.send(request,
-                HttpResponse.BodyHandlers.ofInputStream());
+        HttpResponse<java.io.InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
         if (response.statusCode() < 200 || response.statusCode() >= 300)
         {
             throw new IOException("Ollama returned status " + response.statusCode());
@@ -81,8 +79,7 @@ public class OllamaClient
 
         StringBuilder sb = new StringBuilder();
         String doneLine = null;
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(response.body(), StandardCharsets.UTF_8)))
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(response.body(), StandardCharsets.UTF_8)))
         {
             String line;
             while ((line = reader.readLine()) != null)

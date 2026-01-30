@@ -21,8 +21,7 @@ public class PromptCompiler
     private static final boolean PREFIX_USER_LINES = true;
     private static final int ASSISTANT_TAIL_MERGE = 3;
 
-    public PromptCompilation compile(Story story, List<Block> blocks, List<StoryCard> storyCards,
-            GenerationSettings settings)
+    public PromptCompilation compile(Story story, List<Block> blocks, List<StoryCard> storyCards, GenerationSettings settings)
     {
         Objects.requireNonNull(story, "story");
         Objects.requireNonNull(blocks, "blocks");
@@ -34,14 +33,12 @@ public class PromptCompiler
 
         List<Block> window = buildStoryWindow(blocks, minWindowChars);
 
-        StoryCardSelection selection = selectStoryCards(storyCards, window,
-                settings.storyCardLookback());
+        StoryCardSelection selection = selectStoryCards(storyCards, window, settings.storyCardLookback());
         String plotEssentials = safeText(story.plotEssentials());
 
         while (true)
         {
-            List<Block> windowWithNote = insertAuthorNote(window, settings.anPlacement(),
-                    safeText(story.authorNote()));
+            List<Block> windowWithNote = insertAuthorNote(window, settings.anPlacement(), safeText(story.authorNote()));
             String systemText = safeText(story.systemPrompt());
 
             List<Message> messages = new ArrayList<>();
@@ -121,8 +118,7 @@ public class PromptCompiler
         return trimmed;
     }
 
-    private static List<Block> insertAuthorNote(List<Block> window, int anPlacement,
-            String authorNote)
+    private static List<Block> insertAuthorNote(List<Block> window, int anPlacement, String authorNote)
     {
         if (authorNote.isBlank() || window.isEmpty())
         {
@@ -139,8 +135,8 @@ public class PromptCompiler
             if (i == index)
             {
                 String updatedText = "Author's Note: " + authorNote + "\n\n" + block.text();
-                updated.add(new Block(block.id(), block.storyId(), block.role(), updatedText,
-                        block.createdAt(), block.position()));
+                updated.add(
+                        new Block(block.id(), block.storyId(), block.role(), updatedText, block.createdAt(), block.position()));
             }
             else
             {
@@ -150,8 +146,7 @@ public class PromptCompiler
         return updated;
     }
 
-    private static StoryCardSelection selectStoryCards(List<StoryCard> storyCards,
-            List<Block> window, int lookback)
+    private static StoryCardSelection selectStoryCards(List<StoryCard> storyCards, List<Block> window, int lookback)
     {
         String matchText = buildLookbackText(window, lookback);
         List<StoryCard> pinned = new ArrayList<>();
@@ -191,8 +186,7 @@ public class PromptCompiler
             {
                 continue;
             }
-            Pattern pattern = Pattern.compile("\\b" + Pattern.quote(trimmed) + "\\b",
-                    Pattern.CASE_INSENSITIVE);
+            Pattern pattern = Pattern.compile("\\b" + Pattern.quote(trimmed) + "\\b", Pattern.CASE_INSENSITIVE);
             if (pattern.matcher(text).find())
             {
                 hits++;
@@ -308,8 +302,7 @@ public class PromptCompiler
         }
         char last = currentText.charAt(currentText.length() - 1);
         char first = nextText.charAt(0);
-        if (!Character.isWhitespace(last) && !Character.isWhitespace(first)
-                && !startsWithPunctuation(nextText))
+        if (!Character.isWhitespace(last) && !Character.isWhitespace(first) && !startsWithPunctuation(nextText))
         {
             currentText.append(' ');
         }

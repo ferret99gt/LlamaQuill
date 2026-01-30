@@ -195,7 +195,8 @@ public class App extends Application
 
         storyContent = new VBox(6);
         storyContent.getStyleClass().add("story-content");
-        storyContent.heightProperty().addListener((obs, oldValue, newValue) -> {
+        storyContent.heightProperty().addListener((obs, oldValue, newValue) ->
+        {
             if (forceScrollPending)
             {
                 scrollToBottom();
@@ -289,7 +290,8 @@ public class App extends Application
                 setText(empty || item == null ? null : item.title());
             }
         });
-        storyList.setOnMouseClicked(event -> {
+        storyList.setOnMouseClicked(event ->
+        {
             if (event.getClickCount() == 1)
             {
                 Story selected = storyList.getSelectionModel().getSelectedItem();
@@ -378,11 +380,13 @@ public class App extends Application
         titleBar.setPadding(new Insets(6, 10, 6, 10));
         HBox.setHgrow(title, Priority.ALWAYS);
 
-        titleBar.setOnMousePressed(event -> {
+        titleBar.setOnMousePressed(event ->
+        {
             dragOffsetX = event.getSceneX();
             dragOffsetY = event.getSceneY();
         });
-        titleBar.setOnMouseDragged(event -> {
+        titleBar.setOnMouseDragged(event ->
+        {
             if (customMaximized)
             {
                 return;
@@ -390,14 +394,16 @@ public class App extends Application
             primaryStage.setX(event.getScreenX() - dragOffsetX);
             primaryStage.setY(event.getScreenY() - dragOffsetY);
         });
-        titleBar.setOnMouseClicked(event -> {
+        titleBar.setOnMouseClicked(event ->
+        {
             if (event.getClickCount() == 2)
             {
                 toggleMaximize();
             }
         });
 
-        primaryStage.focusedProperty().addListener((obs, oldValue, newValue) -> {
+        primaryStage.focusedProperty().addListener((obs, oldValue, newValue) ->
+        {
             if (newValue)
             {
                 titleBar.getStyleClass().remove("inactive");
@@ -420,13 +426,10 @@ public class App extends Application
             restoreW = primaryStage.getWidth();
             restoreH = primaryStage.getHeight();
 
-            Rectangle2D bounds = Screen.getScreensForRectangle(
-                    primaryStage.getX(), primaryStage.getY(),
-                    primaryStage.getWidth(), primaryStage.getHeight())
-                    .stream()
-                    .findFirst()
-                    .map(Screen::getVisualBounds)
-                    .orElse(Screen.getPrimary().getVisualBounds());
+            Rectangle2D bounds = Screen
+                    .getScreensForRectangle(primaryStage.getX(), primaryStage.getY(), primaryStage.getWidth(),
+                            primaryStage.getHeight())
+                    .stream().findFirst().map(Screen::getVisualBounds).orElse(Screen.getPrimary().getVisualBounds());
             primaryStage.setX(bounds.getMinX());
             primaryStage.setY(bounds.getMinY());
             primaryStage.setWidth(bounds.getWidth());
@@ -461,7 +464,8 @@ public class App extends Application
         rightTabs = new TabPane();
         rightTabs.getTabs().addAll(buildStoryTab(), buildStoryCardsTab(), buildOptionsTab());
         rightTabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
-        rightTabs.skinProperty().addListener((obs, oldSkin, newSkin) -> {
+        rightTabs.skinProperty().addListener((obs, oldSkin, newSkin) ->
+        {
             if (newSkin != null)
             {
                 forceTabHeaderDark();
@@ -470,7 +474,6 @@ public class App extends Application
 
         Label rightHeader = new Label("Details");
         rightHeader.setStyle("-fx-font-size: 14px; -fx-font-weight: bold;");
-
 
         var headerRow = new HBox(8, collapseRightButton, rightHeader);
         headerRow.setAlignment(Pos.CENTER_LEFT);
@@ -496,13 +499,8 @@ public class App extends Application
         attachSaveOnBlur(plotEssentialsArea);
         attachSaveOnBlur(authorNoteArea);
 
-        VBox content = new VBox(10,
-                new Label("System Prompt"),
-                systemPromptArea,
-                new Label("Plot Essentials"),
-                plotEssentialsArea,
-                new Label("Author's Note"),
-                authorNoteArea);
+        VBox content = new VBox(10, new Label("System Prompt"), systemPromptArea, new Label("Plot Essentials"),
+                plotEssentialsArea, new Label("Author's Note"), authorNoteArea);
         content.setPadding(new Insets(10));
 
         ScrollPane scrollPane = new ScrollPane(content);
@@ -543,7 +541,8 @@ public class App extends Application
                 }
             }
         });
-        cardList.setOnMouseClicked(event -> {
+        cardList.setOnMouseClicked(event ->
+        {
             if (event.getClickCount() == 1)
             {
                 StoryCard selected = cardList.getSelectionModel().getSelectedItem();
@@ -570,7 +569,8 @@ public class App extends Application
 
         ollamaUrlField = new TextField(appSettings.ollamaUrl());
         ollamaUrlField.setPromptText("Ollama URL");
-        ollamaUrlField.focusedProperty().addListener((obs, oldValue, newValue) -> {
+        ollamaUrlField.focusedProperty().addListener((obs, oldValue, newValue) ->
+        {
             if (!newValue)
             {
                 updateOllamaUrl(ollamaUrlField.getText());
@@ -580,7 +580,8 @@ public class App extends Application
         modelSelect = new ComboBox<>();
         modelSelect.setMaxWidth(Double.MAX_VALUE);
         refreshModelSelect();
-        modelSelect.setOnAction(event -> {
+        modelSelect.setOnAction(event ->
+        {
             String selected = modelSelect.getValue();
             if (selected != null)
             {
@@ -601,32 +602,31 @@ public class App extends Application
         storyCardLookbackSpinner = buildSpinner(0, 20, appSettings.storyCardLookback());
         anPlacementSpinner = buildSpinner(1, 10, appSettings.anPlacement());
 
-        content.getChildren().addAll(
-                textFieldRow("Ollama URL", ollamaUrlField),
-                comboRow("Model", modelSelect),
-                sliderRow("Context Limit", contextLimitSlider,
-                        valueLabel(appSettings.contextLimit(), "tokens"), value -> updateContextLimit(value.intValue())),
-                sliderRow("Response Length", responseLengthSlider,
-                        valueLabel(appSettings.responseLength(), "tokens"), value -> updateResponseLength(value.intValue())),
-                sliderRow("Temperature", temperatureSlider,
-                        valueLabel(activeModelSettings.temperature(), "", 1), value -> updateTemperature(roundTo(value.doubleValue(), 0.1))),
-                sliderRow("Top K", topKSlider,
-                        valueLabel(activeModelSettings.topK(), ""), value -> updateTopK(value.intValue())),
-                sliderRow("Top P", topPSlider,
-                        valueLabel(activeModelSettings.topP(), "", 2), value -> updateTopP(roundTo(value.doubleValue(), 0.01))),
-                sliderRow("Min P", minPSlider,
-                        valueLabel(activeModelSettings.minP(), "", 3), value -> updateMinP(roundTo(value.doubleValue(), 0.001))),
-                sliderRow("Presence Penalty", presencePenaltySlider,
-                        valueLabel(activeModelSettings.presencePenalty(), "", 2), value -> updatePresencePenalty(roundTo(value.doubleValue(), 0.01))),
+        content.getChildren().addAll(textFieldRow("Ollama URL", ollamaUrlField), comboRow("Model", modelSelect),
+                sliderRow("Context Limit", contextLimitSlider, valueLabel(appSettings.contextLimit(), "tokens"),
+                        value -> updateContextLimit(value.intValue())),
+                sliderRow("Response Length", responseLengthSlider, valueLabel(appSettings.responseLength(), "tokens"),
+                        value -> updateResponseLength(value.intValue())),
+                sliderRow("Temperature", temperatureSlider, valueLabel(activeModelSettings.temperature(), "", 1),
+                        value -> updateTemperature(roundTo(value.doubleValue(), 0.1))),
+                sliderRow("Top K", topKSlider, valueLabel(activeModelSettings.topK(), ""),
+                        value -> updateTopK(value.intValue())),
+                sliderRow("Top P", topPSlider, valueLabel(activeModelSettings.topP(), "", 2),
+                        value -> updateTopP(roundTo(value.doubleValue(), 0.01))),
+                sliderRow("Min P", minPSlider, valueLabel(activeModelSettings.minP(), "", 3),
+                        value -> updateMinP(roundTo(value.doubleValue(), 0.001))),
+                sliderRow("Presence Penalty", presencePenaltySlider, valueLabel(activeModelSettings.presencePenalty(), "", 2),
+                        value -> updatePresencePenalty(roundTo(value.doubleValue(), 0.01))),
                 sliderRow("Frequency Penalty", frequencyPenaltySlider,
-                        valueLabel(activeModelSettings.frequencyPenalty(), "", 2), value -> updateFrequencyPenalty(roundTo(value.doubleValue(), 0.01))),
+                        valueLabel(activeModelSettings.frequencyPenalty(), "", 2),
+                        value -> updateFrequencyPenalty(roundTo(value.doubleValue(), 0.01))),
                 sliderRow("Repetition Penalty", repetitionPenaltySlider,
-                        valueLabel(activeModelSettings.repetitionPenalty(), "", 2), value -> updateRepetitionPenalty(roundTo(value.doubleValue(), 0.01))),
-                sliderRow("Context to Use for Story", minStoryPercentSlider,
-                        valueLabel(percentFromSettings(), "%"), value -> updateMinStoryPercent(value.intValue())),
+                        valueLabel(activeModelSettings.repetitionPenalty(), "", 2),
+                        value -> updateRepetitionPenalty(roundTo(value.doubleValue(), 0.01))),
+                sliderRow("Context to Use for Story", minStoryPercentSlider, valueLabel(percentFromSettings(), "%"),
+                        value -> updateMinStoryPercent(value.intValue())),
                 spinnerRow("Story Card Look Back", storyCardLookbackSpinner, this::updateStoryCardLookback),
-                spinnerRow("Author's Note Insertion Point", anPlacementSpinner, this::updateAnPlacement)
-        );
+                spinnerRow("Author's Note Insertion Point", anPlacementSpinner, this::updateAnPlacement));
 
         ScrollPane scrollPane = new ScrollPane(content);
         scrollPane.setFitToWidth(true);
@@ -635,7 +635,8 @@ public class App extends Application
 
     private void forceTabHeaderDark()
     {
-        javafx.application.Platform.runLater(() -> {
+        javafx.application.Platform.runLater(() ->
+        {
             var header = rightTabs.lookup(".tab-header-background");
             if (header != null)
             {
@@ -656,7 +657,8 @@ public class App extends Application
 
     private void attachSaveOnBlur(TextArea area)
     {
-        area.focusedProperty().addListener((obs, oldValue, newValue) -> {
+        area.focusedProperty().addListener((obs, oldValue, newValue) ->
+        {
             if (!newValue)
             {
                 saveStoryDetails();
@@ -765,9 +767,9 @@ public class App extends Application
         if (!activeModels.isEmpty())
         {
             ModelSettings fallback = activeModels.get(0);
-            appSettings = new AppSettings(appSettings.ollamaUrl(), fallback.modelName(),
-                    appSettings.contextLimit(), appSettings.responseLength(), appSettings.minStoryWindow(),
-                    appSettings.storyCardLookback(), appSettings.anPlacement());
+            appSettings = new AppSettings(appSettings.ollamaUrl(), fallback.modelName(), appSettings.contextLimit(),
+                    appSettings.responseLength(), appSettings.minStoryWindow(), appSettings.storyCardLookback(),
+                    appSettings.anPlacement());
             persistAppSettings();
             return fallback;
         }
@@ -779,18 +781,10 @@ public class App extends Application
 
     private GenerationSettings buildGenerationSettings()
     {
-        return new GenerationSettings(
-                appSettings.contextLimit(),
-                appSettings.responseLength(),
-                activeModelSettings.temperature(),
-                activeModelSettings.topK(),
-                activeModelSettings.topP(),
-                activeModelSettings.minP(),
-                activeModelSettings.presencePenalty(),
-                activeModelSettings.frequencyPenalty(),
-                activeModelSettings.repetitionPenalty(),
-                appSettings.minStoryWindow(),
-                appSettings.storyCardLookback(),
+        return new GenerationSettings(appSettings.contextLimit(), appSettings.responseLength(),
+                activeModelSettings.temperature(), activeModelSettings.topK(), activeModelSettings.topP(),
+                activeModelSettings.minP(), activeModelSettings.presencePenalty(), activeModelSettings.frequencyPenalty(),
+                activeModelSettings.repetitionPenalty(), appSettings.minStoryWindow(), appSettings.storyCardLookback(),
                 appSettings.anPlacement());
     }
 
@@ -851,9 +845,9 @@ public class App extends Application
         {
             return;
         }
-        appSettings = new AppSettings(url.trim(), appSettings.selectedModel(),
-                appSettings.contextLimit(), appSettings.responseLength(), appSettings.minStoryWindow(),
-                appSettings.storyCardLookback(), appSettings.anPlacement());
+        appSettings = new AppSettings(url.trim(), appSettings.selectedModel(), appSettings.contextLimit(),
+                appSettings.responseLength(), appSettings.minStoryWindow(), appSettings.storyCardLookback(),
+                appSettings.anPlacement());
         persistAppSettings();
         ollamaClient.setHost(appSettings.ollamaUrl());
     }
@@ -918,7 +912,8 @@ public class App extends Application
         dialog.setTitle("New Story");
         dialog.setHeaderText("Enter a story name");
         dialog.initOwner(primaryStage);
-        dialog.showAndWait().ifPresent(name -> {
+        dialog.showAndWait().ifPresent(name ->
+        {
             String trimmed = name.trim();
             if (trimmed.isEmpty())
             {
@@ -961,7 +956,8 @@ public class App extends Application
         dialog.getDialogPane().setContent(content);
 
         Button playButton = (Button) dialog.getDialogPane().lookupButton(playType);
-        playButton.addEventFilter(ActionEvent.ACTION, event -> {
+        playButton.addEventFilter(ActionEvent.ACTION, event ->
+        {
             event.consume();
             String name = titleField.getText().trim();
             if (name.isEmpty())
@@ -975,7 +971,8 @@ public class App extends Application
         });
 
         Button updateButton = (Button) dialog.getDialogPane().lookupButton(updateType);
-        updateButton.addEventFilter(ActionEvent.ACTION, event -> {
+        updateButton.addEventFilter(ActionEvent.ACTION, event ->
+        {
             event.consume();
             String name = titleField.getText().trim();
             if (name.isEmpty())
@@ -989,7 +986,8 @@ public class App extends Application
         });
 
         Button deleteButton = (Button) dialog.getDialogPane().lookupButton(deleteType);
-        deleteButton.addEventFilter(ActionEvent.ACTION, event -> {
+        deleteButton.addEventFilter(ActionEvent.ACTION, event ->
+        {
             event.consume();
             if (confirmDelete(story.title()))
             {
@@ -1000,6 +998,7 @@ public class App extends Application
 
         dialog.showAndWait();
     }
+
     private void showCardDialog(StoryCard card)
     {
         if (activeStory == null)
@@ -1022,11 +1021,8 @@ public class App extends Application
         CheckBox pinnedBox = new CheckBox("Pinned");
         pinnedBox.setSelected(!isNew && card.pinned());
 
-        VBox content = new VBox(8,
-                new Label("Title"), titleField,
-                new Label("Content"), contentArea,
-                new Label("Triggers (comma separated)"), triggersField,
-                pinnedBox);
+        VBox content = new VBox(8, new Label("Title"), titleField, new Label("Content"), contentArea,
+                new Label("Triggers (comma separated)"), triggersField, pinnedBox);
         content.setPadding(new Insets(10));
 
         ButtonType saveType = new ButtonType(isNew ? "Create" : "Update", ButtonBar.ButtonData.OK_DONE);
@@ -1044,7 +1040,8 @@ public class App extends Application
         dialog.getDialogPane().setContent(content);
 
         Button saveButton = (Button) dialog.getDialogPane().lookupButton(saveType);
-        saveButton.addEventFilter(ActionEvent.ACTION, event -> {
+        saveButton.addEventFilter(ActionEvent.ACTION, event ->
+        {
             event.consume();
             String title = titleField.getText().trim();
             if (title.isEmpty())
@@ -1090,7 +1087,8 @@ public class App extends Application
         if (!isNew)
         {
             Button deleteButton = (Button) dialog.getDialogPane().lookupButton(deleteType);
-            deleteButton.addEventFilter(ActionEvent.ACTION, event -> {
+            deleteButton.addEventFilter(ActionEvent.ACTION, event ->
+            {
                 event.consume();
                 if (confirmDeleteCard(card.title()))
                 {
@@ -1167,8 +1165,7 @@ public class App extends Application
         String plotEssentials = plotEssentialsArea.getText();
         String authorNote = authorNoteArea.getText();
 
-        if (systemPrompt.equals(activeStory.systemPrompt())
-                && plotEssentials.equals(activeStory.plotEssentials())
+        if (systemPrompt.equals(activeStory.systemPrompt()) && plotEssentials.equals(activeStory.plotEssentials())
                 && authorNote.equals(activeStory.authorNote()))
         {
             return;
@@ -1259,8 +1256,8 @@ public class App extends Application
     private void playStory(Story story)
     {
         String now = Timestamps.now();
-        Story updated = new Story(story.id(), story.title(), story.systemPrompt(), story.plotEssentials(),
-                story.authorNote(), story.createdAt(), now);
+        Story updated = new Story(story.id(), story.title(), story.systemPrompt(), story.plotEssentials(), story.authorNote(),
+                story.createdAt(), now);
         try
         {
             storyRepository.update(updated);
@@ -1336,8 +1333,7 @@ public class App extends Application
                 List<StoryCard> currentCards = cardRepository.listForStory(activeStory.id());
 
                 settings = buildGenerationSettings();
-                PromptCompilation compilation = promptCompiler.compile(activeStory, promptBlocks, currentCards,
-                        settings);
+                PromptCompilation compilation = promptCompiler.compile(activeStory, promptBlocks, currentCards, settings);
                 String response = ollamaClient.generate(compilation.prompt(), settings);
                 String cleaned = normalizeOutput(response);
                 if (cleaned.isBlank())
@@ -1354,7 +1350,8 @@ public class App extends Application
             }
         };
 
-        task.setOnSucceeded(event -> {
+        task.setOnSucceeded(event ->
+        {
             Block updated = task.getValue();
             if (updated == null)
             {
@@ -1376,7 +1373,8 @@ public class App extends Application
             retryHistoryButton.setDisable(retryHistory.size() < 2);
         });
 
-        task.setOnFailed(event -> {
+        task.setOnFailed(event ->
+        {
             Throwable error = task.getException();
             continueButton.setDisable(false);
             takeTurnButton.setDisable(false);
@@ -1420,14 +1418,16 @@ public class App extends Application
         Button nextButton = (Button) dialog.getDialogPane().lookupButton(nextType);
         Button selectButton = (Button) dialog.getDialogPane().lookupButton(selectType);
 
-        Runnable refresh = () -> {
+        Runnable refresh = () ->
+        {
             preview.setText(retryHistory.get(retryIndex));
             prevButton.setDisable(retryIndex <= 0);
             nextButton.setDisable(retryIndex >= retryHistory.size() - 1);
         };
         refresh.run();
 
-        prevButton.addEventFilter(ActionEvent.ACTION, event -> {
+        prevButton.addEventFilter(ActionEvent.ACTION, event ->
+        {
             event.consume();
             if (retryIndex > 0)
             {
@@ -1436,7 +1436,8 @@ public class App extends Application
             }
         });
 
-        nextButton.addEventFilter(ActionEvent.ACTION, event -> {
+        nextButton.addEventFilter(ActionEvent.ACTION, event ->
+        {
             event.consume();
             if (retryIndex < retryHistory.size() - 1)
             {
@@ -1445,7 +1446,8 @@ public class App extends Application
             }
         });
 
-        selectButton.addEventFilter(ActionEvent.ACTION, event -> {
+        selectButton.addEventFilter(ActionEvent.ACTION, event ->
+        {
             event.consume();
             if (blocks.isEmpty())
             {
@@ -1461,8 +1463,7 @@ public class App extends Application
             String chosen = retryHistory.get(retryIndex);
             if (!chosen.equals(head.text()))
             {
-                Block updated = new Block(head.id(), head.storyId(), Role.ASSISTANT, chosen, Timestamps.now(),
-                        head.position());
+                Block updated = new Block(head.id(), head.storyId(), Role.ASSISTANT, chosen, Timestamps.now(), head.position());
                 try
                 {
                     blockRepository.replaceHead(updated);
@@ -1548,8 +1549,7 @@ public class App extends Application
                 List<StoryCard> currentCards = cardRepository.listForStory(activeStory.id());
 
                 settings = buildGenerationSettings();
-                PromptCompilation compilation = promptCompiler.compile(activeStory, currentBlocks, currentCards,
-                        settings);
+                PromptCompilation compilation = promptCompiler.compile(activeStory, currentBlocks, currentCards, settings);
                 String response = ollamaClient.generate(compilation.prompt(), settings);
                 String cleaned = normalizeOutput(response);
                 if (cleaned.isBlank())
@@ -1558,8 +1558,7 @@ public class App extends Application
                 }
 
                 int position = blockRepository.nextPosition(activeStory.id());
-                Block block = new Block(Ids.newId(), activeStory.id(), Role.ASSISTANT, cleaned, Timestamps.now(),
-                        position);
+                Block block = new Block(Ids.newId(), activeStory.id(), Role.ASSISTANT, cleaned, Timestamps.now(), position);
                 blockRepository.insert(block);
 
                 String now = Timestamps.now();
@@ -1570,7 +1569,8 @@ public class App extends Application
             }
         };
 
-        task.setOnSucceeded(event -> {
+        task.setOnSucceeded(event ->
+        {
             Block block = task.getValue();
             if (block == null)
             {
@@ -1585,7 +1585,8 @@ public class App extends Application
             refreshStoryList(activeStory.id());
         });
 
-        task.setOnFailed(event -> {
+        task.setOnFailed(event ->
+        {
             Throwable error = task.getException();
             continueButton.setDisable(false);
             statusLabel.setText("Error: " + (error == null ? "Unknown" : error.getMessage()));
@@ -1612,16 +1613,14 @@ public class App extends Application
 
                 int position = blockRepository.nextPosition(activeStory.id());
                 Role seedRole = isFirstTurn ? Role.ASSISTANT : Role.USER;
-                Block seedBlock = new Block(Ids.newId(), activeStory.id(), seedRole, userText, Timestamps.now(),
-                        position);
+                Block seedBlock = new Block(Ids.newId(), activeStory.id(), seedRole, userText, Timestamps.now(), position);
                 blockRepository.insert(seedBlock);
 
                 currentBlocks = blockRepository.listForStory(activeStory.id());
                 List<StoryCard> currentCards = cardRepository.listForStory(activeStory.id());
 
                 settings = buildGenerationSettings();
-                PromptCompilation compilation = promptCompiler.compile(activeStory, currentBlocks, currentCards,
-                        settings);
+                PromptCompilation compilation = promptCompiler.compile(activeStory, currentBlocks, currentCards, settings);
                 String response = ollamaClient.generate(compilation.prompt(), settings);
                 String cleaned = normalizeOutput(response);
                 if (cleaned.isBlank())
@@ -1630,8 +1629,8 @@ public class App extends Application
                 }
 
                 int assistantPosition = blockRepository.nextPosition(activeStory.id());
-                Block assistantBlock = new Block(Ids.newId(), activeStory.id(), Role.ASSISTANT, cleaned,
-                        Timestamps.now(), assistantPosition);
+                Block assistantBlock = new Block(Ids.newId(), activeStory.id(), Role.ASSISTANT, cleaned, Timestamps.now(),
+                        assistantPosition);
                 blockRepository.insert(assistantBlock);
 
                 String now = Timestamps.now();
@@ -1642,7 +1641,8 @@ public class App extends Application
             }
         };
 
-        task.setOnSucceeded(event -> {
+        task.setOnSucceeded(event ->
+        {
             try
             {
                 boolean generated = Boolean.TRUE.equals(task.getValue());
@@ -1664,7 +1664,8 @@ public class App extends Application
             }
         });
 
-        task.setOnFailed(event -> {
+        task.setOnFailed(event ->
+        {
             Throwable error = task.getException();
             continueButton.setDisable(false);
             takeTurnButton.setDisable(false);
@@ -1675,6 +1676,7 @@ public class App extends Application
 
         executor.submit(task);
     }
+
     private Slider buildIntSlider(int min, int max, int value, int step)
     {
         Slider slider = new Slider(min, max, value);
@@ -1709,7 +1711,8 @@ public class App extends Application
         HBox header = new HBox(8, label, spacer, valueLabel);
         header.setAlignment(Pos.CENTER_LEFT);
         VBox box = new VBox(6, header, slider);
-        slider.valueProperty().addListener((obs, oldValue, newValue) -> {
+        slider.valueProperty().addListener((obs, oldValue, newValue) ->
+        {
             valueLabel.setText(formatValue(newValue, valueLabel));
             handler.accept(newValue);
         });
@@ -1825,8 +1828,8 @@ public class App extends Application
     private void updateResponseLength(int value)
     {
         int capped = Math.max(1, Math.min(250, value));
-        appSettings = new AppSettings(appSettings.ollamaUrl(), appSettings.selectedModel(), appSettings.contextLimit(),
-                capped, appSettings.minStoryWindow(), appSettings.storyCardLookback(), appSettings.anPlacement());
+        appSettings = new AppSettings(appSettings.ollamaUrl(), appSettings.selectedModel(), appSettings.contextLimit(), capped,
+                appSettings.minStoryWindow(), appSettings.storyCardLookback(), appSettings.anPlacement());
         persistAppSettings();
         refreshGenerationSettings();
     }
@@ -1923,8 +1926,8 @@ public class App extends Application
         }
         activeModelSettings = new ModelSettings(activeModelSettings.modelName(), activeModelSettings.active(),
                 activeModelSettings.temperature(), activeModelSettings.topK(), activeModelSettings.topP(),
-                activeModelSettings.minP(), activeModelSettings.presencePenalty(),
-                activeModelSettings.frequencyPenalty(), value);
+                activeModelSettings.minP(), activeModelSettings.presencePenalty(), activeModelSettings.frequencyPenalty(),
+                value);
         persistModelSettings();
         refreshGenerationSettings();
     }
@@ -1933,27 +1936,24 @@ public class App extends Application
     {
         int capped = Math.max(10, Math.min(100, percent));
         int minWindow = (int) Math.round(appSettings.contextLimit() * (capped / 100.0));
-        appSettings = new AppSettings(appSettings.ollamaUrl(), appSettings.selectedModel(),
-                appSettings.contextLimit(), appSettings.responseLength(), minWindow,
-                appSettings.storyCardLookback(), appSettings.anPlacement());
+        appSettings = new AppSettings(appSettings.ollamaUrl(), appSettings.selectedModel(), appSettings.contextLimit(),
+                appSettings.responseLength(), minWindow, appSettings.storyCardLookback(), appSettings.anPlacement());
         persistAppSettings();
         refreshGenerationSettings();
     }
 
     private void updateStoryCardLookback(int value)
     {
-        appSettings = new AppSettings(appSettings.ollamaUrl(), appSettings.selectedModel(),
-                appSettings.contextLimit(), appSettings.responseLength(), appSettings.minStoryWindow(),
-                value, appSettings.anPlacement());
+        appSettings = new AppSettings(appSettings.ollamaUrl(), appSettings.selectedModel(), appSettings.contextLimit(),
+                appSettings.responseLength(), appSettings.minStoryWindow(), value, appSettings.anPlacement());
         persistAppSettings();
         refreshGenerationSettings();
     }
 
     private void updateAnPlacement(int value)
     {
-        appSettings = new AppSettings(appSettings.ollamaUrl(), appSettings.selectedModel(),
-                appSettings.contextLimit(), appSettings.responseLength(), appSettings.minStoryWindow(),
-                appSettings.storyCardLookback(), value);
+        appSettings = new AppSettings(appSettings.ollamaUrl(), appSettings.selectedModel(), appSettings.contextLimit(),
+                appSettings.responseLength(), appSettings.minStoryWindow(), appSettings.storyCardLookback(), value);
         persistAppSettings();
         refreshGenerationSettings();
     }
@@ -2091,7 +2091,8 @@ public class App extends Application
                 textNode.setStyle("-fx-underline: true;");
             }
             textNode.setOnMouseEntered(event -> textNode.setUnderline(true));
-            textNode.setOnMouseExited(event -> {
+            textNode.setOnMouseExited(event ->
+            {
                 if (!highlight)
                 {
                     textNode.setUnderline(false);
@@ -2100,9 +2101,7 @@ public class App extends Application
             textNode.setOnMouseClicked(event -> beginAssistantInlineEdit(block, flow, textNode));
             flow.getChildren().add(textNode);
 
-            if (i < group.size() - 1
-                    && !endsWithWhitespace(block.text())
-                    && !startsWithPunctuation(group.get(i + 1).text()))
+            if (i < group.size() - 1 && !endsWithWhitespace(block.text()) && !startsWithPunctuation(group.get(i + 1).text()))
             {
                 flow.getChildren().add(new Text(" "));
             }
@@ -2137,9 +2136,9 @@ public class App extends Application
 
         TextArea editor = new TextArea(block.text());
         editor.setWrapText(true);
-        //editor.setPrefRowCount(4);
+        // editor.setPrefRowCount(4);
         editor.setMinHeight(Region.USE_PREF_SIZE);
-        //editor.setPrefHeight(Region.USE_COMPUTED_SIZE);
+        // editor.setPrefHeight(Region.USE_COMPUTED_SIZE);
         editor.setMaxHeight(Double.MAX_VALUE);
         editor.prefWidthProperty().bind(contentWidthBinding());
         editor.maxWidthProperty().bind(contentWidthBinding());
@@ -2152,20 +2151,23 @@ public class App extends Application
             return;
         }
         flow.getChildren().set(index, editor);
-        javafx.application.Platform.runLater(() -> {
+        javafx.application.Platform.runLater(() ->
+        {
             flow.requestLayout();
         });
 
         activeAssistantEditor = editor;
 
-        editor.focusedProperty().addListener((obs, oldValue, newValue) -> {
+        editor.focusedProperty().addListener((obs, oldValue, newValue) ->
+        {
             if (!newValue && activeAssistantEditor == editor)
             {
                 commitAssistantEdit(editor.getText());
             }
         });
 
-        javafx.application.Platform.runLater(() -> {
+        javafx.application.Platform.runLater(() ->
+        {
             editor.requestFocus();
             editor.positionCaret(editor.getText().length());
         });
@@ -2173,8 +2175,7 @@ public class App extends Application
 
     private void commitAssistantEdit(String newText)
     {
-        if (activeAssistantEditId == null || activeAssistantEditor == null
-                || activeAssistantFlow == null)
+        if (activeAssistantEditId == null || activeAssistantEditor == null || activeAssistantFlow == null)
         {
             return;
         }
@@ -2213,15 +2214,15 @@ public class App extends Application
             updatedText.setStyle("-fx-underline: true;");
         }
         updatedText.setOnMouseEntered(event -> updatedText.setUnderline(true));
-        updatedText.setOnMouseExited(event -> {
+        updatedText.setOnMouseExited(event ->
+        {
             if (!highlight)
             {
                 updatedText.setUnderline(false);
             }
         });
         Block finalUpdatedBlock = updatedBlock;
-        updatedText.setOnMouseClicked(event -> beginAssistantInlineEdit(finalUpdatedBlock, flow,
-                updatedText));
+        updatedText.setOnMouseClicked(event -> beginAssistantInlineEdit(finalUpdatedBlock, flow, updatedText));
 
         int index = flow.getChildren().indexOf(activeAssistantEditor);
         if (index >= 0)
@@ -2266,7 +2267,8 @@ public class App extends Application
         label.setOnMouseClicked(event -> beginInlineEdit(label, editor));
         label.setOnMouseEntered(event -> label.setUnderline(true));
         label.setOnMouseExited(event -> label.setUnderline(false));
-        editor.focusedProperty().addListener((obs, oldValue, newValue) -> {
+        editor.focusedProperty().addListener((obs, oldValue, newValue) ->
+        {
             if (!newValue)
             {
                 String newText = editor.getText();
@@ -2331,8 +2333,7 @@ public class App extends Application
                 return;
             }
             blockRepository.updateText(blockId, text);
-            Block updated = new Block(block.id(), block.storyId(), block.role(), text, block.createdAt(),
-                    block.position());
+            Block updated = new Block(block.id(), block.storyId(), block.role(), text, block.createdAt(), block.position());
             blocks.set(i, updated);
             return;
         }
@@ -2373,7 +2374,8 @@ public class App extends Application
 
     private void scrollToBottom()
     {
-        javafx.application.Platform.runLater(() -> {
+        javafx.application.Platform.runLater(() ->
+        {
             storyScroll.applyCss();
             storyScroll.layout();
             storyScroll.setVvalue(1.0);
