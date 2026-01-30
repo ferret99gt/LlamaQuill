@@ -194,6 +194,34 @@
   -fx-background-radius: 6;
 }
 
+.combo-box {
+  -fx-background-color: #202020;
+  -fx-border-color: #3a3a3a;
+  -fx-border-radius: 6;
+  -fx-background-radius: 6;
+  -fx-text-fill: #e6e1d8;
+}
+
+.combo-box .list-cell {
+  -fx-background-color: #202020;
+  -fx-text-fill: #e6e1d8;
+}
+
+.combo-box-popup .list-view {
+  -fx-background-color: #202020;
+  -fx-control-inner-background: #202020;
+}
+
+.combo-box .arrow-button {
+  -fx-background-color: #2a2a2a;
+  -fx-border-color: #3a3a3a;
+  -fx-border-width: 0 0 0 1;
+}
+
+.combo-box .arrow {
+  -fx-background-color: #e6e1d8;
+}
+
 .scroll-pane {
   -fx-background: #1f1f1f;
   -fx-background-color: #1f1f1f;

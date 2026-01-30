@@ -4,9 +4,12 @@ import com.llamaquill.db.BlockRepository;
 import com.llamaquill.db.Database;
 import com.llamaquill.db.StoryCardRepository;
 import com.llamaquill.db.StoryRepository;
-import com.llamaquill.db.SettingsRepository;
+import com.llamaquill.db.AppSettingsRepository;
+import com.llamaquill.db.ModelSettingsRepository;
 import com.llamaquill.model.Block;
+import com.llamaquill.model.AppSettings;
 import com.llamaquill.model.GenerationSettings;
+import com.llamaquill.model.ModelSettings;
 import com.llamaquill.model.Role;
 import com.llamaquill.model.Story;
 import com.llamaquill.model.StoryCard;
@@ -34,6 +37,7 @@ import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
+import javafx.scene.control.ComboBox;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.Slider;
 import javafx.scene.control.OverrunStyle;
@@ -61,6 +65,7 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -77,9 +82,12 @@ public class App extends Application
     private StoryRepository storyRepository;
     private BlockRepository blockRepository;
     private StoryCardRepository cardRepository;
-    private SettingsRepository settingsRepository;
+    private AppSettingsRepository appSettingsRepository;
+    private ModelSettingsRepository modelSettingsRepository;
     private PromptCompiler promptCompiler;
     private OllamaClient ollamaClient;
+    private AppSettings appSettings;
+    private ModelSettings activeModelSettings;
     private GenerationSettings settings;
     private ExecutorService executor;
 
@@ -132,11 +140,16 @@ public class App extends Application
     private Slider temperatureSlider;
     private Slider topKSlider;
     private Slider topPSlider;
+    private Slider minPSlider;
     private Slider presencePenaltySlider;
     private Slider frequencyPenaltySlider;
+    private Slider repetitionPenaltySlider;
     private Slider minStoryPercentSlider;
     private Spinner<Integer> storyCardLookbackSpinner;
     private Spinner<Integer> anPlacementSpinner;
+    private TextField ollamaUrlField;
+    private ComboBox<String> modelSelect;
+    private boolean updatingModelControls;
 
     private HBox titleBar;
     private double dragOffsetX;
@@ -160,10 +173,16 @@ public class App extends Application
             storyRepository = new StoryRepository(connection);
             blockRepository = new BlockRepository(connection);
             cardRepository = new StoryCardRepository(connection);
-            settingsRepository = new SettingsRepository(connection);
+            appSettingsRepository = new AppSettingsRepository(connection);
+            modelSettingsRepository = new ModelSettingsRepository(connection);
             promptCompiler = new PromptCompiler();
             ollamaClient = new OllamaClient();
-            settings = loadOrCreateSettings();
+            appSettings = loadOrCreateAppSettings();
+            ollamaClient.setHost(appSettings.ollamaUrl());
+            syncModelsFromOllama();
+            activeModelSettings = loadActiveModelSettings(appSettings.selectedModel());
+            ollamaClient.setModel(activeModelSettings.modelName());
+            settings = buildGenerationSettings();
             executor = Executors.newSingleThreadExecutor();
 
             activeStory = loadOrCreateStory();
@@ -549,32 +568,60 @@ public class App extends Application
         VBox content = new VBox(12);
         content.setPadding(new Insets(10));
 
-        contextLimitSlider = buildIntSlider(1024, 32768, settings.contextLimit(), 1024);
-        responseLengthSlider = buildIntSlider(1, 250, settings.responseLength(), 1);
-        temperatureSlider = buildDoubleSlider(0.1, 2.0, settings.temperature(), 0.1);
-        topKSlider = buildIntSlider(1, 999, settings.topK(), 1);
-        topPSlider = buildDoubleSlider(0.1, 1.0, settings.topP(), 0.01);
-        presencePenaltySlider = buildDoubleSlider(-2.0, 2.0, settings.presencePenalty(), 0.1);
-        frequencyPenaltySlider = buildDoubleSlider(-2.0, 2.0, settings.frequencyPenalty(), 0.1);
+        ollamaUrlField = new TextField(appSettings.ollamaUrl());
+        ollamaUrlField.setPromptText("Ollama URL");
+        ollamaUrlField.focusedProperty().addListener((obs, oldValue, newValue) -> {
+            if (!newValue)
+            {
+                updateOllamaUrl(ollamaUrlField.getText());
+            }
+        });
+
+        modelSelect = new ComboBox<>();
+        modelSelect.setMaxWidth(Double.MAX_VALUE);
+        refreshModelSelect();
+        modelSelect.setOnAction(event -> {
+            String selected = modelSelect.getValue();
+            if (selected != null)
+            {
+                selectModel(selected);
+            }
+        });
+
+        contextLimitSlider = buildIntSlider(1024, 32768, appSettings.contextLimit(), 1024);
+        responseLengthSlider = buildIntSlider(1, 250, appSettings.responseLength(), 1);
+        temperatureSlider = buildDoubleSlider(0.1, 2.0, activeModelSettings.temperature(), 0.1);
+        topKSlider = buildIntSlider(1, 999, activeModelSettings.topK(), 1);
+        topPSlider = buildDoubleSlider(0.1, 1.0, activeModelSettings.topP(), 0.01);
+        minPSlider = buildDoubleSlider(0.01, 0.2, activeModelSettings.minP(), 0.001);
+        presencePenaltySlider = buildDoubleSlider(-2.0, 2.0, activeModelSettings.presencePenalty(), 0.1);
+        frequencyPenaltySlider = buildDoubleSlider(-2.0, 2.0, activeModelSettings.frequencyPenalty(), 0.1);
+        repetitionPenaltySlider = buildDoubleSlider(-2.0, 2.0, activeModelSettings.repetitionPenalty(), 0.01);
         minStoryPercentSlider = buildIntSlider(10, 100, percentFromSettings(), 1);
-        storyCardLookbackSpinner = buildSpinner(0, 20, settings.storyCardLookback());
-        anPlacementSpinner = buildSpinner(1, 10, settings.anPlacement());
+        storyCardLookbackSpinner = buildSpinner(0, 20, appSettings.storyCardLookback());
+        anPlacementSpinner = buildSpinner(1, 10, appSettings.anPlacement());
 
         content.getChildren().addAll(
+                textFieldRow("Ollama URL", ollamaUrlField),
+                comboRow("Model", modelSelect),
                 sliderRow("Context Limit", contextLimitSlider,
-                        valueLabel(settings.contextLimit(), "tokens"), value -> updateContextLimit(value.intValue())),
+                        valueLabel(appSettings.contextLimit(), "tokens"), value -> updateContextLimit(value.intValue())),
                 sliderRow("Response Length", responseLengthSlider,
-                        valueLabel(settings.responseLength(), "tokens"), value -> updateResponseLength(value.intValue())),
+                        valueLabel(appSettings.responseLength(), "tokens"), value -> updateResponseLength(value.intValue())),
                 sliderRow("Temperature", temperatureSlider,
-                        valueLabel(settings.temperature(), ""), value -> updateTemperature(roundTo(value.doubleValue(), 0.1))),
+                        valueLabel(activeModelSettings.temperature(), ""), value -> updateTemperature(roundTo(value.doubleValue(), 0.1))),
                 sliderRow("Top K", topKSlider,
-                        valueLabel(settings.topK(), ""), value -> updateTopK(value.intValue())),
+                        valueLabel(activeModelSettings.topK(), ""), value -> updateTopK(value.intValue())),
                 sliderRow("Top P", topPSlider,
-                        valueLabel(settings.topP(), ""), value -> updateTopP(roundTo(value.doubleValue(), 0.01))),
+                        valueLabel(activeModelSettings.topP(), ""), value -> updateTopP(roundTo(value.doubleValue(), 0.01))),
+                sliderRow("Min P", minPSlider,
+                        valueLabel(activeModelSettings.minP(), ""), value -> updateMinP(roundTo(value.doubleValue(), 0.001))),
                 sliderRow("Presence Penalty", presencePenaltySlider,
-                        valueLabel(settings.presencePenalty(), ""), value -> updatePresencePenalty(roundTo(value.doubleValue(), 0.1))),
+                        valueLabel(activeModelSettings.presencePenalty(), ""), value -> updatePresencePenalty(roundTo(value.doubleValue(), 0.1))),
                 sliderRow("Frequency Penalty", frequencyPenaltySlider,
-                        valueLabel(settings.frequencyPenalty(), ""), value -> updateFrequencyPenalty(roundTo(value.doubleValue(), 0.1))),
+                        valueLabel(activeModelSettings.frequencyPenalty(), ""), value -> updateFrequencyPenalty(roundTo(value.doubleValue(), 0.1))),
+                sliderRow("Repetition Penalty", repetitionPenaltySlider,
+                        valueLabel(activeModelSettings.repetitionPenalty(), ""), value -> updateRepetitionPenalty(roundTo(value.doubleValue(), 0.01))),
                 sliderRow("Context to Use for Story", minStoryPercentSlider,
                         valueLabel(percentFromSettings(), "%"), value -> updateMinStoryPercent(value.intValue())),
                 spinnerRow("Story Card Look Back", storyCardLookbackSpinner, this::updateStoryCardLookback),
@@ -674,20 +721,154 @@ public class App extends Application
         return story;
     }
 
-    private GenerationSettings loadOrCreateSettings() throws SQLException
+    private AppSettings loadOrCreateAppSettings() throws SQLException
     {
-        return settingsRepository.load().orElseGet(() -> {
-            GenerationSettings defaults = GenerationSettings.defaults();
-            try
+        Optional<AppSettings> current = appSettingsRepository.load();
+        if (current.isPresent())
+        {
+            return current.get();
+        }
+        AppSettings defaults = appSettingsRepository.defaults();
+        try
+        {
+            appSettingsRepository.save(defaults);
+        }
+        catch (SQLException e)
+        {
+            showError("Failed to save default settings", e);
+        }
+        return defaults;
+    }
+
+    private void syncModelsFromOllama()
+    {
+        try
+        {
+            List<String> models = ollamaClient.listModels();
+            modelSettingsRepository.syncWithModels(models, ModelSettings.defaults(OllamaClient.DEFAULT_MODEL));
+        }
+        catch (Exception e)
+        {
+            // If Ollama is unavailable, keep existing model settings.
+        }
+    }
+
+    private ModelSettings loadActiveModelSettings(String modelName) throws SQLException
+    {
+        Optional<ModelSettings> selected = modelSettingsRepository.load(modelName);
+        if (selected.isPresent() && selected.get().active())
+        {
+            return selected.get();
+        }
+
+        List<ModelSettings> activeModels = modelSettingsRepository.listActive();
+        if (!activeModels.isEmpty())
+        {
+            ModelSettings fallback = activeModels.get(0);
+            appSettings = new AppSettings(appSettings.ollamaUrl(), fallback.modelName(),
+                    appSettings.contextLimit(), appSettings.responseLength(), appSettings.minStoryWindow(),
+                    appSettings.storyCardLookback(), appSettings.anPlacement());
+            persistAppSettings();
+            return fallback;
+        }
+
+        ModelSettings defaults = ModelSettings.defaults(modelName);
+        modelSettingsRepository.save(defaults);
+        return defaults;
+    }
+
+    private GenerationSettings buildGenerationSettings()
+    {
+        return new GenerationSettings(
+                appSettings.contextLimit(),
+                appSettings.responseLength(),
+                activeModelSettings.temperature(),
+                activeModelSettings.topK(),
+                activeModelSettings.topP(),
+                activeModelSettings.minP(),
+                activeModelSettings.presencePenalty(),
+                activeModelSettings.frequencyPenalty(),
+                activeModelSettings.repetitionPenalty(),
+                appSettings.minStoryWindow(),
+                appSettings.storyCardLookback(),
+                appSettings.anPlacement());
+    }
+
+    private void refreshModelSelect()
+    {
+        if (modelSelect == null)
+        {
+            return;
+        }
+        try
+        {
+            List<ModelSettings> activeModels = modelSettingsRepository.listActive();
+            List<String> names = new ArrayList<>();
+            for (ModelSettings model : activeModels)
             {
-                settingsRepository.save(defaults);
+                names.add(model.modelName());
             }
-            catch (SQLException e)
+            modelSelect.setItems(FXCollections.observableArrayList(names));
+            modelSelect.setValue(appSettings.selectedModel());
+        }
+        catch (SQLException e)
+        {
+            showError("Failed to load models", e);
+        }
+    }
+
+    private void selectModel(String modelName)
+    {
+        if (modelName == null || modelName.isBlank())
+        {
+            return;
+        }
+        try
+        {
+            Optional<ModelSettings> selected = modelSettingsRepository.load(modelName);
+            if (selected.isEmpty())
             {
-                showError("Failed to save default settings", e);
+                return;
             }
-            return defaults;
-        });
+            activeModelSettings = selected.get();
+            appSettings = new AppSettings(appSettings.ollamaUrl(), modelName, appSettings.contextLimit(),
+                    appSettings.responseLength(), appSettings.minStoryWindow(), appSettings.storyCardLookback(),
+                    appSettings.anPlacement());
+            persistAppSettings();
+            updateModelControls();
+            refreshGenerationSettings();
+            ollamaClient.setModel(modelName);
+        }
+        catch (SQLException e)
+        {
+            showError("Failed to select model", e);
+        }
+    }
+
+    private void updateOllamaUrl(String url)
+    {
+        if (url == null || url.isBlank() || url.equals(appSettings.ollamaUrl()))
+        {
+            return;
+        }
+        appSettings = new AppSettings(url.trim(), appSettings.selectedModel(),
+                appSettings.contextLimit(), appSettings.responseLength(), appSettings.minStoryWindow(),
+                appSettings.storyCardLookback(), appSettings.anPlacement());
+        persistAppSettings();
+        ollamaClient.setHost(appSettings.ollamaUrl());
+    }
+
+    private void updateModelControls()
+    {
+        updatingModelControls = true;
+        temperatureSlider.setValue(activeModelSettings.temperature());
+        topKSlider.setValue(activeModelSettings.topK());
+        topPSlider.setValue(activeModelSettings.topP());
+        minPSlider.setValue(activeModelSettings.minP());
+        presencePenaltySlider.setValue(activeModelSettings.presencePenalty());
+        frequencyPenaltySlider.setValue(activeModelSettings.frequencyPenalty());
+        repetitionPenaltySlider.setValue(activeModelSettings.repetitionPenalty());
+        updatingModelControls = false;
     }
 
     private void refreshStoryList(String selectedId)
@@ -1154,6 +1335,7 @@ public class App extends Application
                 promptBlocks.remove(promptBlocks.size() - 1);
                 List<StoryCard> currentCards = cardRepository.listForStory(activeStory.id());
 
+                settings = buildGenerationSettings();
                 PromptCompilation compilation = promptCompiler.compile(activeStory, promptBlocks, currentCards,
                         settings);
                 String response = ollamaClient.generate(compilation.prompt(), settings);
@@ -1365,6 +1547,7 @@ public class App extends Application
                 List<Block> currentBlocks = blockRepository.listForStory(activeStory.id());
                 List<StoryCard> currentCards = cardRepository.listForStory(activeStory.id());
 
+                settings = buildGenerationSettings();
                 PromptCompilation compilation = promptCompiler.compile(activeStory, currentBlocks, currentCards,
                         settings);
                 String response = ollamaClient.generate(compilation.prompt(), settings);
@@ -1436,6 +1619,7 @@ public class App extends Application
                 currentBlocks = blockRepository.listForStory(activeStory.id());
                 List<StoryCard> currentCards = cardRepository.listForStory(activeStory.id());
 
+                settings = buildGenerationSettings();
                 PromptCompilation compilation = promptCompiler.compile(activeStory, currentBlocks, currentCards,
                         settings);
                 String response = ollamaClient.generate(compilation.prompt(), settings);
@@ -1528,6 +1712,20 @@ public class App extends Application
         return box;
     }
 
+    private VBox textFieldRow(String labelText, TextField field)
+    {
+        Label label = new Label(labelText);
+        VBox box = new VBox(6, label, field);
+        return box;
+    }
+
+    private VBox comboRow(String labelText, ComboBox<String> comboBox)
+    {
+        Label label = new Label(labelText);
+        VBox box = new VBox(6, label, comboBox);
+        return box;
+    }
+
     private VBox spinnerRow(String labelText, Spinner<Integer> spinner, java.util.function.Consumer<Integer> handler)
     {
         Label label = new Label(labelText);
@@ -1583,11 +1781,11 @@ public class App extends Application
 
     private int percentFromSettings()
     {
-        if (settings.contextLimit() == 0)
+        if (appSettings.contextLimit() == 0)
         {
             return 0;
         }
-        return (int) Math.round((settings.minStoryWindow() * 100.0) / settings.contextLimit());
+        return (int) Math.round((appSettings.minStoryWindow() * 100.0) / appSettings.contextLimit());
     }
 
     private void updateContextLimit(int value)
@@ -1595,101 +1793,183 @@ public class App extends Application
         int capped = Math.max(1024, Math.min(32768, value));
         int percent = minStoryPercentSlider == null ? 90 : (int) Math.round(minStoryPercentSlider.getValue());
         int minWindow = (int) Math.round(capped * (percent / 100.0));
-        settings = new GenerationSettings(capped, settings.responseLength(), settings.temperature(), settings.topK(),
-                settings.topP(), settings.presencePenalty(), settings.frequencyPenalty(), minWindow,
-                settings.storyCardLookback(), settings.anPlacement());
-        persistSettings();
+        appSettings = new AppSettings(appSettings.ollamaUrl(), appSettings.selectedModel(), capped,
+                appSettings.responseLength(), minWindow, appSettings.storyCardLookback(), appSettings.anPlacement());
+        persistAppSettings();
+        refreshGenerationSettings();
     }
 
     private void updateResponseLength(int value)
     {
         int capped = Math.max(1, Math.min(250, value));
-        settings = new GenerationSettings(settings.contextLimit(), capped, settings.temperature(), settings.topK(),
-                settings.topP(), settings.presencePenalty(), settings.frequencyPenalty(), settings.minStoryWindow(),
-                settings.storyCardLookback(), settings.anPlacement());
-        persistSettings();
+        appSettings = new AppSettings(appSettings.ollamaUrl(), appSettings.selectedModel(), appSettings.contextLimit(),
+                capped, appSettings.minStoryWindow(), appSettings.storyCardLookback(), appSettings.anPlacement());
+        persistAppSettings();
+        refreshGenerationSettings();
     }
 
     private void updateTemperature(double value)
     {
-        settings = new GenerationSettings(settings.contextLimit(), settings.responseLength(), value, settings.topK(),
-                settings.topP(), settings.presencePenalty(), settings.frequencyPenalty(), settings.minStoryWindow(),
-                settings.storyCardLookback(), settings.anPlacement());
-        persistSettings();
+        if (updatingModelControls)
+        {
+            return;
+        }
+        activeModelSettings = new ModelSettings(activeModelSettings.modelName(), activeModelSettings.active(), value,
+                activeModelSettings.topK(), activeModelSettings.topP(), activeModelSettings.minP(),
+                activeModelSettings.presencePenalty(), activeModelSettings.frequencyPenalty(),
+                activeModelSettings.repetitionPenalty());
+        persistModelSettings();
+        refreshGenerationSettings();
     }
 
     private void updateTopK(int value)
     {
-        settings = new GenerationSettings(settings.contextLimit(), settings.responseLength(), settings.temperature(),
-                value, settings.topP(), settings.presencePenalty(), settings.frequencyPenalty(),
-                settings.minStoryWindow(), settings.storyCardLookback(), settings.anPlacement());
-        persistSettings();
+        if (updatingModelControls)
+        {
+            return;
+        }
+        activeModelSettings = new ModelSettings(activeModelSettings.modelName(), activeModelSettings.active(),
+                activeModelSettings.temperature(), value, activeModelSettings.topP(), activeModelSettings.minP(),
+                activeModelSettings.presencePenalty(), activeModelSettings.frequencyPenalty(),
+                activeModelSettings.repetitionPenalty());
+        persistModelSettings();
+        refreshGenerationSettings();
     }
 
     private void updateTopP(double value)
     {
-        settings = new GenerationSettings(settings.contextLimit(), settings.responseLength(), settings.temperature(),
-                settings.topK(), value, settings.presencePenalty(), settings.frequencyPenalty(),
-                settings.minStoryWindow(), settings.storyCardLookback(), settings.anPlacement());
-        persistSettings();
+        if (updatingModelControls)
+        {
+            return;
+        }
+        activeModelSettings = new ModelSettings(activeModelSettings.modelName(), activeModelSettings.active(),
+                activeModelSettings.temperature(), activeModelSettings.topK(), value, activeModelSettings.minP(),
+                activeModelSettings.presencePenalty(), activeModelSettings.frequencyPenalty(),
+                activeModelSettings.repetitionPenalty());
+        persistModelSettings();
+        refreshGenerationSettings();
+    }
+
+    private void updateMinP(double value)
+    {
+        if (updatingModelControls)
+        {
+            return;
+        }
+        activeModelSettings = new ModelSettings(activeModelSettings.modelName(), activeModelSettings.active(),
+                activeModelSettings.temperature(), activeModelSettings.topK(), activeModelSettings.topP(), value,
+                activeModelSettings.presencePenalty(), activeModelSettings.frequencyPenalty(),
+                activeModelSettings.repetitionPenalty());
+        persistModelSettings();
+        refreshGenerationSettings();
     }
 
     private void updatePresencePenalty(double value)
     {
-        settings = new GenerationSettings(settings.contextLimit(), settings.responseLength(), settings.temperature(),
-                settings.topK(), settings.topP(), value, settings.frequencyPenalty(), settings.minStoryWindow(),
-                settings.storyCardLookback(), settings.anPlacement());
-        persistSettings();
+        if (updatingModelControls)
+        {
+            return;
+        }
+        activeModelSettings = new ModelSettings(activeModelSettings.modelName(), activeModelSettings.active(),
+                activeModelSettings.temperature(), activeModelSettings.topK(), activeModelSettings.topP(),
+                activeModelSettings.minP(), value, activeModelSettings.frequencyPenalty(),
+                activeModelSettings.repetitionPenalty());
+        persistModelSettings();
+        refreshGenerationSettings();
     }
 
     private void updateFrequencyPenalty(double value)
     {
-        settings = new GenerationSettings(settings.contextLimit(), settings.responseLength(), settings.temperature(),
-                settings.topK(), settings.topP(), settings.presencePenalty(), value, settings.minStoryWindow(),
-                settings.storyCardLookback(), settings.anPlacement());
-        persistSettings();
+        if (updatingModelControls)
+        {
+            return;
+        }
+        activeModelSettings = new ModelSettings(activeModelSettings.modelName(), activeModelSettings.active(),
+                activeModelSettings.temperature(), activeModelSettings.topK(), activeModelSettings.topP(),
+                activeModelSettings.minP(), activeModelSettings.presencePenalty(), value,
+                activeModelSettings.repetitionPenalty());
+        persistModelSettings();
+        refreshGenerationSettings();
+    }
+
+    private void updateRepetitionPenalty(double value)
+    {
+        if (updatingModelControls)
+        {
+            return;
+        }
+        activeModelSettings = new ModelSettings(activeModelSettings.modelName(), activeModelSettings.active(),
+                activeModelSettings.temperature(), activeModelSettings.topK(), activeModelSettings.topP(),
+                activeModelSettings.minP(), activeModelSettings.presencePenalty(),
+                activeModelSettings.frequencyPenalty(), value);
+        persistModelSettings();
+        refreshGenerationSettings();
     }
 
     private void updateMinStoryPercent(int percent)
     {
         int capped = Math.max(10, Math.min(100, percent));
-        int minWindow = (int) Math.round(settings.contextLimit() * (capped / 100.0));
-        settings = new GenerationSettings(settings.contextLimit(), settings.responseLength(), settings.temperature(),
-                settings.topK(), settings.topP(), settings.presencePenalty(), settings.frequencyPenalty(), minWindow,
-                settings.storyCardLookback(), settings.anPlacement());
-        persistSettings();
+        int minWindow = (int) Math.round(appSettings.contextLimit() * (capped / 100.0));
+        appSettings = new AppSettings(appSettings.ollamaUrl(), appSettings.selectedModel(),
+                appSettings.contextLimit(), appSettings.responseLength(), minWindow,
+                appSettings.storyCardLookback(), appSettings.anPlacement());
+        persistAppSettings();
+        refreshGenerationSettings();
     }
 
     private void updateStoryCardLookback(int value)
     {
-        settings = new GenerationSettings(settings.contextLimit(), settings.responseLength(), settings.temperature(),
-                settings.topK(), settings.topP(), settings.presencePenalty(), settings.frequencyPenalty(),
-                settings.minStoryWindow(), value, settings.anPlacement());
-        persistSettings();
+        appSettings = new AppSettings(appSettings.ollamaUrl(), appSettings.selectedModel(),
+                appSettings.contextLimit(), appSettings.responseLength(), appSettings.minStoryWindow(),
+                value, appSettings.anPlacement());
+        persistAppSettings();
+        refreshGenerationSettings();
     }
 
     private void updateAnPlacement(int value)
     {
-        settings = new GenerationSettings(settings.contextLimit(), settings.responseLength(), settings.temperature(),
-                settings.topK(), settings.topP(), settings.presencePenalty(), settings.frequencyPenalty(),
-                settings.minStoryWindow(), settings.storyCardLookback(), value);
-        persistSettings();
+        appSettings = new AppSettings(appSettings.ollamaUrl(), appSettings.selectedModel(),
+                appSettings.contextLimit(), appSettings.responseLength(), appSettings.minStoryWindow(),
+                appSettings.storyCardLookback(), value);
+        persistAppSettings();
+        refreshGenerationSettings();
     }
 
-    private void persistSettings()
+    private void persistAppSettings()
     {
-        if (settingsRepository == null)
+        if (appSettingsRepository == null)
         {
             return;
         }
         try
         {
-            settingsRepository.save(settings);
+            appSettingsRepository.save(appSettings);
         }
         catch (SQLException e)
         {
             showError("Failed to save settings", e);
         }
+    }
+
+    private void persistModelSettings()
+    {
+        if (modelSettingsRepository == null || activeModelSettings == null)
+        {
+            return;
+        }
+        try
+        {
+            modelSettingsRepository.save(activeModelSettings);
+        }
+        catch (SQLException e)
+        {
+            showError("Failed to save model settings", e);
+        }
+    }
+
+    private void refreshGenerationSettings()
+    {
+        settings = buildGenerationSettings();
     }
 
     private void clearRetryHistory()

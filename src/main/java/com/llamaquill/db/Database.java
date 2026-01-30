@@ -70,18 +70,29 @@ public final class Database
                     """);
 
             stmt.execute("""
-                    CREATE TABLE IF NOT EXISTS generation_settings (
+                    CREATE TABLE IF NOT EXISTS app_settings (
                         id INTEGER PRIMARY KEY CHECK (id = 1),
+                        ollama_url TEXT NOT NULL,
+                        selected_model TEXT NOT NULL,
                         context_limit INTEGER NOT NULL,
                         response_length INTEGER NOT NULL,
-                        temperature REAL NOT NULL,
-                        top_k INTEGER NOT NULL,
-                        top_p REAL NOT NULL,
-                        presence_penalty REAL NOT NULL,
-                        frequency_penalty REAL NOT NULL,
                         min_story_window INTEGER NOT NULL,
                         story_card_lookback INTEGER NOT NULL,
                         an_placement INTEGER NOT NULL
+                    )
+                    """);
+
+            stmt.execute("""
+                    CREATE TABLE IF NOT EXISTS model_settings (
+                        model_name TEXT PRIMARY KEY,
+                        active INTEGER NOT NULL CHECK (active IN (0,1)),
+                        temperature REAL NOT NULL,
+                        top_k INTEGER NOT NULL,
+                        top_p REAL NOT NULL,
+                        min_p REAL NOT NULL,
+                        presence_penalty REAL NOT NULL,
+                        frequency_penalty REAL NOT NULL,
+                        repetition_penalty REAL NOT NULL
                     )
                     """);
 

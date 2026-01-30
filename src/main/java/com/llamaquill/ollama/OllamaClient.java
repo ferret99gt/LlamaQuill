@@ -11,6 +11,8 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 
 public class OllamaClient
 {
@@ -18,8 +20,8 @@ public class OllamaClient
     public static final String DEFAULT_MODEL = "hf.co/LatitudeGames/Muse-12B-GGUF:BF16";
 
     private final HttpClient client;
-    private final String host;
-    private final String model;
+    private String host;
+    private String model;
 
     public OllamaClient()
     {
@@ -31,6 +33,33 @@ public class OllamaClient
         this.client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
         this.host = host;
         this.model = model;
+    }
+
+    public void setHost(String host)
+    {
+        this.host = host;
+    }
+
+    public void setModel(String model)
+    {
+        this.model = model;
+    }
+
+    public String getHost()
+    {
+        return host;
+    }
+
+    public List<String> listModels() throws IOException, InterruptedException
+    {
+        HttpRequest request = HttpRequest.newBuilder().uri(URI.create(host + "/api/tags"))
+                .timeout(Duration.ofSeconds(10)).GET().build();
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() < 200 || response.statusCode() >= 300)
+        {
+            throw new IOException("Ollama returned status " + response.statusCode());
+        }
+        return Json.extractStringArray(response.body(), "name");
     }
 
     public String generate(String prompt, GenerationSettings settings)
@@ -91,8 +120,10 @@ public class OllamaClient
         sb.append(",\"temperature\":").append(settings.temperature());
         sb.append(",\"top_k\":").append(settings.topK());
         sb.append(",\"top_p\":").append(settings.topP());
+        sb.append(",\"min_p\":").append(settings.minP());
         sb.append(",\"presence_penalty\":").append(settings.presencePenalty());
         sb.append(",\"frequency_penalty\":").append(settings.frequencyPenalty());
+        sb.append(",\"repeat_penalty\":").append(settings.repetitionPenalty());
         sb.append(",\"num_predict\":").append(settings.responseLength());
         sb.append('}');
         sb.append('}');
@@ -198,6 +229,84 @@ public class OllamaClient
         static boolean isDone(String jsonLine)
         {
             return jsonLine.contains("\"done\":true");
+        }
+
+        static List<String> extractStringArray(String json, String fieldName)
+        {
+            List<String> results = new ArrayList<>();
+            if (json == null || json.isEmpty())
+            {
+                return results;
+            }
+            String key = "\"" + fieldName + "\"";
+            int idx = 0;
+            while (idx < json.length())
+            {
+                int keyIndex = json.indexOf(key, idx);
+                if (keyIndex < 0)
+                {
+                    break;
+                }
+                int colon = json.indexOf(':', keyIndex + key.length());
+                if (colon < 0)
+                {
+                    break;
+                }
+                int start = json.indexOf('"', colon + 1);
+                if (start < 0)
+                {
+                    break;
+                }
+                int i = start + 1;
+                StringBuilder sb = new StringBuilder();
+                boolean escaping = false;
+                while (i < json.length())
+                {
+                    char c = json.charAt(i++);
+                    if (escaping)
+                    {
+                        switch (c)
+                        {
+                        case 'n' -> sb.append('\n');
+                        case 'r' -> sb.append('\r');
+                        case 't' -> sb.append('\t');
+                        case '"' -> sb.append('"');
+                        case '\\' -> sb.append('\\');
+                        case 'u' -> {
+                            if (i + 3 < json.length())
+                            {
+                                String hex = json.substring(i, i + 4);
+                                try
+                                {
+                                    sb.append((char) Integer.parseInt(hex, 16));
+                                }
+                                catch (NumberFormatException ignored)
+                                {
+                                    sb.append("\\u").append(hex);
+                                }
+                                i += 4;
+                            }
+                        }
+                        default -> sb.append(c);
+                        }
+                        escaping = false;
+                        continue;
+                    }
+                    if (c == '\\')
+                    {
+                        escaping = true;
+                        continue;
+                    }
+                    if (c == '"')
+                    {
+                        break;
+                    }
+                    sb.append(c);
+                }
+                results.add(sb.toString());
+                idx = i;
+            }
+            return results;
         }
     }
 }
