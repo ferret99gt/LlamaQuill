@@ -75,6 +75,17 @@ public class StoryCardRepository
         }
     }
 
+    public void deleteForStory(String storyId) throws SQLException
+    {
+        try (PreparedStatement stmt = connection.prepareStatement("""
+                DELETE FROM story_cards WHERE story_id = ?
+                """))
+        {
+            stmt.setString(1, storyId);
+            stmt.executeUpdate();
+        }
+    }
+
     public void delete(String id) throws SQLException
     {
         try (PreparedStatement stmt = connection.prepareStatement("""
@@ -88,7 +99,7 @@ public class StoryCardRepository
 
     private StoryCard mapCard(ResultSet rs) throws SQLException
     {
-        return new StoryCard(rs.getString("id"), rs.getString("story_id"), rs.getString("title"),
-                rs.getString("triggers"), rs.getString("content"), rs.getInt("pinned") == 1);
+        return new StoryCard(rs.getString("id"), rs.getString("story_id"), rs.getString("title"), rs.getString("triggers"),
+                rs.getString("content"), rs.getInt("pinned") == 1);
     }
 }

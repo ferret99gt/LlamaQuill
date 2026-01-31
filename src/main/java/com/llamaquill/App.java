@@ -18,6 +18,8 @@ import com.llamaquill.prompt.PromptCompilation;
 import com.llamaquill.prompt.PromptCompiler;
 import com.llamaquill.util.Ids;
 import com.llamaquill.util.Timestamps;
+import org.json.JSONArray;
+import org.json.JSONObject;
 import javafx.application.Application;
 import javafx.beans.binding.DoubleBinding;
 import javafx.collections.FXCollections;
@@ -27,6 +29,7 @@ import javafx.event.ActionEvent;
 import javafx.geometry.Insets;
 import javafx.geometry.Orientation;
 import javafx.geometry.Pos;
+import javafx.scene.Node;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
@@ -48,6 +51,7 @@ import javafx.scene.control.TextField;
 import javafx.scene.control.TextInputDialog;
 import javafx.scene.control.Spinner;
 import javafx.scene.control.SpinnerValueFactory;
+import javafx.stage.FileChooser;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
@@ -61,11 +65,16 @@ import javafx.stage.Stage;
 import javafx.stage.StageStyle;
 import javafx.geometry.Rectangle2D;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Map;
+import java.util.HashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -122,6 +131,7 @@ public class App extends Application
     private TextArea authorNoteArea;
 
     private Button newCardButton;
+    private Button importCardsButton;
     private ListView<StoryCard> cardList;
 
     private TextArea turnInputArea;
@@ -514,6 +524,10 @@ public class App extends Application
         newCardButton.setMaxWidth(Double.MAX_VALUE);
         newCardButton.setOnAction(event -> showCardDialog(null));
 
+        importCardsButton = new Button("Import AI Dungeon Cards");
+        importCardsButton.setMaxWidth(Double.MAX_VALUE);
+        importCardsButton.setOnAction(event -> showImportCardsDialog());
+
         cardList = new ListView<>(cardItems);
         cardList.setCellFactory(list -> new ListCell<>()
         {
@@ -553,7 +567,7 @@ public class App extends Application
             }
         });
 
-        VBox content = new VBox(8, newCardButton, cardList);
+        VBox content = new VBox(8, newCardButton, cardList, importCardsButton);
         content.setPadding(new Insets(10));
         VBox.setVgrow(cardList, Priority.ALWAYS);
 
@@ -1481,6 +1495,134 @@ public class App extends Application
         dialog.showAndWait();
     }
 
+    private void showImportCardsDialog()
+    {
+        if (activeStory == null)
+        {
+            showInfo("Select a story first.");
+            return;
+        }
+
+        Dialog<Void> dialog = new Dialog<>();
+        dialog.setTitle("Import Story Cards");
+        dialog.setHeaderText("Import AI Dungeon story cards");
+        dialog.initOwner(primaryStage);
+
+        TextField fileField = new TextField();
+        fileField.setEditable(false);
+        fileField.setPromptText("Select a JSON file");
+
+        Button browseButton = new Button("Choose File");
+        FileChooser chooser = new FileChooser();
+        chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("JSON Files", "*.json"));
+        browseButton.setOnAction(event ->
+        {
+            java.io.File selected = chooser.showOpenDialog(primaryStage);
+            if (selected != null)
+            {
+                fileField.setText(selected.getAbsolutePath());
+            }
+        });
+
+        HBox fileRow = new HBox(8, fileField, browseButton);
+        HBox.setHgrow(fileField, Priority.ALWAYS);
+
+        CheckBox replaceBox = new CheckBox("Replace existing cards");
+        replaceBox.setSelected(false);
+
+        Button importButton = new Button("Import");
+        importButton.setDisable(true);
+        Button cancelButton = new Button("Cancel");
+
+        fileField.textProperty().addListener((obs, oldValue, newValue) ->
+        {
+            importButton.setDisable(newValue == null || newValue.isBlank());
+        });
+
+        importButton.setOnAction(event ->
+        {
+            try
+            {
+                int imported = importAiDungeonCards(Path.of(fileField.getText()), replaceBox.isSelected());
+                refreshCardList(activeStory.id());
+                dialog.close();
+                showInfo("Imported " + imported + " cards.");
+            }
+            catch (Exception e)
+            {
+                showError("Failed to import cards", e);
+            }
+        });
+
+        cancelButton.setOnAction(event -> dialog.close());
+
+        HBox buttons = new HBox(8, importButton, cancelButton);
+        buttons.setAlignment(Pos.CENTER_RIGHT);
+
+        VBox content = new VBox(12, fileRow, replaceBox, buttons);
+        content.setPadding(new Insets(12));
+
+        dialog.getDialogPane().setContent(content);
+        dialog.getDialogPane().getButtonTypes().add(ButtonType.CANCEL);
+        Node cancelNode = dialog.getDialogPane().lookupButton(ButtonType.CANCEL);
+        if (cancelNode != null)
+        {
+            cancelNode.setVisible(false);
+            cancelNode.setManaged(false);
+        }
+        dialog.showAndWait();
+    }
+
+    private int importAiDungeonCards(Path path, boolean replaceExisting) throws Exception
+    {
+        String raw = Files.readString(path, StandardCharsets.UTF_8);
+        JSONArray array = new JSONArray(raw);
+
+        List<StoryCard> existing = cardRepository.listForStory(activeStory.id());
+        Map<String, StoryCard> byTitle = new HashMap<>();
+        for (StoryCard card : existing)
+        {
+            byTitle.put(card.title(), card);
+        }
+
+        if (replaceExisting)
+        {
+            cardRepository.deleteForStory(activeStory.id());
+            byTitle.clear();
+        }
+
+        int imported = 0;
+        for (int i = 0; i < array.length(); i++)
+        {
+            JSONObject obj = array.optJSONObject(i);
+            if (obj == null)
+            {
+                continue;
+            }
+            String title = obj.optString("title", "").trim();
+            String triggers = obj.optString("keys", "").trim();
+            String content = obj.optString("value", "").trim();
+            if (title.isBlank())
+            {
+                continue;
+            }
+
+            StoryCard existingCard = byTitle.get(title);
+            if (existingCard != null)
+            {
+                StoryCard updated = new StoryCard(existingCard.id(), existingCard.storyId(), title, triggers, content, false);
+                cardRepository.update(updated);
+            }
+            else
+            {
+                StoryCard created = new StoryCard(Ids.newId(), activeStory.id(), title, triggers, content, false);
+                cardRepository.insert(created);
+            }
+            imported++;
+        }
+        return imported;
+    }
+
     private void populateStoryDetails(Story story)
     {
         if (story == null)
@@ -1506,6 +1648,7 @@ public class App extends Application
         plotEssentialsArea.setDisable(!enabled);
         authorNoteArea.setDisable(!enabled);
         newCardButton.setDisable(!enabled);
+        importCardsButton.setDisable(!enabled);
         cardList.setDisable(!enabled);
     }
 
