@@ -1160,6 +1160,11 @@ public class App extends Application
         try
         {
             storyRepository.update(updated);
+            if (activeStory != null && activeStory.id().equals(updated.id()))
+            {
+                activeStory = updated;
+            }
+            refreshStoryList(updated.id());
             return updated;
         }
         catch (SQLException e)
