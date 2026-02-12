@@ -1784,9 +1784,9 @@ public class App extends Application
         }
 
         String system = "You are a JSON generator. Respond with a JSON array only.";
-        String user = "Story excerpt:\n" + excerpt + "\n\nExisting cards:\n" + existing + "\n"
-                + "Task: Identify up to " + maxCount
-                + " story card candidates that should be tracked. Return JSON array of objects with "
+        String user = "# Story excerpt:\n" + excerpt + "\n\n# Existing cards:\n" + existing
+                + "\n\n# Task:\nIdentify up to " + maxCount
+                + " story card candidates that should either be added as new story cards to track, or are existing story cards that need updates for new details. Story cards are meant to detail characters, locations or objects that are important to the story. They should not attempt act as a summarization of the story or simply be 'memories'. Do not suggest a story card candidate for the main character/player. Return JSON array of objects with "
                 + "\"title\" and \"triggers\" (comma separated keywords). No extra text.";
 
         String prompt = buildAutoCardsChatPrompt(system, user);
@@ -1849,7 +1849,7 @@ public class App extends Application
                 + "Verbosity: " + appAutoCardsSettings.verbosity() + "\n"
                 + "Story excerpt:\n" + excerpt + "\n\nInstruction:\n" + instruction
                 + "\n\nReturn only the card content.";
-        String prompt = buildAutoCardsChatPrompt("You write concise story card entries.", user);
+        String prompt = buildAutoCardsChatPrompt("You write brand new story card entries.", user);
         GenerationSettings autoSettings = buildAutoCardsGenerationSettings(modelAutoCardsSettings.maxTokensCreate());
         return normalizeOutput(ollamaClient.generate(prompt, autoSettings));
     }
@@ -1863,7 +1863,7 @@ public class App extends Application
                 + "Verbosity: " + appAutoCardsSettings.verbosity() + "\n"
                 + "Existing card:\n" + existing.content() + "\n\nStory excerpt:\n" + excerpt
                 + "\n\nInstruction:\n" + instruction + "\n\nReturn only the updated card content.";
-        String prompt = buildAutoCardsChatPrompt("You update story card entries.", user);
+        String prompt = buildAutoCardsChatPrompt("You update existing story card entries, keeping facts intact while doing so.", user);
         GenerationSettings autoSettings = buildAutoCardsGenerationSettings(modelAutoCardsSettings.maxTokensUpdate());
         return normalizeOutput(ollamaClient.generate(prompt, autoSettings));
     }
@@ -1873,7 +1873,7 @@ public class App extends Application
         String instruction = applyPromptTemplate(modelAutoCardsSettings.summarizePrompt(), "", "", content, "");
         String user = "Card content:\n" + content + "\n\nInstruction:\n" + instruction
                 + "\n\nReturn only the summarized card content.";
-        String prompt = buildAutoCardsChatPrompt("You summarize story card entries.", user);
+        String prompt = buildAutoCardsChatPrompt("You summarize existing story card entries, but must keep the facts intact while doing so.", user);
         GenerationSettings autoSettings = buildAutoCardsGenerationSettings(modelAutoCardsSettings.maxTokensSummarize());
         return normalizeOutput(ollamaClient.generate(prompt, autoSettings));
     }
