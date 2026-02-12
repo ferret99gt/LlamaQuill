@@ -1,0 +1,66 @@
+package com.llamaquill.db;
+
+import com.llamaquill.model.StoryAutoCardsSettings;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.Optional;
+
+public class StoryAutoCardsRepository
+{
+    private final Connection connection;
+
+    public StoryAutoCardsRepository(Connection connection)
+    {
+        this.connection = connection;
+    }
+
+    public Optional<StoryAutoCardsSettings> load(String storyId) throws SQLException
+    {
+        try (PreparedStatement stmt = connection.prepareStatement("""
+                SELECT story_id, enabled, update_existing, create_new, pin_new
+                FROM story_auto_cards
+                WHERE story_id = ?
+                """))
+        {
+            stmt.setString(1, storyId);
+            try (ResultSet rs = stmt.executeQuery())
+            {
+                if (!rs.next())
+                {
+                    return Optional.empty();
+                }
+                return Optional.of(new StoryAutoCardsSettings(
+                        rs.getString("story_id"),
+                        rs.getInt("enabled") == 1,
+                        rs.getInt("update_existing") == 1,
+                        rs.getInt("create_new") == 1,
+                        rs.getInt("pin_new") == 1));
+            }
+        }
+    }
+
+    public void save(StoryAutoCardsSettings settings) throws SQLException
+    {
+        try (PreparedStatement stmt = connection.prepareStatement("""
+                INSERT INTO story_auto_cards (
+                    story_id, enabled, update_existing, create_new, pin_new
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(story_id) DO UPDATE SET
+                    enabled = excluded.enabled,
+                    update_existing = excluded.update_existing,
+                    create_new = excluded.create_new,
+                    pin_new = excluded.pin_new
+                """))
+        {
+            stmt.setString(1, settings.storyId());
+            stmt.setInt(2, settings.enabled() ? 1 : 0);
+            stmt.setInt(3, settings.updateExisting() ? 1 : 0);
+            stmt.setInt(4, settings.createNew() ? 1 : 0);
+            stmt.setInt(5, settings.pinNew() ? 1 : 0);
+            stmt.executeUpdate();
+        }
+    }
+}

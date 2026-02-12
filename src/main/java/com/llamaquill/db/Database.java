@@ -97,6 +97,47 @@ public final class Database
                     """);
 
             stmt.execute("""
+                    CREATE TABLE IF NOT EXISTS app_auto_cards (
+                        id INTEGER PRIMARY KEY CHECK (id = 1),
+                        run_mode TEXT NOT NULL,
+                        min_gap_seconds INTEGER NOT NULL,
+                        default_enabled INTEGER NOT NULL CHECK (default_enabled IN (0,1)),
+                        cooldown_turns INTEGER NOT NULL,
+                        max_cards_per_run INTEGER NOT NULL,
+                        candidate_window INTEGER NOT NULL,
+                        card_length_limit INTEGER NOT NULL,
+                        summarize_instead_of_trim INTEGER NOT NULL CHECK (summarize_instead_of_trim IN (0,1)),
+                        verbosity TEXT NOT NULL,
+                        logging_level TEXT NOT NULL
+                    )
+                    """);
+
+            stmt.execute("""
+                    CREATE TABLE IF NOT EXISTS story_auto_cards (
+                        story_id TEXT PRIMARY KEY,
+                        enabled INTEGER NOT NULL CHECK (enabled IN (0,1)),
+                        update_existing INTEGER NOT NULL CHECK (update_existing IN (0,1)),
+                        create_new INTEGER NOT NULL CHECK (create_new IN (0,1)),
+                        pin_new INTEGER NOT NULL CHECK (pin_new IN (0,1)),
+                        FOREIGN KEY (story_id) REFERENCES stories(id) ON DELETE CASCADE
+                    )
+                    """);
+
+            stmt.execute("""
+                    CREATE TABLE IF NOT EXISTS model_auto_cards (
+                        model_name TEXT PRIMARY KEY,
+                        create_prompt TEXT NOT NULL,
+                        update_prompt TEXT NOT NULL,
+                        summarize_prompt TEXT NOT NULL,
+                        max_tokens_create INTEGER NOT NULL,
+                        max_tokens_update INTEGER NOT NULL,
+                        max_tokens_summarize INTEGER NOT NULL,
+                        temperature_override REAL,
+                        FOREIGN KEY (model_name) REFERENCES model_settings(model_name) ON DELETE CASCADE
+                    )
+                    """);
+
+            stmt.execute("""
                     CREATE INDEX IF NOT EXISTS idx_blocks_story_position
                     ON blocks(story_id, position)
                     """);

@@ -1,7 +1,6 @@
 package com.llamaquill.db;
 
 import com.llamaquill.model.AppSettings;
-import com.llamaquill.ollama.OllamaClient;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;

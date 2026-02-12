@@ -57,6 +57,22 @@ public class StoryRepository
         }
     }
 
+    public void updateTitle(String storyId, String title, String updatedAt) throws SQLException
+    {
+        try (PreparedStatement stmt = connection.prepareStatement(
+                """
+                        UPDATE stories
+                        SET title = ?, updated_at = ?
+                        WHERE id = ?
+                        """))
+        {
+            stmt.setString(1, title);
+            stmt.setString(2, updatedAt);
+            stmt.setString(3, storyId);
+            stmt.executeUpdate();
+        }
+    }
+
     public Optional<Story> findById(String id) throws SQLException
     {
         try (PreparedStatement stmt = connection.prepareStatement(
