@@ -927,6 +927,8 @@ public class App extends Application
         newStoryButton.setManaged(!collapsing);
         storyHeader.setVisible(!collapsing);
         storyHeader.setManaged(!collapsing);
+        importAdventureButton.setVisible(!collapsing);
+        importAdventureButton.setManaged(!collapsing);
 
         if (collapsing)
         {
