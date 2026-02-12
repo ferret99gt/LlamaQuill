@@ -119,6 +119,7 @@ public final class Database
                         update_existing INTEGER NOT NULL CHECK (update_existing IN (0,1)),
                         create_new INTEGER NOT NULL CHECK (create_new IN (0,1)),
                         pin_new INTEGER NOT NULL CHECK (pin_new IN (0,1)),
+                        preview_first INTEGER NOT NULL CHECK (preview_first IN (0,1)),
                         FOREIGN KEY (story_id) REFERENCES stories(id) ON DELETE CASCADE
                     )
                     """);

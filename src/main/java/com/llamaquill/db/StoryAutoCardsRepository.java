@@ -20,7 +20,7 @@ public class StoryAutoCardsRepository
     public Optional<StoryAutoCardsSettings> load(String storyId) throws SQLException
     {
         try (PreparedStatement stmt = connection.prepareStatement("""
-                SELECT story_id, enabled, update_existing, create_new, pin_new
+                SELECT story_id, enabled, update_existing, create_new, pin_new, preview_first
                 FROM story_auto_cards
                 WHERE story_id = ?
                 """))
@@ -37,7 +37,8 @@ public class StoryAutoCardsRepository
                         rs.getInt("enabled") == 1,
                         rs.getInt("update_existing") == 1,
                         rs.getInt("create_new") == 1,
-                        rs.getInt("pin_new") == 1));
+                        rs.getInt("pin_new") == 1,
+                        rs.getInt("preview_first") == 1));
             }
         }
     }
@@ -46,13 +47,14 @@ public class StoryAutoCardsRepository
     {
         try (PreparedStatement stmt = connection.prepareStatement("""
                 INSERT INTO story_auto_cards (
-                    story_id, enabled, update_existing, create_new, pin_new
-                ) VALUES (?, ?, ?, ?, ?)
+                    story_id, enabled, update_existing, create_new, pin_new, preview_first
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(story_id) DO UPDATE SET
                     enabled = excluded.enabled,
                     update_existing = excluded.update_existing,
                     create_new = excluded.create_new,
-                    pin_new = excluded.pin_new
+                    pin_new = excluded.pin_new,
+                    preview_first = excluded.preview_first
                 """))
         {
             stmt.setString(1, settings.storyId());
@@ -60,6 +62,7 @@ public class StoryAutoCardsRepository
             stmt.setInt(3, settings.updateExisting() ? 1 : 0);
             stmt.setInt(4, settings.createNew() ? 1 : 0);
             stmt.setInt(5, settings.pinNew() ? 1 : 0);
+            stmt.setInt(6, settings.previewFirst() ? 1 : 0);
             stmt.executeUpdate();
         }
     }

@@ -27,6 +27,7 @@ import com.llamaquill.util.Timestamps;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import javafx.application.Application;
+import javafx.application.Platform;
 import javafx.beans.binding.DoubleBinding;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
@@ -85,6 +86,8 @@ import java.util.Map;
 import java.util.HashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
@@ -161,6 +164,7 @@ public class App extends Application
     private CheckBox autoCardsUpdateExistingBox;
     private CheckBox autoCardsCreateNewBox;
     private CheckBox autoCardsPinNewBox;
+    private CheckBox autoCardsPreviewBox;
     private Spinner<Integer> autoCardsLengthLimitSpinner;
     private CheckBox autoCardsSummarizeBox;
 
@@ -607,19 +611,23 @@ public class App extends Application
         autoCardsCreateNewBox = new CheckBox("Create new cards");
         autoCardsUpdateExistingBox = new CheckBox("Update existing cards");
         autoCardsPinNewBox = new CheckBox("Pin newly created cards");
+        autoCardsPreviewBox = new CheckBox("Preview first");
         autoCardsCreateNewBox.setOnAction(event ->
             updateStoryAutoCardsCreateNew(autoCardsCreateNewBox.isSelected()));        
         autoCardsUpdateExistingBox.setOnAction(event ->
                 updateStoryAutoCardsUpdateExisting(autoCardsUpdateExistingBox.isSelected()));
         autoCardsPinNewBox.setOnAction(event ->
                 updateStoryAutoCardsPinNew(autoCardsPinNewBox.isSelected()));
+        autoCardsPreviewBox.setOnAction(event ->
+                updateStoryAutoCardsPreview(autoCardsPreviewBox.isSelected()));
 
         VBox autoCardsSection = new VBox(8,
                 new Label("Auto Cards"),
                 autoCardsEnabledBox,
                 autoCardsCreateNewBox,                
                 autoCardsUpdateExistingBox,
-                autoCardsPinNewBox);
+                autoCardsPinNewBox,
+                autoCardsPreviewBox);
 
         VBox content = new VBox(10, new Label("System Prompt"), systemPromptArea, new Label("Plot Essentials"),
                 plotEssentialsArea, new Label("Author's Note"), authorNoteArea, autoCardsSection);
@@ -1223,6 +1231,7 @@ public class App extends Application
         autoCardsUpdateExistingBox.setSelected(storyAutoCardsSettings.updateExisting());
         autoCardsCreateNewBox.setSelected(storyAutoCardsSettings.createNew());
         autoCardsPinNewBox.setSelected(storyAutoCardsSettings.pinNew());
+        autoCardsPreviewBox.setSelected(storyAutoCardsSettings.previewFirst());
         updatingAutoCardsControls = false;
         updateAutoCardsRunButtonState();
     }
@@ -1332,7 +1341,7 @@ public class App extends Application
         }
         storyAutoCardsSettings = new StoryAutoCardsSettings(storyAutoCardsSettings.storyId(), enabled,
                 storyAutoCardsSettings.updateExisting(), storyAutoCardsSettings.createNew(),
-                storyAutoCardsSettings.pinNew());
+                storyAutoCardsSettings.pinNew(), storyAutoCardsSettings.previewFirst());
         persistStoryAutoCardsSettings();
         updateAutoCardsRunButtonState();
     }
@@ -1406,7 +1415,7 @@ public class App extends Application
         }
         storyAutoCardsSettings = new StoryAutoCardsSettings(storyAutoCardsSettings.storyId(),
                 storyAutoCardsSettings.enabled(), value, storyAutoCardsSettings.createNew(),
-                storyAutoCardsSettings.pinNew());
+                storyAutoCardsSettings.pinNew(), storyAutoCardsSettings.previewFirst());
         persistStoryAutoCardsSettings();
     }
 
@@ -1422,7 +1431,7 @@ public class App extends Application
         }
         storyAutoCardsSettings = new StoryAutoCardsSettings(storyAutoCardsSettings.storyId(),
                 storyAutoCardsSettings.enabled(), storyAutoCardsSettings.updateExisting(), value,
-                storyAutoCardsSettings.pinNew());
+                storyAutoCardsSettings.pinNew(), storyAutoCardsSettings.previewFirst());
         persistStoryAutoCardsSettings();
     }
 
@@ -1438,7 +1447,23 @@ public class App extends Application
         }
         storyAutoCardsSettings = new StoryAutoCardsSettings(storyAutoCardsSettings.storyId(),
                 storyAutoCardsSettings.enabled(), storyAutoCardsSettings.updateExisting(),
-                storyAutoCardsSettings.createNew(), value);
+                storyAutoCardsSettings.createNew(), value, storyAutoCardsSettings.previewFirst());
+        persistStoryAutoCardsSettings();
+    }
+
+    private void updateStoryAutoCardsPreview(boolean value)
+    {
+        if (updatingAutoCardsControls || storyAutoCardsSettings == null)
+        {
+            return;
+        }
+        if (value == storyAutoCardsSettings.previewFirst())
+        {
+            return;
+        }
+        storyAutoCardsSettings = new StoryAutoCardsSettings(storyAutoCardsSettings.storyId(),
+                storyAutoCardsSettings.enabled(), storyAutoCardsSettings.updateExisting(),
+                storyAutoCardsSettings.createNew(), storyAutoCardsSettings.pinNew(), value);
         persistStoryAutoCardsSettings();
     }
 
@@ -1668,6 +1693,7 @@ public class App extends Application
         int limit = appAutoCardsSettings.cardLengthLimit();
         boolean summarize = appAutoCardsSettings.summarizeInsteadOfTrim();
 
+        boolean preview = storyAutoCardsSettings.previewFirst();
         for (AutoCardCandidate candidate : candidates)
         {
             if (candidate.title().isBlank())
@@ -1688,6 +1714,16 @@ public class App extends Application
                     continue;
                 }
                 updatedContent = enforceCardLength(updatedContent, summarize, limit);
+                if (preview)
+                {
+                    String proposed = updatedContent;
+                    String approved = runOnUiThreadAndWait(() -> showAutoCardUpdateDialog(existing, proposed));
+                    if (approved == null)
+                    {
+                        continue;
+                    }
+                    updatedContent = approved;
+                }
                 StoryCard updatedCard = new StoryCard(existing.id(), existing.storyId(), existing.title(),
                         existing.triggers(), updatedContent, existing.pinned());
                 cardRepository.update(updatedCard);
@@ -1707,6 +1743,16 @@ public class App extends Application
                 content = enforceCardLength(content, summarize, limit);
                 StoryCard createdCard = new StoryCard(Ids.newId(), activeStory.id(), candidate.title(),
                         candidate.triggers(), content, storyAutoCardsSettings.pinNew());
+                if (preview)
+                {
+                    StoryCard draft = createdCard;
+                    StoryCard approved = runOnUiThreadAndWait(() -> showAutoCardCreateDialog(draft));
+                    if (approved == null)
+                    {
+                        continue;
+                    }
+                    createdCard = approved;
+                }
                 cardRepository.insert(createdCard);
                 created++;
             }
@@ -2742,6 +2788,132 @@ public class App extends Application
         dialog.showAndWait();
     }
 
+    private StoryCard showAutoCardCreateDialog(StoryCard draft)
+    {
+        if (draft == null || activeStory == null)
+        {
+            return null;
+        }
+
+        Dialog<StoryCard> dialog = new Dialog<>();
+        dialog.setTitle("Auto Card Preview");
+        dialog.setHeaderText("Create Story Card");
+        dialog.initOwner(primaryStage);
+
+        TextField titleField = new TextField(draft.title());
+        TextField triggersField = new TextField(draft.triggers());
+        TextArea contentArea = new TextArea(draft.content());
+        contentArea.setWrapText(true);
+        contentArea.setPrefRowCount(8);
+        CheckBox pinnedBox = new CheckBox("Pinned");
+        pinnedBox.setSelected(draft.pinned());
+
+        VBox content = new VBox(8,
+                new Label("Title"), titleField,
+                new Label("Triggers"), triggersField,
+                new Label("Content"), contentArea,
+                pinnedBox);
+        content.setPadding(new Insets(10));
+
+        ButtonType createType = new ButtonType("Create", ButtonBar.ButtonData.OK_DONE);
+        ButtonType cancelType = new ButtonType("Cancel", ButtonBar.ButtonData.CANCEL_CLOSE);
+        dialog.getDialogPane().getButtonTypes().addAll(createType, cancelType);
+        dialog.getDialogPane().setContent(content);
+
+        Node createButton = dialog.getDialogPane().lookupButton(createType);
+        createButton.addEventFilter(ActionEvent.ACTION, event ->
+        {
+            if (titleField.getText().trim().isEmpty())
+            {
+                showInfo("Card title cannot be empty.");
+                event.consume();
+                return;
+            }
+            if (contentArea.getText().trim().isEmpty())
+            {
+                showInfo("Card content cannot be empty.");
+                event.consume();
+            }
+        });
+
+        dialog.setResultConverter(buttonType ->
+        {
+            if (buttonType != createType)
+            {
+                return null;
+            }
+            String title = titleField.getText().trim();
+            String triggers = triggersField.getText().trim();
+            String contentText = contentArea.getText().trim();
+            return new StoryCard(draft.id(), activeStory.id(), title, triggers, contentText, pinnedBox.isSelected());
+        });
+
+        return dialog.showAndWait().orElse(null);
+    }
+
+    private String showAutoCardUpdateDialog(StoryCard existing, String proposedContent)
+    {
+        if (existing == null)
+        {
+            return null;
+        }
+
+        Dialog<String> dialog = new Dialog<>();
+        dialog.setTitle("Auto Card Preview");
+        dialog.setHeaderText("Update Story Card");
+        dialog.initOwner(primaryStage);
+
+        Label titleLabel = new Label(existing.title());
+        titleLabel.setStyle("-fx-font-weight: bold;");
+
+        TextArea oldArea = new TextArea(existing.content());
+        oldArea.setEditable(false);
+        oldArea.setWrapText(true);
+        oldArea.setPrefRowCount(10);
+
+        TextArea newArea = new TextArea(proposedContent);
+        newArea.setWrapText(true);
+        newArea.setPrefRowCount(10);
+
+        VBox oldBox = new VBox(6, new Label("Existing"), oldArea);
+        VBox newBox = new VBox(6, new Label("Proposed"), newArea);
+        oldBox.setPrefWidth(300);
+        newBox.setPrefWidth(300);
+
+        HBox panes = new HBox(10, oldBox, newBox);
+        HBox.setHgrow(oldBox, Priority.ALWAYS);
+        HBox.setHgrow(newBox, Priority.ALWAYS);
+
+        VBox content = new VBox(8, titleLabel, panes);
+        content.setPadding(new Insets(10));
+
+        ButtonType updateType = new ButtonType("Update", ButtonBar.ButtonData.OK_DONE);
+        ButtonType cancelType = new ButtonType("Cancel", ButtonBar.ButtonData.CANCEL_CLOSE);
+        dialog.getDialogPane().getButtonTypes().addAll(updateType, cancelType);
+        dialog.getDialogPane().setContent(content);
+
+        Node updateButton = dialog.getDialogPane().lookupButton(updateType);
+        updateButton.addEventFilter(ActionEvent.ACTION, event ->
+        {
+            if (newArea.getText().trim().isEmpty())
+            {
+                showInfo("Updated content cannot be empty.");
+                event.consume();
+            }
+        });
+
+        dialog.setResultConverter(buttonType ->
+        {
+            if (buttonType != updateType)
+            {
+                return null;
+            }
+            return newArea.getText().trim();
+        });
+
+        return dialog.showAndWait().orElse(null);
+    }
+
     private int importAiDungeonCards(Path path, boolean replaceExisting) throws Exception
     {
         String raw = Files.readString(path, StandardCharsets.UTF_8);
@@ -3123,6 +3295,48 @@ public class App extends Application
         return normalized.trim();
     }
 
+    private <T> T runOnUiThreadAndWait(java.util.concurrent.Callable<T> action)
+    {
+        if (Platform.isFxApplicationThread())
+        {
+            try
+            {
+                return action.call();
+            }
+            catch (Exception e)
+            {
+                throw new RuntimeException(e);
+            }
+        }
+
+        CompletableFuture<T> future = new CompletableFuture<>();
+        Platform.runLater(() ->
+        {
+            try
+            {
+                future.complete(action.call());
+            }
+            catch (Exception e)
+            {
+                future.completeExceptionally(e);
+            }
+        });
+
+        try
+        {
+            return future.get();
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+            return null;
+        }
+        catch (ExecutionException e)
+        {
+            throw new RuntimeException(e.getCause());
+        }
+    }
+
     private void populateStoryDetails(Story story)
     {
         if (story == null)
@@ -3155,6 +3369,7 @@ public class App extends Application
         autoCardsUpdateExistingBox.setDisable(!enabled);
         autoCardsCreateNewBox.setDisable(!enabled);
         autoCardsPinNewBox.setDisable(!enabled);
+        autoCardsPreviewBox.setDisable(!enabled);
     }
 
     private void submitTurn()
