@@ -1832,7 +1832,7 @@ public class App extends Application
         String system = "You are a JSON generator. Respond with a JSON array only.";
         String user = "# Story excerpt:\n" + excerpt + "\n\n# Existing cards:\n" + existing
                 + "\n\n# Task:\nIdentify up to " + maxCount
-                + " story card candidates that should either be added as new story cards to track, or are existing story cards that need updates for new details. Story cards are meant to detail characters, locations or objects that are important to the story. They should not attempt act as a summarization of the story or simply be 'memories'. Do not suggest a story card candidate for the main character/player. Return JSON array of objects with "
+                + " story card candidates that should either be added as new story cards to track, or are existing story cards that need updates for new details. Story cards are meant to detail one singular character, location or critical object that are important to the story. They should not attempt act as a summarization of the story, combine topics (Character + Event), or as 'memories'. Do not suggest a story card candidate for the main character/player. If no candidates need added or removed, return empty. Return JSON array of objects with "
                 + "\"title\" and \"triggers\" (comma separated keywords). No extra text.";
 
         String prompt = buildAutoCardsChatPrompt(system, user);
@@ -1889,13 +1889,26 @@ public class App extends Application
     private String generateAutoCardCreate(AutoCardCandidate candidate, String excerpt)
             throws IOException, InterruptedException
     {
+        String system = """
+                # Write a brief and coherent informational entry for %{title} following these instructions:
+                - Write only third-person pure prose information about %{title} using complete sentences with correct punctuation
+                - Avoid short-term temporary details or actions, instead focus on plot-significant information
+                - Introduce %{title} by stating who/what, followed by a detailed description of permanent physical traits, followed by story-relevant details.
+                - Prioritize story-relevant details about %{title} first to ensure seamless integration with the previous plot
+                - Create new information based on the context and story direction
+                - Mention %{title} in every sentence
+                - Use semicolons if needed
+                - Be concise and grounded
+                - Imitate the story's writing style and infer the reader's preferences
+                """;
+        system = applyPromptTemplate(system, candidate.title(), candidate.triggers(), "", excerpt);
         String instruction = applyPromptTemplate(modelAutoCardsSettings.createPrompt(), candidate.title(), candidate.triggers(),
                 "", excerpt);
-        String user = "Title: " + candidate.title() + "\nTriggers: " + candidate.triggers() + "\n"
-                + "Verbosity: " + appAutoCardsSettings.verbosity() + "\n"
-                + "Story excerpt:\n" + excerpt + "\n\nInstruction:\n" + instruction
+        String user = "# Card details:\nTitle: " + candidate.title() + "\nTriggers: " + candidate.triggers() + "\n"
+                + "Verbosity: " + appAutoCardsSettings.verbosity() + "\n\n"
+                + "# Story excerpt:\n" + excerpt + "\n\n# Instruction:\n" + instruction
                 + "\n\nReturn only the card content.";
-        String prompt = buildAutoCardsChatPrompt("You write brand new story card entries.", user);
+        String prompt = buildAutoCardsChatPrompt(system, user);
         GenerationSettings autoSettings = buildAutoCardsGenerationSettings(modelAutoCardsSettings.maxTokensCreate());
         return normalizeOutput(ollamaClient.generate(prompt, autoSettings));
     }
@@ -1903,13 +1916,28 @@ public class App extends Application
     private String generateAutoCardUpdate(StoryCard existing, String excerpt)
             throws IOException, InterruptedException
     {
+        String system = """
+                # Update the entry for %{title} following these instructions:
+                - Ensure the passage retains the core meaning and most essential details
+                - Use the third-person perspective
+                - Prioritize information-density, accuracy, and completeness
+                - Remain brief and concise
+                - Introduce %{title} by stating who/what, followed by a detailed description of permanent physical traits, followed by story-relevant details.
+                - Prioritize story-relevant details about %{title} first to ensure seamless integration with the previous plot
+                - Add new information based on the context and story direction
+                - Mention %{title} in every sentence
+                - Use semicolons if needed
+                - Be concise and grounded
+                - Imitate the story's writing style and infer the reader's preferences
+                """;
+        system = applyPromptTemplate(system, existing.title(), existing.triggers(), existing.content(), excerpt);
         String instruction = applyPromptTemplate(modelAutoCardsSettings.updatePrompt(), existing.title(), existing.triggers(),
                 existing.content(), excerpt);
-        String user = "Title: " + existing.title() + "\nTriggers: " + existing.triggers() + "\n"
-                + "Verbosity: " + appAutoCardsSettings.verbosity() + "\n"
-                + "Existing card:\n" + existing.content() + "\n\nStory excerpt:\n" + excerpt
-                + "\n\nInstruction:\n" + instruction + "\n\nReturn only the updated card content.";
-        String prompt = buildAutoCardsChatPrompt("You update existing story card entries, keeping facts intact while doing so.", user);
+        String user = "# Card details:\nTitle: " + existing.title() + "\nTriggers: " + existing.triggers() + "\n"
+                + "Verbosity: " + appAutoCardsSettings.verbosity() + "\n\n"
+                + "# Existing card:\n" + existing.content() + "\n\n# Story excerpt:\n" + excerpt
+                + "\n\n# Instruction:\n" + instruction + "\n\nReturn only the updated card content.";
+        String prompt = buildAutoCardsChatPrompt(system, user);
         GenerationSettings autoSettings = buildAutoCardsGenerationSettings(modelAutoCardsSettings.maxTokensUpdate());
         return normalizeOutput(ollamaClient.generate(prompt, autoSettings));
     }
