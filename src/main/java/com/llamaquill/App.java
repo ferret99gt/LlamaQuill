@@ -1,5 +1,6 @@
 ﻿package com.llamaquill;
 
+import com.llamaquill.autocards.AutoCards;
 import com.llamaquill.db.BlockRepository;
 import com.llamaquill.db.Database;
 import com.llamaquill.db.StoryCardRepository;
@@ -19,13 +20,13 @@ import com.llamaquill.model.StoryCard;
 import com.llamaquill.model.AppAutoCardsSettings;
 import com.llamaquill.model.StoryAutoCardsSettings;
 import com.llamaquill.model.ModelAutoCardsSettings;
+import com.llamaquill.imports.AIDungeonImports;
 import com.llamaquill.ollama.OllamaClient;
 import com.llamaquill.prompt.PromptCompilation;
 import com.llamaquill.prompt.PromptCompiler;
+import com.llamaquill.settings.SettingsCoordinator;
 import com.llamaquill.util.Ids;
 import com.llamaquill.util.Timestamps;
-import org.json.JSONArray;
-import org.json.JSONObject;
 import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.beans.binding.DoubleBinding;
@@ -72,30 +73,19 @@ import javafx.stage.Stage;
 import javafx.stage.StageStyle;
 import javafx.geometry.Rectangle2D;
 
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.io.IOException;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Optional;
 import java.util.Map;
 import java.util.HashMap;
-import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
 
 public class App extends Application
 {
@@ -105,20 +95,6 @@ public class App extends Application
     private static final int MAX_STORY_LINES = 20;
     private static final int LEFT_SIDEBAR_WIDTH = 480;
     private static final int RIGHT_SIDEBAR_WIDTH = 480;
-    private static final String AUTO_CARDS_CANDIDATION_MODE_HEURISTICS = "Proper Noun Heuristics";
-    private static final String AUTO_CARDS_CANDIDATION_MODE_ASK_MODEL = "Ask Model";
-    private static final String AUTO_CARDS_PROMPT_SYSTEM_TAG = "<system>";
-    private static final String AUTO_CARDS_PROMPT_USER_TAG = "<user>";
-    private static final Pattern AUTO_CARD_PROPER_NOUN_PATTERN = Pattern.compile(
-            "\\b([A-Z][\\p{L}\\p{N}'’-]*(?:\\s+[A-Z][\\p{L}\\p{N}'’-]*){0,3})\\b");
-    private static final Set<String> AUTO_CARD_CONTRACTION_SUFFIXES = Set.of(
-            "re", "ve", "ll", "d", "m", "t");
-    private static final Set<String> AUTO_CARD_STOPWORDS = Set.of(
-            "a", "an", "and", "as", "at", "before", "but", "did", "do", "does", "for", "from", "he",
-            "her", "hers", "him", "his", "how", "i", "if", "in", "it", "its", "me", "my", "of", "on",
-            "or", "our", "ours", "she", "so", "story", "that", "the", "their", "theirs", "them", "then",
-            "there", "they", "this", "to", "user", "we", "what", "when", "where", "while", "who", "why",
-            "you", "your", "yours", "here");
 
     private Connection connection;
     private StoryRepository storyRepository;
@@ -130,6 +106,7 @@ public class App extends Application
     private StoryAutoCardsRepository storyAutoCardsRepository;
     private ModelAutoCardsRepository modelAutoCardsRepository;
     private PromptCompiler promptCompiler;
+    private AIDungeonImports aiDungeonImports;
     private OllamaClient ollamaClient;
     private AppSettings appSettings;
     private ModelSettings activeModelSettings;
@@ -260,14 +237,6 @@ public class App extends Application
         }
     }
 
-    private record AutoCardCandidate(String title, String triggers)
-    {
-    }
-
-    private record AutoCardPromptParts(String system, String user)
-    {
-    }
-
     @Override
     public void start(Stage stage)
     {
@@ -286,6 +255,7 @@ public class App extends Application
             storyAutoCardsRepository = new StoryAutoCardsRepository(connection);
             modelAutoCardsRepository = new ModelAutoCardsRepository(connection);
             promptCompiler = new PromptCompiler();
+            aiDungeonImports = new AIDungeonImports(storyRepository, blockRepository, cardRepository, DEFAULT_SYSTEM_PROMPT);
             ollamaClient = new OllamaClient();
             appSettings = loadOrCreateAppSettings();
             appAutoCardsSettings = loadOrCreateAppAutoCardsSettings();
@@ -743,8 +713,8 @@ public class App extends Application
 
         autoCardsCandidateSelectionMode = new ComboBox<>();
         autoCardsCandidateSelectionMode.setItems(FXCollections.observableArrayList(
-                AUTO_CARDS_CANDIDATION_MODE_HEURISTICS,
-                AUTO_CARDS_CANDIDATION_MODE_ASK_MODEL));
+                AutoCards.CANDIDATE_SELECTION_MODE_HEURISTICS,
+                AutoCards.CANDIDATE_SELECTION_MODE_ASK_MODEL));
         autoCardsCandidateSelectionMode.setMaxWidth(Double.MAX_VALUE);
         autoCardsCandidateSelectionMode.setOnAction(event ->
         {
@@ -1038,9 +1008,7 @@ public class App extends Application
         if (!activeModels.isEmpty())
         {
             ModelSettings fallback = activeModels.get(0);
-            appSettings = new AppSettings(appSettings.ollamaUrl(), fallback.modelName(), appSettings.contextLimit(),
-                    appSettings.responseLength(), appSettings.minStoryWindow(), appSettings.storyCardLookback(),
-                    appSettings.anPlacement());
+            appSettings = SettingsCoordinator.withSelectedModel(appSettings, fallback.modelName());
             persistAppSettings();
             return fallback;
         }
@@ -1097,9 +1065,7 @@ public class App extends Application
             }
             activeModelSettings = selected.get();
             modelAutoCardsSettings = loadOrCreateModelAutoCardsSettings(modelName);
-            appSettings = new AppSettings(appSettings.ollamaUrl(), modelName, appSettings.contextLimit(),
-                    appSettings.responseLength(), appSettings.minStoryWindow(), appSettings.storyCardLookback(),
-                    appSettings.anPlacement());
+            appSettings = SettingsCoordinator.withSelectedModel(appSettings, modelName);
             persistAppSettings();
             updateModelControls();
             updateModelAutoCardsControls();
@@ -1118,9 +1084,7 @@ public class App extends Application
         {
             return;
         }
-        appSettings = new AppSettings(url.trim(), appSettings.selectedModel(), appSettings.contextLimit(),
-                appSettings.responseLength(), appSettings.minStoryWindow(), appSettings.storyCardLookback(),
-                appSettings.anPlacement());
+        appSettings = SettingsCoordinator.withOllamaUrl(appSettings, url);
         persistAppSettings();
         ollamaClient.setHost(appSettings.ollamaUrl());
     }
@@ -1145,14 +1109,11 @@ public class App extends Application
             return;
         }
         updatingAutoCardsControls = true;
-        String candidationMode = normalizeAutoCardsCandidateSelectionMode(
+        String candidationMode = AutoCards.normalizeCandidateSelectionMode(
                 appAutoCardsSettings.candidateSelectionMode());
         if (!candidationMode.equals(appAutoCardsSettings.candidateSelectionMode()))
         {
-            appAutoCardsSettings = new AppAutoCardsSettings(appAutoCardsSettings.cooldownTurns(),
-                    appAutoCardsSettings.maxCardsPerRun(), appAutoCardsSettings.candidateWindow(),
-                    appAutoCardsSettings.cardLengthLimit(), appAutoCardsSettings.summarizeInsteadOfTrim(),
-                    candidationMode);
+            appAutoCardsSettings = SettingsCoordinator.withCandidateSelectionMode(appAutoCardsSettings, candidationMode);
             persistAppAutoCardsSettings();
         }
         autoCardsCandidateSelectionMode.setValue(candidationMode);
@@ -1203,15 +1164,12 @@ public class App extends Application
         {
             return;
         }
-        String normalized = normalizeAutoCardsCandidateSelectionMode(mode);
+        String normalized = AutoCards.normalizeCandidateSelectionMode(mode);
         if (normalized.equals(appAutoCardsSettings.candidateSelectionMode()))
         {
             return;
         }
-        appAutoCardsSettings = new AppAutoCardsSettings(appAutoCardsSettings.cooldownTurns(),
-                appAutoCardsSettings.maxCardsPerRun(),
-                appAutoCardsSettings.candidateWindow(), appAutoCardsSettings.cardLengthLimit(),
-                appAutoCardsSettings.summarizeInsteadOfTrim(), normalized);
+        appAutoCardsSettings = SettingsCoordinator.withCandidateSelectionMode(appAutoCardsSettings, normalized);
         persistAppAutoCardsSettings();
     }
 
@@ -1225,9 +1183,7 @@ public class App extends Application
         {
             return;
         }
-        storyAutoCardsSettings = new StoryAutoCardsSettings(storyAutoCardsSettings.storyId(), enabled,
-                storyAutoCardsSettings.updateExisting(), storyAutoCardsSettings.createNew(),
-                storyAutoCardsSettings.pinNew(), storyAutoCardsSettings.previewFirst());
+        storyAutoCardsSettings = SettingsCoordinator.withEnabled(storyAutoCardsSettings, enabled);
         persistStoryAutoCardsSettings();
         updateAutoCardsRunButtonState();
     }
@@ -1238,14 +1194,12 @@ public class App extends Application
         {
             return;
         }
-        int capped = Math.max(0, value);
-        if (capped == appAutoCardsSettings.cooldownTurns())
+        AppAutoCardsSettings updated = SettingsCoordinator.withCooldownTurns(appAutoCardsSettings, value);
+        if (updated.cooldownTurns() == appAutoCardsSettings.cooldownTurns())
         {
             return;
         }
-        appAutoCardsSettings = new AppAutoCardsSettings(capped, appAutoCardsSettings.maxCardsPerRun(),
-                appAutoCardsSettings.candidateWindow(), appAutoCardsSettings.cardLengthLimit(),
-                appAutoCardsSettings.summarizeInsteadOfTrim(), appAutoCardsSettings.candidateSelectionMode());
+        appAutoCardsSettings = updated;
         persistAppAutoCardsSettings();
     }
 
@@ -1255,14 +1209,12 @@ public class App extends Application
         {
             return;
         }
-        int capped = Math.max(1, value);
-        if (capped == appAutoCardsSettings.maxCardsPerRun())
+        AppAutoCardsSettings updated = SettingsCoordinator.withMaxCardsPerRun(appAutoCardsSettings, value);
+        if (updated.maxCardsPerRun() == appAutoCardsSettings.maxCardsPerRun())
         {
             return;
         }
-        appAutoCardsSettings = new AppAutoCardsSettings(appAutoCardsSettings.cooldownTurns(), capped,
-                appAutoCardsSettings.candidateWindow(), appAutoCardsSettings.cardLengthLimit(),
-                appAutoCardsSettings.summarizeInsteadOfTrim(), appAutoCardsSettings.candidateSelectionMode());
+        appAutoCardsSettings = updated;
         persistAppAutoCardsSettings();
     }
 
@@ -1272,14 +1224,12 @@ public class App extends Application
         {
             return;
         }
-        int capped = Math.max(1, value);
-        if (capped == appAutoCardsSettings.candidateWindow())
+        AppAutoCardsSettings updated = SettingsCoordinator.withCandidateWindow(appAutoCardsSettings, value);
+        if (updated.candidateWindow() == appAutoCardsSettings.candidateWindow())
         {
             return;
         }
-        appAutoCardsSettings = new AppAutoCardsSettings(appAutoCardsSettings.cooldownTurns(),
-                appAutoCardsSettings.maxCardsPerRun(), capped, appAutoCardsSettings.cardLengthLimit(),
-                appAutoCardsSettings.summarizeInsteadOfTrim(), appAutoCardsSettings.candidateSelectionMode());
+        appAutoCardsSettings = updated;
         persistAppAutoCardsSettings();
     }
 
@@ -1293,9 +1243,7 @@ public class App extends Application
         {
             return;
         }
-        storyAutoCardsSettings = new StoryAutoCardsSettings(storyAutoCardsSettings.storyId(),
-                storyAutoCardsSettings.enabled(), value, storyAutoCardsSettings.createNew(),
-                storyAutoCardsSettings.pinNew(), storyAutoCardsSettings.previewFirst());
+        storyAutoCardsSettings = SettingsCoordinator.withUpdateExisting(storyAutoCardsSettings, value);
         persistStoryAutoCardsSettings();
     }
 
@@ -1309,9 +1257,7 @@ public class App extends Application
         {
             return;
         }
-        storyAutoCardsSettings = new StoryAutoCardsSettings(storyAutoCardsSettings.storyId(),
-                storyAutoCardsSettings.enabled(), storyAutoCardsSettings.updateExisting(), value,
-                storyAutoCardsSettings.pinNew(), storyAutoCardsSettings.previewFirst());
+        storyAutoCardsSettings = SettingsCoordinator.withCreateNew(storyAutoCardsSettings, value);
         persistStoryAutoCardsSettings();
     }
 
@@ -1325,9 +1271,7 @@ public class App extends Application
         {
             return;
         }
-        storyAutoCardsSettings = new StoryAutoCardsSettings(storyAutoCardsSettings.storyId(),
-                storyAutoCardsSettings.enabled(), storyAutoCardsSettings.updateExisting(),
-                storyAutoCardsSettings.createNew(), value, storyAutoCardsSettings.previewFirst());
+        storyAutoCardsSettings = SettingsCoordinator.withPinNew(storyAutoCardsSettings, value);
         persistStoryAutoCardsSettings();
     }
 
@@ -1341,9 +1285,7 @@ public class App extends Application
         {
             return;
         }
-        storyAutoCardsSettings = new StoryAutoCardsSettings(storyAutoCardsSettings.storyId(),
-                storyAutoCardsSettings.enabled(), storyAutoCardsSettings.updateExisting(),
-                storyAutoCardsSettings.createNew(), storyAutoCardsSettings.pinNew(), value);
+        storyAutoCardsSettings = SettingsCoordinator.withPreviewFirst(storyAutoCardsSettings, value);
         persistStoryAutoCardsSettings();
     }
 
@@ -1353,14 +1295,12 @@ public class App extends Application
         {
             return;
         }
-        int capped = Math.max(1, value);
-        if (capped == appAutoCardsSettings.cardLengthLimit())
+        AppAutoCardsSettings updated = SettingsCoordinator.withCardLengthLimit(appAutoCardsSettings, value);
+        if (updated.cardLengthLimit() == appAutoCardsSettings.cardLengthLimit())
         {
             return;
         }
-        appAutoCardsSettings = new AppAutoCardsSettings(appAutoCardsSettings.cooldownTurns(),
-                appAutoCardsSettings.maxCardsPerRun(), appAutoCardsSettings.candidateWindow(), capped,
-                appAutoCardsSettings.summarizeInsteadOfTrim(), appAutoCardsSettings.candidateSelectionMode());
+        appAutoCardsSettings = updated;
         persistAppAutoCardsSettings();
     }
 
@@ -1374,9 +1314,7 @@ public class App extends Application
         {
             return;
         }
-        appAutoCardsSettings = new AppAutoCardsSettings(appAutoCardsSettings.cooldownTurns(),
-                appAutoCardsSettings.maxCardsPerRun(), appAutoCardsSettings.candidateWindow(),
-                appAutoCardsSettings.cardLengthLimit(), value, appAutoCardsSettings.candidateSelectionMode());
+        appAutoCardsSettings = SettingsCoordinator.withSummarizeInsteadOfTrim(appAutoCardsSettings, value);
         persistAppAutoCardsSettings();
     }
 
@@ -1395,9 +1333,8 @@ public class App extends Application
         {
             return;
         }
-        modelAutoCardsSettings = new ModelAutoCardsSettings(modelAutoCardsSettings.modelName(), createPrompt, updatePrompt,
-                summarizePrompt, modelAutoCardsSettings.maxTokensCreate(), modelAutoCardsSettings.maxTokensUpdate(),
-                modelAutoCardsSettings.maxTokensSummarize());
+        modelAutoCardsSettings = SettingsCoordinator.withPrompts(modelAutoCardsSettings, createPrompt, updatePrompt,
+                summarizePrompt);
         persistModelAutoCardsSettings();
     }
 
@@ -1420,9 +1357,8 @@ public class App extends Application
         {
             return;
         }
-        modelAutoCardsSettings = new ModelAutoCardsSettings(modelAutoCardsSettings.modelName(),
-                modelAutoCardsSettings.createPrompt(), modelAutoCardsSettings.updatePrompt(),
-                modelAutoCardsSettings.summarizePrompt(), createTokens, updateTokens, summarizeTokens);
+        modelAutoCardsSettings = SettingsCoordinator.withTokenCaps(modelAutoCardsSettings,
+                createTokens, updateTokens, summarizeTokens);
         persistModelAutoCardsSettings();
     }
 
@@ -1518,7 +1454,7 @@ public class App extends Application
             return new AutoCardsResult(0, 0, true);
         }
 
-        List<AutoCardCandidate> candidates = extractAutoCardCandidates(excerpt, currentCards,
+        List<AutoCards.Candidate> candidates = extractAutoCardCandidates(excerpt, currentCards,
                 appAutoCardsSettings.maxCardsPerRun());
         if (candidates.isEmpty())
         {
@@ -1541,7 +1477,7 @@ public class App extends Application
         boolean summarize = appAutoCardsSettings.summarizeInsteadOfTrim();
 
         boolean preview = storyAutoCardsSettings.previewFirst();
-        for (AutoCardCandidate candidate : candidates)
+        for (AutoCards.Candidate candidate : candidates)
         {
             if (candidate.title().isBlank())
             {
@@ -1658,33 +1594,34 @@ public class App extends Application
         return sb.toString().trim();
     }
 
-    private List<AutoCardCandidate> extractAutoCardCandidates(String excerpt, List<StoryCard> currentCards, int maxCount)
+    private List<AutoCards.Candidate> extractAutoCardCandidates(String excerpt, List<StoryCard> currentCards, int maxCount)
             throws IOException, InterruptedException
     {
-        String mode = normalizeAutoCardsCandidateSelectionMode(appAutoCardsSettings.candidateSelectionMode());
-        if (AUTO_CARDS_CANDIDATION_MODE_ASK_MODEL.equals(mode))
+        String mode = AutoCards.normalizeCandidateSelectionMode(appAutoCardsSettings.candidateSelectionMode());
+        if (AutoCards.CANDIDATE_SELECTION_MODE_ASK_MODEL.equals(mode))
         {
             return extractAutoCardCandidatesByModel(excerpt, currentCards, maxCount);
         }
-        return extractAutoCardCandidatesByHeuristics(excerpt, currentCards, maxCount);
+        return AutoCards.extractCandidatesByHeuristics(excerpt, currentCards, maxCount);
     }
 
-    private List<AutoCardCandidate> extractAutoCardCandidatesByModel(String excerpt, List<StoryCard> currentCards,
+    private List<AutoCards.Candidate> extractAutoCardCandidatesByModel(String excerpt, List<StoryCard> currentCards,
             int maxCount)
             throws IOException, InterruptedException
     {
         StringBuilder existing = new StringBuilder();
         for (StoryCard card : currentCards)
         {
-            if (card.title() != null && !card.title().isBlank())
+            if (card.title() == null || card.title().isBlank())
             {
-                existing.append("- ").append(card.title().trim());
-                if (!card.triggers().isBlank())
-                {
-                    existing.append(" (").append(card.triggers()).append(")");
-                }
-                existing.append("\n");
+                continue;
             }
+            existing.append("- ").append(card.title().trim());
+            if (!card.triggers().isBlank())
+            {
+                existing.append(" (").append(card.triggers()).append(")");
+            }
+            existing.append("\n");
         }
 
         String system = "You are a JSON generator. Respond with a JSON array only.";
@@ -1693,325 +1630,23 @@ public class App extends Application
                 + " story card candidates that should either be added as new story cards to track, or are existing story cards that need updates for new details. Story cards are meant to detail one singular character, location or critical object that are important to the story. They should not attempt act as a summarization of the story, combine topics (Character + Event), or as 'memories'. Do not suggest a story card candidate for the main character/player. If no candidates need added or removed, return empty. Return JSON array of objects with "
                 + "\"title\" and \"triggers\" (comma separated keywords). No extra text.";
 
-        String prompt = buildAutoCardsChatPrompt(system, user);
+        String prompt = AutoCards.buildChatPrompt(system, user);
         int tokenCap = Math.max(128, modelAutoCardsSettings.maxTokensCreate());
         GenerationSettings autoSettings = buildAutoCardsGenerationSettings(tokenCap);
         String response = ollamaClient.generate(prompt, autoSettings);
-        return parseAutoCardCandidates(response, maxCount);
+        return AutoCards.parseCandidatesFromModelResponse(response, maxCount);
     }
 
-    private List<AutoCardCandidate> extractAutoCardCandidatesByHeuristics(String excerpt, List<StoryCard> currentCards,
-            int maxCount)
-    {
-        if (excerpt == null || excerpt.isBlank() || maxCount <= 0)
-        {
-            return List.of();
-        }
-        Map<String, StoryCard> existingByTitle = new HashMap<>();
-        for (StoryCard card : currentCards)
-        {
-            if (card.title() == null || card.title().isBlank())
-            {
-                continue;
-            }
-            String titleKey = canonicalizeHeuristicCandidateKey(card.title());
-            if (!titleKey.isBlank())
-            {
-                existingByTitle.putIfAbsent(titleKey, card);
-            }
-            for (String titleToken : card.title().split("\\s+"))
-            {
-                String titleTokenKey = canonicalizeHeuristicCandidateKey(titleToken);
-                if (titleTokenKey.length() >= 3 && !AUTO_CARD_STOPWORDS.contains(titleTokenKey))
-                {
-                    existingByTitle.putIfAbsent(titleTokenKey, card);
-                }
-            }
-            for (String trigger : splitTriggers(card.triggers()))
-            {
-                String triggerKey = canonicalizeHeuristicCandidateKey(trigger);
-                if (!triggerKey.isBlank())
-                {
-                    existingByTitle.putIfAbsent(triggerKey, card);
-                }
-            }
-        }
-
-        Map<String, Integer> hitCounts = new HashMap<>();
-        Map<String, Integer> sentenceStartHitCounts = new HashMap<>();
-        Map<String, Integer> questionOrExclaimHits = new HashMap<>();
-        Map<String, String> orderedTitles = new LinkedHashMap<>();
-        Matcher matcher = AUTO_CARD_PROPER_NOUN_PATTERN.matcher(excerpt);
-        while (matcher.find())
-        {
-            String title = normalizeHeuristicCandidateTitle(matcher.group(1));
-            if (!isValidHeuristicCandidateTitle(title))
-            {
-                continue;
-            }
-            String key = canonicalizeHeuristicCandidateKey(title);
-            if (key.isBlank())
-            {
-                continue;
-            }
-            orderedTitles.putIfAbsent(key, title);
-            hitCounts.merge(key, 1, Integer::sum);
-            if (isHeuristicSentenceStart(excerpt, matcher.start()))
-            {
-                sentenceStartHitCounts.merge(key, 1, Integer::sum);
-            }
-            if (isHeuristicQuestionOrExclamation(excerpt, matcher.end()))
-            {
-                questionOrExclaimHits.merge(key, 1, Integer::sum);
-            }
-        }
-
-        Map<String, AutoCardCandidate> candidates = new LinkedHashMap<>();
-        for (Map.Entry<String, String> entry : orderedTitles.entrySet())
-        {
-            if (candidates.size() >= maxCount)
-            {
-                break;
-            }
-            String key = entry.getKey();
-            String title = entry.getValue();
-            StoryCard existing = existingByTitle.get(key);
-            boolean singleWord = title.indexOf(' ') < 0;
-            if (existing == null && singleWord && hitCounts.getOrDefault(key, 0) < 2)
-            {
-                continue;
-            }
-            if (existing == null
-                    && sentenceStartHitCounts.getOrDefault(key, 0) == hitCounts.getOrDefault(key, 0)
-                    && hitCounts.getOrDefault(key, 0) < 3)
-            {
-                continue;
-            }
-            if (existing == null
-                    && questionOrExclaimHits.getOrDefault(key, 0) == hitCounts.getOrDefault(key, 0)
-                    && hitCounts.getOrDefault(key, 0) < 3)
-            {
-                continue;
-            }
-            String resolvedTitle = existing == null ? title : existing.title();
-            String triggers = existing == null ? buildHeuristicCandidateTriggers(resolvedTitle) : existing.triggers();
-            candidates.put(key, new AutoCardCandidate(resolvedTitle, triggers));
-        }
-        return new ArrayList<>(candidates.values());
-    }
-
-    private String normalizeHeuristicCandidateTitle(String value)
-    {
-        if (value == null)
-        {
-            return "";
-        }
-        String cleaned = value.trim().replaceAll("^[\\p{Punct}\\s]+", "").replaceAll("[\\p{Punct}\\s]+$", "");
-        if (cleaned.isBlank())
-        {
-            return "";
-        }
-        String[] words = cleaned.split("\\s+");
-        List<String> normalizedWords = new ArrayList<>(words.length);
-        for (String word : words)
-        {
-            String normalizedWord = normalizeHeuristicCandidateWord(word);
-            if (normalizedWord.isBlank())
-            {
-                return "";
-            }
-            normalizedWords.add(normalizedWord);
-        }
-        return String.join(" ", normalizedWords);
-    }
-
-    private String normalizeHeuristicCandidateWord(String value)
-    {
-        String cleaned = value.replaceAll("^[^\\p{L}\\p{N}]+", "").replaceAll("[^\\p{L}\\p{N}'’-]+$", "");
-        if (cleaned.isBlank())
-        {
-            return "";
-        }
-        String lower = cleaned.toLowerCase(Locale.ROOT);
-        if (isContractionWord(lower))
-        {
-            return "";
-        }
-        cleaned = cleaned.replaceAll("(?i)['’]s$", "");
-        return cleaned.replaceAll("\\s+", " ").trim();
-    }
-
-    private boolean isContractionWord(String value)
-    {
-        int apostropheIndex = Math.max(value.lastIndexOf('\''), value.lastIndexOf('’'));
-        if (apostropheIndex <= 0 || apostropheIndex >= value.length() - 1)
-        {
-            return false;
-        }
-        String suffix = value.substring(apostropheIndex + 1);
-        return AUTO_CARD_CONTRACTION_SUFFIXES.contains(suffix);
-    }
-
-    private String canonicalizeHeuristicCandidateKey(String value)
-    {
-        String normalized = normalizeHeuristicCandidateTitle(value);
-        return normalized.toLowerCase(Locale.ROOT);
-    }
-
-    private boolean isHeuristicSentenceStart(String text, int index)
-    {
-        int i = index - 1;
-        while (i >= 0 && Character.isWhitespace(text.charAt(i)))
-        {
-            i--;
-        }
-        if (i < 0)
-        {
-            return true;
-        }
-        char previous = text.charAt(i);
-        return previous == '.' || previous == '!' || previous == '?' || previous == ':' || previous == ';'
-                || previous == '\n';
-    }
-
-    private boolean isHeuristicQuestionOrExclamation(String text, int endIndex)
-    {
-        int i = endIndex;
-        while (i < text.length() && Character.isWhitespace(text.charAt(i)))
-        {
-            i++;
-        }
-        if (i >= text.length())
-        {
-            return false;
-        }
-        char c = text.charAt(i);
-        return c == '?' || c == '!';
-    }
-
-    private List<String> splitTriggers(String triggers)
-    {
-        if (triggers == null || triggers.isBlank())
-        {
-            return List.of();
-        }
-        String[] parts = triggers.split("[,\\n;|]");
-        List<String> out = new ArrayList<>(parts.length);
-        for (String part : parts)
-        {
-            String trimmed = part.trim();
-            if (!trimmed.isBlank())
-            {
-                out.add(trimmed);
-            }
-        }
-        return out;
-    }
-
-    private boolean isValidHeuristicCandidateTitle(String title)
-    {
-        if (title == null || title.isBlank() || title.length() < 2)
-        {
-            return false;
-        }
-        String lower = title.toLowerCase(Locale.ROOT);
-        if (AUTO_CARD_STOPWORDS.contains(lower))
-        {
-            return false;
-        }
-        String[] words = title.split("\\s+");
-        if (words.length == 1)
-        {
-            return !AUTO_CARD_STOPWORDS.contains(words[0].toLowerCase(Locale.ROOT));
-        }
-        int nonStopWords = 0;
-        for (String word : words)
-        {
-            if (!AUTO_CARD_STOPWORDS.contains(word.toLowerCase(Locale.ROOT)))
-            {
-                nonStopWords++;
-            }
-        }
-        return nonStopWords > 0;
-    }
-
-    private String buildHeuristicCandidateTriggers(String title)
-    {
-        if (title == null || title.isBlank())
-        {
-            return "";
-        }
-        LinkedHashSet<String> triggers = new LinkedHashSet<>();
-        String key = canonicalizeHeuristicCandidateKey(title);
-        if (!key.isBlank())
-        {
-            triggers.add(key);
-        }
-        for (String token : title.split("\\s+"))
-        {
-            String normalizedToken = normalizeHeuristicCandidateWord(token).toLowerCase(Locale.ROOT);
-            if (normalizedToken.length() >= 3 && !AUTO_CARD_STOPWORDS.contains(normalizedToken))
-            {
-                triggers.add(normalizedToken);
-            }
-        }
-        return String.join(", ", triggers);
-    }
-
-    private List<AutoCardCandidate> parseAutoCardCandidates(String response, int maxCount)
-    {
-        if (response == null || response.isBlank())
-        {
-            return List.of();
-        }
-        String json = extractJsonArray(response);
-        if (json == null)
-        {
-            json = extractJsonObject(response);
-            if (json == null)
-            {
-                return List.of();
-            }
-            json = "[" + json + "]";
-        }
-
-        try
-        {
-            JSONArray array = new JSONArray(json);
-            List<AutoCardCandidate> results = new ArrayList<>();
-            for (int i = 0; i < array.length() && results.size() < maxCount; i++)
-            {
-                Object entry = array.get(i);
-                if (!(entry instanceof JSONObject obj))
-                {
-                    continue;
-                }
-                String title = obj.optString("title", "").trim();
-                if (title.isBlank())
-                {
-                    continue;
-                }
-                String triggers = obj.optString("triggers", "").trim();
-                results.add(new AutoCardCandidate(title, triggers));
-            }
-            return results;
-        }
-        catch (Exception e)
-        {
-            return List.of();
-        }
-    }
-
-    private String generateAutoCardCreate(AutoCardCandidate candidate, String excerpt)
+    private String generateAutoCardCreate(AutoCards.Candidate candidate, String excerpt)
             throws IOException, InterruptedException
     {
-        AutoCardPromptParts promptParts = buildAutoCardPromptParts(
+        AutoCards.PromptParts promptParts = AutoCards.buildPromptParts(
                 modelAutoCardsSettings.createPrompt(),
                 candidate.title(),
                 candidate.triggers(),
                 "",
                 excerpt);
-        String prompt = buildAutoCardsChatPrompt(promptParts.system(), promptParts.user());
+        String prompt = AutoCards.buildChatPrompt(promptParts.system(), promptParts.user());
         GenerationSettings autoSettings = buildAutoCardsGenerationSettings(modelAutoCardsSettings.maxTokensCreate());
         return normalizeOutput(ollamaClient.generate(prompt, autoSettings));
     }
@@ -2019,26 +1654,26 @@ public class App extends Application
     private String generateAutoCardUpdate(StoryCard existing, String excerpt)
             throws IOException, InterruptedException
     {
-        AutoCardPromptParts promptParts = buildAutoCardPromptParts(
+        AutoCards.PromptParts promptParts = AutoCards.buildPromptParts(
                 modelAutoCardsSettings.updatePrompt(),
                 existing.title(),
                 existing.triggers(),
                 existing.content(),
                 excerpt);
-        String prompt = buildAutoCardsChatPrompt(promptParts.system(), promptParts.user());
+        String prompt = AutoCards.buildChatPrompt(promptParts.system(), promptParts.user());
         GenerationSettings autoSettings = buildAutoCardsGenerationSettings(modelAutoCardsSettings.maxTokensUpdate());
         return normalizeOutput(ollamaClient.generate(prompt, autoSettings));
     }
 
     private String generateAutoCardSummary(String content) throws IOException, InterruptedException
     {
-        AutoCardPromptParts promptParts = buildAutoCardPromptParts(
+        AutoCards.PromptParts promptParts = AutoCards.buildPromptParts(
                 modelAutoCardsSettings.summarizePrompt(),
                 "",
                 "",
                 content,
                 "");
-        String prompt = buildAutoCardsChatPrompt(promptParts.system(), promptParts.user());
+        String prompt = AutoCards.buildChatPrompt(promptParts.system(), promptParts.user());
         GenerationSettings autoSettings = buildAutoCardsGenerationSettings(modelAutoCardsSettings.maxTokensSummarize());
         return normalizeOutput(ollamaClient.generate(prompt, autoSettings));
     }
@@ -2059,23 +1694,10 @@ public class App extends Application
                 {
                     return summarized;
                 }
-                return trimCardContent(summarized, limit);
+                return AutoCards.truncateContent(summarized, limit);
             }
         }
-        return trimCardContent(content, limit);
-    }
-
-    private String trimCardContent(String content, int limit)
-    {
-        if (content.length() <= limit)
-        {
-            return content;
-        }
-        if (limit <= 3)
-        {
-            return content.substring(0, limit);
-        }
-        return content.substring(0, limit - 3) + "...";
+        return AutoCards.truncateContent(content, limit);
     }
 
     private GenerationSettings buildAutoCardsGenerationSettings(int maxTokens)
@@ -2085,106 +1707,6 @@ public class App extends Application
                 activeModelSettings.topP(), activeModelSettings.minP(), activeModelSettings.presencePenalty(),
                 activeModelSettings.frequencyPenalty(), activeModelSettings.repetitionPenalty(), appSettings.minStoryWindow(),
                 appSettings.storyCardLookback(), appSettings.anPlacement());
-    }
-
-    private String buildAutoCardsChatPrompt(String system, String user)
-    {
-        String systemText = system == null ? "" : system.trim();
-        String userText = user == null ? "" : user.trim();
-        StringBuilder prompt = new StringBuilder();
-        if (!systemText.isBlank())
-        {
-            prompt.append("<|im_start|>system\n")
-                    .append(systemText)
-                    .append("<|im_end|>\n");
-        }
-        prompt.append("<|im_start|>user\n")
-                .append(userText)
-                .append("<|im_end|>\n")
-                .append("<|im_start|>assistant\n");
-        return prompt.toString();
-    }
-
-    private AutoCardPromptParts buildAutoCardPromptParts(String template, String title, String triggers, String content,
-            String excerpt)
-    {
-        String rendered = applyPromptTemplate(template, title, triggers, content, excerpt);
-        return splitAutoCardPrompt(rendered);
-    }
-
-    private AutoCardPromptParts splitAutoCardPrompt(String prompt)
-    {
-        if (prompt == null)
-        {
-            return new AutoCardPromptParts("", "");
-        }
-        String raw = prompt.trim();
-        if (raw.isBlank())
-        {
-            return new AutoCardPromptParts("", "");
-        }
-
-        String lowered = raw.toLowerCase(Locale.ROOT);
-        int systemIndex = lowered.indexOf(AUTO_CARDS_PROMPT_SYSTEM_TAG);
-        int userIndex = lowered.indexOf(AUTO_CARDS_PROMPT_USER_TAG);
-
-        if (systemIndex < 0 && userIndex < 0)
-        {
-            return new AutoCardPromptParts("", raw);
-        }
-        if (systemIndex >= 0 && userIndex >= 0)
-        {
-            if (systemIndex < userIndex)
-            {
-                String system = raw.substring(systemIndex + AUTO_CARDS_PROMPT_SYSTEM_TAG.length(), userIndex).trim();
-                String user = raw.substring(userIndex + AUTO_CARDS_PROMPT_USER_TAG.length()).trim();
-                return new AutoCardPromptParts(system, user);
-            }
-            String user = raw.substring(userIndex + AUTO_CARDS_PROMPT_USER_TAG.length(), systemIndex).trim();
-            String system = raw.substring(systemIndex + AUTO_CARDS_PROMPT_SYSTEM_TAG.length()).trim();
-            return new AutoCardPromptParts(system, user);
-        }
-        if (systemIndex >= 0)
-        {
-            String system = raw.substring(systemIndex + AUTO_CARDS_PROMPT_SYSTEM_TAG.length()).trim();
-            return new AutoCardPromptParts(system, "");
-        }
-        String user = raw.substring(userIndex + AUTO_CARDS_PROMPT_USER_TAG.length()).trim();
-        return new AutoCardPromptParts("", user);
-    }
-
-    private String extractJsonArray(String text)
-    {
-        int start = text.indexOf('[');
-        int end = text.lastIndexOf(']');
-        if (start >= 0 && end > start)
-        {
-            return text.substring(start, end + 1);
-        }
-        return null;
-    }
-
-    private String extractJsonObject(String text)
-    {
-        int start = text.indexOf('{');
-        int end = text.lastIndexOf('}');
-        if (start >= 0 && end > start)
-        {
-            return text.substring(start, end + 1);
-        }
-        return null;
-    }
-
-    private String applyPromptTemplate(String template, String title, String triggers, String content, String excerpt)
-    {
-        if (template == null)
-        {
-            return "";
-        }
-        return template.replace("%{title}", title == null ? "" : title)
-                .replace("%{triggers}", triggers == null ? "" : triggers)
-                .replace("%{content}", content == null ? "" : content)
-                .replace("%{excerpt}", excerpt == null ? "" : excerpt);
     }
 
     private void refreshStoryList(String selectedId)
@@ -2296,7 +1818,7 @@ public class App extends Application
         {
             try
             {
-                Story imported = importAiDungeonAdventure(Path.of(fileField.getText()));
+                Story imported = aiDungeonImports.importAdventure(Path.of(fileField.getText()));
                 refreshStoryList(imported.id());
                 loadStory(imported, true);
                 dialog.close();
@@ -2934,7 +2456,8 @@ public class App extends Application
         {
             try
             {
-                int imported = importAiDungeonCards(Path.of(fileField.getText()), replaceBox.isSelected());
+                int imported = aiDungeonImports.importStoryCards(Path.of(fileField.getText()), activeStory.id(),
+                        replaceBox.isSelected());
                 refreshCardList(activeStory.id());
                 dialog.close();
                 showInfo("Imported " + imported + " cards.");
@@ -3088,387 +2611,6 @@ public class App extends Application
         });
 
         return dialog.showAndWait().orElse(null);
-    }
-
-    private int importAiDungeonCards(Path path, boolean replaceExisting) throws Exception
-    {
-        String raw = Files.readString(path, StandardCharsets.UTF_8);
-        JSONArray array = new JSONArray(raw);
-
-        List<StoryCard> existing = cardRepository.listForStory(activeStory.id());
-        Map<String, StoryCard> byTitle = new HashMap<>();
-        for (StoryCard card : existing)
-        {
-            byTitle.put(card.title(), card);
-        }
-
-        if (replaceExisting)
-        {
-            cardRepository.deleteForStory(activeStory.id());
-            byTitle.clear();
-        }
-
-        int imported = 0;
-        for (int i = 0; i < array.length(); i++)
-        {
-            JSONObject obj = array.optJSONObject(i);
-            if (obj == null)
-            {
-                continue;
-            }
-            String title = obj.optString("title", "").trim();
-            String triggers = obj.optString("keys", "").trim();
-            String content = obj.optString("value", "").trim();
-            if (title.isBlank())
-            {
-                continue;
-            }
-
-            StoryCard existingCard = byTitle.get(title);
-            if (existingCard != null)
-            {
-                StoryCard updated = new StoryCard(existingCard.id(), existingCard.storyId(), title, triggers, content, false);
-                cardRepository.update(updated);
-            }
-            else
-            {
-                StoryCard created = new StoryCard(Ids.newId(), activeStory.id(), title, triggers, content, false);
-                cardRepository.insert(created);
-            }
-            imported++;
-        }
-        return imported;
-    }
-
-    private Story importAiDungeonAdventure(Path path) throws Exception
-    {
-        try (ZipFile zipFile = new ZipFile(path.toFile()))
-        {
-            JSONObject metadata = readZipJson(zipFile, "metadata.json");
-            if (metadata == null)
-            {
-                throw new IllegalStateException("metadata.json not found in archive.");
-            }
-
-            JSONObject adventure = metadata.optJSONObject("adventure");
-            JSONObject state = metadata.optJSONObject("state");
-
-            String title = adventure == null ? "" : adventure.optString("title", "").trim();
-            if (title.isBlank())
-            {
-                title = "Imported Adventure";
-            }
-            String plotEssentials = adventure == null ? "" : adventure.optString("memory", "");
-            String authorNote = adventure == null ? "" : adventure.optString("authorsNote", "");
-
-            String systemPrompt = extractAdventureSystemPrompt(state);
-            if (systemPrompt.isBlank())
-            {
-                systemPrompt = DEFAULT_SYSTEM_PROMPT;
-            }
-
-            String now = Timestamps.now();
-            Story story = new Story(Ids.newId(), title, systemPrompt, plotEssentials, authorNote, now, now);
-            storyRepository.insert(story);
-
-            List<StoryCard> cards = parseAdventureStoryCards(state, story.id());
-            for (StoryCard card : cards)
-            {
-                cardRepository.insert(card);
-            }
-
-            List<ActionChunk> actionChunks = loadAdventureActions(zipFile);
-            int position = 1;
-            for (ActionChunk chunk : actionChunks)
-            {
-                for (JSONObject action : chunk.actions)
-                {
-                    AdventureAction mapped = mapAdventureAction(action);
-                    if (mapped == null)
-                    {
-                        continue;
-                    }
-                    String text = mapped.text();
-                    if (text.isBlank())
-                    {
-                        continue;
-                    }
-                    Block block = new Block(Ids.newId(), story.id(), mapped.role(), text, Timestamps.now(), position++);
-                    blockRepository.insert(block);
-                }
-            }
-
-            return story;
-        }
-    }
-
-    private JSONObject readZipJson(ZipFile zipFile, String name) throws IOException
-    {
-        ZipEntry entry = zipFile.getEntry(name);
-        if (entry == null)
-        {
-            return null;
-        }
-        try (var stream = zipFile.getInputStream(entry))
-        {
-            String raw = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
-            return new JSONObject(raw);
-        }
-    }
-
-    private String extractAdventureSystemPrompt(JSONObject state)
-    {
-        if (state == null)
-        {
-            return "";
-        }
-        Object instructions = state.opt("instructions");
-        if (instructions instanceof JSONObject obj)
-        {
-            Object custom = obj.opt("custom");
-            if (custom instanceof String customText && !customText.isBlank())
-            {
-                return customText;
-            }
-            if (custom instanceof JSONObject customObj)
-            {
-                String[] keys = { "text", "prompt", "content", "value" };
-                for (String key : keys)
-                {
-                    String value = customObj.optString(key, "").trim();
-                    if (!value.isBlank())
-                    {
-                        return value;
-                    }
-                }
-            }
-            String fallback = obj.optString("text", "").trim();
-            if (!fallback.isBlank())
-            {
-                return fallback;
-            }
-        }
-        else if (instructions instanceof String text)
-        {
-            return text.trim();
-        }
-        return "";
-    }
-
-    private List<StoryCard> parseAdventureStoryCards(JSONObject state, String storyId)
-    {
-        if (state == null)
-        {
-            return List.of();
-        }
-        JSONArray array = state.optJSONArray("storyCards");
-        if (array == null || array.length() == 0)
-        {
-            return List.of();
-        }
-
-        Map<String, StoryCard> byTitle = new HashMap<>();
-        for (int i = 0; i < array.length(); i++)
-        {
-            JSONObject obj = array.optJSONObject(i);
-            if (obj == null)
-            {
-                continue;
-            }
-            String title = readFirstNonBlank(obj, "title", "name");
-            if (title.isBlank())
-            {
-                continue;
-            }
-            String content = readFirstNonBlank(obj, "entry", "content", "text", "value");
-            String triggers = readStoryCardTriggers(obj);
-            boolean pinned = obj.optBoolean("pinned", false);
-            StoryCard card = new StoryCard(Ids.newId(), storyId, title, triggers, content, pinned);
-            byTitle.put(title.toLowerCase(), card);
-        }
-        return new ArrayList<>(byTitle.values());
-    }
-
-    private String readFirstNonBlank(JSONObject obj, String... keys)
-    {
-        for (String key : keys)
-        {
-            String value = obj.optString(key, "").trim();
-            if (!value.isBlank())
-            {
-                return value;
-            }
-        }
-        return "";
-    }
-
-    private String readStoryCardTriggers(JSONObject obj)
-    {
-        Object triggers = obj.opt("triggers");
-        String value = joinJsonList(triggers);
-        if (!value.isBlank())
-        {
-            return value;
-        }
-        Object keys = obj.opt("keys");
-        value = joinJsonList(keys);
-        if (!value.isBlank())
-        {
-            return value;
-        }
-        Object keywords = obj.opt("keywords");
-        value = joinJsonList(keywords);
-        if (!value.isBlank())
-        {
-            return value;
-        }
-        return "";
-    }
-
-    private String joinJsonList(Object value)
-    {
-        if (value instanceof String text)
-        {
-            return text.trim();
-        }
-        if (value instanceof JSONArray array)
-        {
-            List<String> parts = new ArrayList<>();
-            for (int i = 0; i < array.length(); i++)
-            {
-                Object entry = array.get(i);
-                if (entry instanceof String s)
-                {
-                    if (!s.isBlank())
-                    {
-                        parts.add(s.trim());
-                    }
-                }
-                else if (entry instanceof JSONObject obj)
-                {
-                    String text = readFirstNonBlank(obj, "text", "value", "name");
-                    if (!text.isBlank())
-                    {
-                        parts.add(text);
-                    }
-                }
-            }
-            return String.join(", ", parts);
-        }
-        return "";
-    }
-
-    private List<ActionChunk> loadAdventureActions(ZipFile zipFile) throws IOException
-    {
-        List<ActionChunk> chunks = new ArrayList<>();
-        Pattern pattern = Pattern.compile("^actions-(\\d+)\\.json$");
-        zipFile.stream()
-                .filter(entry -> !entry.isDirectory())
-                .forEach(entry ->
-                {
-                    Matcher matcher = pattern.matcher(entry.getName());
-                    if (!matcher.matches())
-                    {
-                        return;
-                    }
-                    try (var stream = zipFile.getInputStream(entry))
-                    {
-                        String raw = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
-                        JSONObject obj = new JSONObject(raw);
-                        int part = obj.optInt("partNumber", Integer.parseInt(matcher.group(1)));
-                        JSONArray actions = obj.optJSONArray("actions");
-                        if (actions == null)
-                        {
-                            actions = new JSONArray();
-                        }
-                        List<JSONObject> list = new ArrayList<>();
-                        for (int i = 0; i < actions.length(); i++)
-                        {
-                            JSONObject action = actions.optJSONObject(i);
-                            if (action != null)
-                            {
-                                list.add(action);
-                            }
-                        }
-                        chunks.add(new ActionChunk(part, list));
-                    }
-                    catch (Exception e)
-                    {
-                        throw new RuntimeException(e);
-                    }
-                });
-        chunks.sort(Comparator.comparingInt(chunk -> chunk.partNumber));
-        return chunks;
-    }
-
-    private AdventureAction mapAdventureAction(JSONObject action)
-    {
-        String type = action.optString("type", "").trim().toLowerCase();
-        String text = action.optString("text", "").trim();
-        if (text.isBlank())
-        {
-            return null;
-        }
-
-        return switch (type)
-        {
-        case "story", "continue", "start" -> new AdventureAction(Role.ASSISTANT, text);
-        case "do" -> new AdventureAction(Role.USER, normalizeAdventureActionText(text, false));
-        case "say" -> new AdventureAction(Role.USER, normalizeAdventureActionText(text, true));
-        default -> null;
-        };
-    }
-
-    private static final class ActionChunk
-    {
-        private final int partNumber;
-        private final List<JSONObject> actions;
-
-        private ActionChunk(int partNumber, List<JSONObject> actions)
-        {
-            this.partNumber = partNumber;
-            this.actions = actions;
-        }
-    }
-
-    private record AdventureAction(Role role, String text)
-    {
-    }
-
-    private String normalizeAdventureActionText(String text, boolean isSay)
-    {
-        String normalized = text.trim();
-        if (normalized.startsWith(">"))
-        {
-            normalized = normalized.substring(1).trim();
-        }
-        if (isSay)
-        {
-            String lower = normalized.toLowerCase();
-            if (!lower.startsWith("you say"))
-            {
-                String payload = normalized;
-                if (lower.startsWith("you "))
-                {
-                    payload = normalized.substring(4).trim();
-                }
-                String trimmed = payload.trim();
-                if (!(trimmed.startsWith("\"") && trimmed.endsWith("\"")))
-                {
-                    trimmed = "\"" + trimmed.replaceAll("^\"|\"$", "") + "\"";
-                }
-                normalized = "You say " + trimmed;
-            }
-        }
-        else
-        {
-            String lower = normalized.toLowerCase();
-            if (!lower.startsWith("you "))
-            {
-                normalized = "You " + normalized;
-            }
-        }
-        return normalized.trim();
     }
 
     private <T> T runOnUiThreadAndWait(java.util.concurrent.Callable<T> action)
@@ -3886,20 +3028,15 @@ public class App extends Application
 
     private void updateContextLimit(int value)
     {
-        int capped = Math.max(1024, Math.min(32768, value));
         int percent = minStoryPercentSlider == null ? 90 : (int) Math.round(minStoryPercentSlider.getValue());
-        int minWindow = (int) Math.round(capped * (percent / 100.0));
-        appSettings = new AppSettings(appSettings.ollamaUrl(), appSettings.selectedModel(), capped,
-                appSettings.responseLength(), minWindow, appSettings.storyCardLookback(), appSettings.anPlacement());
+        appSettings = SettingsCoordinator.withContextLimit(appSettings, value, percent);
         persistAppSettings();
         refreshGenerationSettings();
     }
 
     private void updateResponseLength(int value)
     {
-        int capped = Math.max(1, Math.min(250, value));
-        appSettings = new AppSettings(appSettings.ollamaUrl(), appSettings.selectedModel(), appSettings.contextLimit(), capped,
-                appSettings.minStoryWindow(), appSettings.storyCardLookback(), appSettings.anPlacement());
+        appSettings = SettingsCoordinator.withResponseLength(appSettings, value);
         persistAppSettings();
         refreshGenerationSettings();
     }
@@ -3910,10 +3047,7 @@ public class App extends Application
         {
             return;
         }
-        activeModelSettings = new ModelSettings(activeModelSettings.modelName(), activeModelSettings.active(), value,
-                activeModelSettings.topK(), activeModelSettings.topP(), activeModelSettings.minP(),
-                activeModelSettings.presencePenalty(), activeModelSettings.frequencyPenalty(),
-                activeModelSettings.repetitionPenalty());
+        activeModelSettings = SettingsCoordinator.withTemperature(activeModelSettings, value);
         persistModelSettings();
         refreshGenerationSettings();
     }
@@ -3924,10 +3058,7 @@ public class App extends Application
         {
             return;
         }
-        activeModelSettings = new ModelSettings(activeModelSettings.modelName(), activeModelSettings.active(),
-                activeModelSettings.temperature(), value, activeModelSettings.topP(), activeModelSettings.minP(),
-                activeModelSettings.presencePenalty(), activeModelSettings.frequencyPenalty(),
-                activeModelSettings.repetitionPenalty());
+        activeModelSettings = SettingsCoordinator.withTopK(activeModelSettings, value);
         persistModelSettings();
         refreshGenerationSettings();
     }
@@ -3938,10 +3069,7 @@ public class App extends Application
         {
             return;
         }
-        activeModelSettings = new ModelSettings(activeModelSettings.modelName(), activeModelSettings.active(),
-                activeModelSettings.temperature(), activeModelSettings.topK(), value, activeModelSettings.minP(),
-                activeModelSettings.presencePenalty(), activeModelSettings.frequencyPenalty(),
-                activeModelSettings.repetitionPenalty());
+        activeModelSettings = SettingsCoordinator.withTopP(activeModelSettings, value);
         persistModelSettings();
         refreshGenerationSettings();
     }
@@ -3952,10 +3080,7 @@ public class App extends Application
         {
             return;
         }
-        activeModelSettings = new ModelSettings(activeModelSettings.modelName(), activeModelSettings.active(),
-                activeModelSettings.temperature(), activeModelSettings.topK(), activeModelSettings.topP(), value,
-                activeModelSettings.presencePenalty(), activeModelSettings.frequencyPenalty(),
-                activeModelSettings.repetitionPenalty());
+        activeModelSettings = SettingsCoordinator.withMinP(activeModelSettings, value);
         persistModelSettings();
         refreshGenerationSettings();
     }
@@ -3966,10 +3091,7 @@ public class App extends Application
         {
             return;
         }
-        activeModelSettings = new ModelSettings(activeModelSettings.modelName(), activeModelSettings.active(),
-                activeModelSettings.temperature(), activeModelSettings.topK(), activeModelSettings.topP(),
-                activeModelSettings.minP(), value, activeModelSettings.frequencyPenalty(),
-                activeModelSettings.repetitionPenalty());
+        activeModelSettings = SettingsCoordinator.withPresencePenalty(activeModelSettings, value);
         persistModelSettings();
         refreshGenerationSettings();
     }
@@ -3980,10 +3102,7 @@ public class App extends Application
         {
             return;
         }
-        activeModelSettings = new ModelSettings(activeModelSettings.modelName(), activeModelSettings.active(),
-                activeModelSettings.temperature(), activeModelSettings.topK(), activeModelSettings.topP(),
-                activeModelSettings.minP(), activeModelSettings.presencePenalty(), value,
-                activeModelSettings.repetitionPenalty());
+        activeModelSettings = SettingsCoordinator.withFrequencyPenalty(activeModelSettings, value);
         persistModelSettings();
         refreshGenerationSettings();
     }
@@ -3994,36 +3113,28 @@ public class App extends Application
         {
             return;
         }
-        activeModelSettings = new ModelSettings(activeModelSettings.modelName(), activeModelSettings.active(),
-                activeModelSettings.temperature(), activeModelSettings.topK(), activeModelSettings.topP(),
-                activeModelSettings.minP(), activeModelSettings.presencePenalty(), activeModelSettings.frequencyPenalty(),
-                value);
+        activeModelSettings = SettingsCoordinator.withRepetitionPenalty(activeModelSettings, value);
         persistModelSettings();
         refreshGenerationSettings();
     }
 
     private void updateMinStoryPercent(int percent)
     {
-        int capped = Math.max(10, Math.min(100, percent));
-        int minWindow = (int) Math.round(appSettings.contextLimit() * (capped / 100.0));
-        appSettings = new AppSettings(appSettings.ollamaUrl(), appSettings.selectedModel(), appSettings.contextLimit(),
-                appSettings.responseLength(), minWindow, appSettings.storyCardLookback(), appSettings.anPlacement());
+        appSettings = SettingsCoordinator.withMinStoryPercent(appSettings, percent);
         persistAppSettings();
         refreshGenerationSettings();
     }
 
     private void updateStoryCardLookback(int value)
     {
-        appSettings = new AppSettings(appSettings.ollamaUrl(), appSettings.selectedModel(), appSettings.contextLimit(),
-                appSettings.responseLength(), appSettings.minStoryWindow(), value, appSettings.anPlacement());
+        appSettings = SettingsCoordinator.withStoryCardLookback(appSettings, value);
         persistAppSettings();
         refreshGenerationSettings();
     }
 
     private void updateAnPlacement(int value)
     {
-        appSettings = new AppSettings(appSettings.ollamaUrl(), appSettings.selectedModel(), appSettings.contextLimit(),
-                appSettings.responseLength(), appSettings.minStoryWindow(), appSettings.storyCardLookback(), value);
+        appSettings = SettingsCoordinator.withAnPlacement(appSettings, value);
         persistAppSettings();
         refreshGenerationSettings();
     }
@@ -4522,19 +3633,6 @@ public class App extends Application
     private void logAutoCardsError(String message, Exception e)
     {
         System.err.println(message + ": " + e.getMessage());
-    }
-
-    private String normalizeAutoCardsCandidateSelectionMode(String mode)
-    {
-        if (mode == null || mode.isBlank())
-        {
-            return AUTO_CARDS_CANDIDATION_MODE_HEURISTICS;
-        }
-        if (AUTO_CARDS_CANDIDATION_MODE_ASK_MODEL.equals(mode))
-        {
-            return AUTO_CARDS_CANDIDATION_MODE_ASK_MODEL;
-        }
-        return AUTO_CARDS_CANDIDATION_MODE_HEURISTICS;
     }
 
     private void showError(String message, Exception e)
