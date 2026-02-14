@@ -99,16 +99,12 @@ public final class Database
             stmt.execute("""
                     CREATE TABLE IF NOT EXISTS app_auto_cards (
                         id INTEGER PRIMARY KEY CHECK (id = 1),
-                        run_mode TEXT NOT NULL,
-                        min_gap_seconds INTEGER NOT NULL,
-                        default_enabled INTEGER NOT NULL CHECK (default_enabled IN (0,1)),
                         cooldown_turns INTEGER NOT NULL,
                         max_cards_per_run INTEGER NOT NULL,
                         candidate_window INTEGER NOT NULL,
                         card_length_limit INTEGER NOT NULL,
                         summarize_instead_of_trim INTEGER NOT NULL CHECK (summarize_instead_of_trim IN (0,1)),
-                        verbosity TEXT NOT NULL,
-                        logging_level TEXT NOT NULL
+                        candidate_selection_mode TEXT NOT NULL
                     )
                     """);
 
@@ -133,7 +129,6 @@ public final class Database
                         max_tokens_create INTEGER NOT NULL,
                         max_tokens_update INTEGER NOT NULL,
                         max_tokens_summarize INTEGER NOT NULL,
-                        temperature_override REAL,
                         FOREIGN KEY (model_name) REFERENCES model_settings(model_name) ON DELETE CASCADE
                     )
                     """);

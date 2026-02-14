@@ -21,7 +21,7 @@ public class ModelAutoCardsRepository
     {
         try (PreparedStatement stmt = connection.prepareStatement("""
                 SELECT model_name, create_prompt, update_prompt, summarize_prompt,
-                       max_tokens_create, max_tokens_update, max_tokens_summarize, temperature_override
+                       max_tokens_create, max_tokens_update, max_tokens_summarize
                 FROM model_auto_cards
                 WHERE model_name = ?
                 """))
@@ -33,26 +33,6 @@ public class ModelAutoCardsRepository
                 {
                     return Optional.empty();
                 }
-                Double tempOverride = null;
-                try
-                {
-                    tempOverride = rs.getObject("temperature_override", Double.class);
-                }
-                catch (SQLException ignored)
-                {
-                    String raw = rs.getString("temperature_override");
-                    if (raw != null && !raw.isBlank())
-                    {
-                        try
-                        {
-                            tempOverride = Double.parseDouble(raw.trim());
-                        }
-                        catch (NumberFormatException ignoredParse)
-                        {
-                            tempOverride = null;
-                        }
-                    }
-                }
                 return Optional.of(new ModelAutoCardsSettings(
                         rs.getString("model_name"),
                         rs.getString("create_prompt"),
@@ -60,8 +40,7 @@ public class ModelAutoCardsRepository
                         rs.getString("summarize_prompt"),
                         rs.getInt("max_tokens_create"),
                         rs.getInt("max_tokens_update"),
-                        rs.getInt("max_tokens_summarize"),
-                        tempOverride));
+                        rs.getInt("max_tokens_summarize")));
             }
         }
     }
@@ -71,16 +50,15 @@ public class ModelAutoCardsRepository
         try (PreparedStatement stmt = connection.prepareStatement("""
                 INSERT INTO model_auto_cards (
                     model_name, create_prompt, update_prompt, summarize_prompt,
-                    max_tokens_create, max_tokens_update, max_tokens_summarize, temperature_override
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    max_tokens_create, max_tokens_update, max_tokens_summarize
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(model_name) DO UPDATE SET
                     create_prompt = excluded.create_prompt,
                     update_prompt = excluded.update_prompt,
                     summarize_prompt = excluded.summarize_prompt,
                     max_tokens_create = excluded.max_tokens_create,
                     max_tokens_update = excluded.max_tokens_update,
-                    max_tokens_summarize = excluded.max_tokens_summarize,
-                    temperature_override = excluded.temperature_override
+                    max_tokens_summarize = excluded.max_tokens_summarize
                 """))
         {
             stmt.setString(1, settings.modelName());
@@ -90,14 +68,6 @@ public class ModelAutoCardsRepository
             stmt.setInt(5, settings.maxTokensCreate());
             stmt.setInt(6, settings.maxTokensUpdate());
             stmt.setInt(7, settings.maxTokensSummarize());
-            if (settings.temperatureOverride() == null)
-            {
-                stmt.setNull(8, java.sql.Types.REAL);
-            }
-            else
-            {
-                stmt.setDouble(8, settings.temperatureOverride());
-            }
             stmt.executeUpdate();
         }
     }

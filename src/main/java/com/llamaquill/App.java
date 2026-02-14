@@ -80,10 +80,14 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.Map;
 import java.util.HashMap;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.CompletableFuture;
@@ -101,6 +105,20 @@ public class App extends Application
     private static final int MAX_STORY_LINES = 20;
     private static final int LEFT_SIDEBAR_WIDTH = 480;
     private static final int RIGHT_SIDEBAR_WIDTH = 480;
+    private static final String AUTO_CARDS_CANDIDATION_MODE_HEURISTICS = "Proper Noun Heuristics";
+    private static final String AUTO_CARDS_CANDIDATION_MODE_ASK_MODEL = "Ask Model";
+    private static final String AUTO_CARDS_PROMPT_SYSTEM_TAG = "<system>";
+    private static final String AUTO_CARDS_PROMPT_USER_TAG = "<user>";
+    private static final Pattern AUTO_CARD_PROPER_NOUN_PATTERN = Pattern.compile(
+            "\\b([A-Z][\\p{L}\\p{N}'’-]*(?:\\s+[A-Z][\\p{L}\\p{N}'’-]*){0,3})\\b");
+    private static final Set<String> AUTO_CARD_CONTRACTION_SUFFIXES = Set.of(
+            "re", "ve", "ll", "d", "m", "t");
+    private static final Set<String> AUTO_CARD_STOPWORDS = Set.of(
+            "a", "an", "and", "as", "at", "before", "but", "did", "do", "does", "for", "from", "he",
+            "her", "hers", "him", "his", "how", "i", "if", "in", "it", "its", "me", "my", "of", "on",
+            "or", "our", "ours", "she", "so", "story", "that", "the", "their", "theirs", "them", "then",
+            "there", "they", "this", "to", "user", "we", "what", "when", "where", "while", "who", "why",
+            "you", "your", "yours", "here");
 
     private Connection connection;
     private StoryRepository storyRepository;
@@ -168,11 +186,7 @@ public class App extends Application
     private Spinner<Integer> autoCardsLengthLimitSpinner;
     private CheckBox autoCardsSummarizeBox;
 
-    private ComboBox<String> autoCardsRunMode;
-    private Spinner<Integer> autoCardsMinGapSpinner;
-    private CheckBox autoCardsDefaultEnabledBox;
-    private ComboBox<String> autoCardsVerbosity;
-    private ComboBox<String> autoCardsLoggingLevel;
+    private ComboBox<String> autoCardsCandidateSelectionMode;
 
     private TextArea autoCardsCreatePrompt;
     private TextArea autoCardsUpdatePrompt;
@@ -180,8 +194,6 @@ public class App extends Application
     private Spinner<Integer> autoCardsMaxTokensCreate;
     private Spinner<Integer> autoCardsMaxTokensUpdate;
     private Spinner<Integer> autoCardsMaxTokensSummarize;
-    private CheckBox autoCardsTempOverrideEnabled;
-    private Slider autoCardsTempOverrideSlider;
 
     private boolean updatingAutoCardsControls;
 
@@ -227,12 +239,10 @@ public class App extends Application
     private static final class AutoCardsRunState
     {
         private final int assistantCount;
-        private final long lastRunAt;
 
-        private AutoCardsRunState(int assistantCount, long lastRunAt)
+        private AutoCardsRunState(int assistantCount)
         {
             this.assistantCount = assistantCount;
-            this.lastRunAt = lastRunAt;
         }
     }
 
@@ -251,6 +261,10 @@ public class App extends Application
     }
 
     private record AutoCardCandidate(String title, String triggers)
+    {
+    }
+
+    private record AutoCardPromptParts(String system, String user)
     {
     }
 
@@ -727,24 +741,18 @@ public class App extends Application
             }
         });
 
-        autoCardsRunMode = new ComboBox<>();
-        autoCardsRunMode.setItems(FXCollections.observableArrayList("Before Generation", "Manual"));
-        autoCardsRunMode.setMaxWidth(Double.MAX_VALUE);
-        autoCardsRunMode.setOnAction(event ->
+        autoCardsCandidateSelectionMode = new ComboBox<>();
+        autoCardsCandidateSelectionMode.setItems(FXCollections.observableArrayList(
+                AUTO_CARDS_CANDIDATION_MODE_HEURISTICS,
+                AUTO_CARDS_CANDIDATION_MODE_ASK_MODEL));
+        autoCardsCandidateSelectionMode.setMaxWidth(Double.MAX_VALUE);
+        autoCardsCandidateSelectionMode.setOnAction(event ->
         {
-            if (autoCardsRunMode.getValue() != null)
+            if (autoCardsCandidateSelectionMode.getValue() != null)
             {
-                updateAppAutoCardsRunMode(autoCardsRunMode.getValue());
+                updateAppAutoCardsCandidateSelectionMode(autoCardsCandidateSelectionMode.getValue());
             }
         });
-
-        autoCardsMinGapSpinner = buildSpinner(0, 300, appAutoCardsSettings.minGapSeconds());
-        autoCardsMinGapSpinner.valueProperty().addListener((obs, oldValue, newValue) ->
-                updateAppAutoCardsMinGap(newValue));
-
-        autoCardsDefaultEnabledBox = new CheckBox("Default Auto Cards Enabled");
-        autoCardsDefaultEnabledBox.setOnAction(event ->
-                updateAppAutoCardsDefaultEnabled(autoCardsDefaultEnabledBox.isSelected()));
 
         autoCardsCooldownSpinner = buildSpinner(0, 100, appAutoCardsSettings.cooldownTurns());
 
@@ -757,28 +765,6 @@ public class App extends Application
         autoCardsSummarizeBox = new CheckBox("Summarize instead of trim");
         autoCardsSummarizeBox.setOnAction(event ->
                 updateAppAutoCardsSummarize(autoCardsSummarizeBox.isSelected()));
-
-        autoCardsVerbosity = new ComboBox<>();
-        autoCardsVerbosity.setItems(FXCollections.observableArrayList("concise", "normal", "detailed"));
-        autoCardsVerbosity.setMaxWidth(Double.MAX_VALUE);
-        autoCardsVerbosity.setOnAction(event ->
-        {
-            if (autoCardsVerbosity.getValue() != null)
-            {
-                updateAppAutoCardsVerbosity(autoCardsVerbosity.getValue());
-            }
-        });
-
-        autoCardsLoggingLevel = new ComboBox<>();
-        autoCardsLoggingLevel.setItems(FXCollections.observableArrayList("errors", "info", "debug"));
-        autoCardsLoggingLevel.setMaxWidth(Double.MAX_VALUE);
-        autoCardsLoggingLevel.setOnAction(event ->
-        {
-            if (autoCardsLoggingLevel.getValue() != null)
-            {
-                updateAppAutoCardsLogging(autoCardsLoggingLevel.getValue());
-            }
-        });
 
         autoCardsCreatePrompt = buildStoryArea();
         autoCardsCreatePrompt.setMaxHeight(160);
@@ -819,12 +805,6 @@ public class App extends Application
         autoCardsMaxTokensSummarize.valueProperty().addListener((obs, oldValue, newValue) ->
                 updateModelAutoCardsTokens());
 
-        autoCardsTempOverrideEnabled = new CheckBox("Override temperature");
-        autoCardsTempOverrideSlider = buildDoubleSlider(0.1, 2.0, 0.8, 0.1);
-        autoCardsTempOverrideEnabled.setOnAction(event -> updateModelAutoCardsTempOverride());
-        autoCardsTempOverrideSlider.valueProperty().addListener((obs, oldValue, newValue) ->
-                updateModelAutoCardsTempOverride());
-
         contextLimitSlider = buildIntSlider(1024, 32768, appSettings.contextLimit(), 512);
         responseLengthSlider = buildIntSlider(1, 250, appSettings.responseLength(), 1);
         temperatureSlider = buildDoubleSlider(0.1, 2.0, activeModelSettings.temperature(), 0.1);
@@ -864,16 +844,12 @@ public class App extends Application
                 spinnerRow("Story Card Look Back", storyCardLookbackSpinner, this::updateStoryCardLookback),
                 spinnerRow("Author's Note Insertion Point", anPlacementSpinner, this::updateAnPlacement),
                 new Label("Auto Cards (Global)"),
-                comboRow("Run Mode", autoCardsRunMode),
-                spinnerRow("Minimum gap (seconds)", autoCardsMinGapSpinner, this::updateAppAutoCardsMinGap),
-                autoCardsDefaultEnabledBox,
+                comboRow("Candidation Selection Mode", autoCardsCandidateSelectionMode),
                 spinnerRow("Cooldown (turns)", autoCardsCooldownSpinner, this::updateAppAutoCardsCooldown),
                 spinnerRow("Max cards per run", autoCardsMaxPerRunSpinner, this::updateAppAutoCardsMaxPerRun),
                 spinnerRow("Candidate window (blocks)", autoCardsWindowSpinner, this::updateAppAutoCardsWindow),
                 spinnerRow("Card length limit (chars)", autoCardsLengthLimitSpinner, this::updateAppAutoCardsLengthLimit),
                 autoCardsSummarizeBox,
-                comboRow("Verbosity", autoCardsVerbosity),
-                comboRow("Logging Level", autoCardsLoggingLevel),
                 new Label("Auto Cards (Model)"),
                 new Label("Create Prompt"),
                 autoCardsCreatePrompt,
@@ -883,10 +859,7 @@ public class App extends Application
                 autoCardsSummarizePrompt,
                 spinnerRow("Max tokens (create)", autoCardsMaxTokensCreate, value -> updateModelAutoCardsTokens()),
                 spinnerRow("Max tokens (update)", autoCardsMaxTokensUpdate, value -> updateModelAutoCardsTokens()),
-                spinnerRow("Max tokens (summarize)", autoCardsMaxTokensSummarize, value -> updateModelAutoCardsTokens()),
-                autoCardsTempOverrideEnabled,
-                sliderRow("Temperature Override", autoCardsTempOverrideSlider, valueLabel(0.8, "", 2),
-                        value -> updateModelAutoCardsTempOverride()));
+                spinnerRow("Max tokens (summarize)", autoCardsMaxTokensSummarize, value -> updateModelAutoCardsTokens()));
 
         ScrollPane scrollPane = new ScrollPane(content);
         scrollPane.setFitToWidth(true);
@@ -1023,8 +996,7 @@ public class App extends Application
         {
             return current.get();
         }
-        StoryAutoCardsSettings defaults = StoryAutoCardsSettings.defaults(storyId,
-                appAutoCardsSettings.defaultEnabled());
+        StoryAutoCardsSettings defaults = StoryAutoCardsSettings.defaults(storyId);
         storyAutoCardsRepository.save(defaults);
         return defaults;
     }
@@ -1173,26 +1145,22 @@ public class App extends Application
             return;
         }
         updatingAutoCardsControls = true;
-        String runMode = normalizeAutoCardsRunMode(appAutoCardsSettings.runMode());
-        if (!runMode.equals(appAutoCardsSettings.runMode()))
+        String candidationMode = normalizeAutoCardsCandidateSelectionMode(
+                appAutoCardsSettings.candidateSelectionMode());
+        if (!candidationMode.equals(appAutoCardsSettings.candidateSelectionMode()))
         {
-            appAutoCardsSettings = new AppAutoCardsSettings(runMode, appAutoCardsSettings.minGapSeconds(),
-                    appAutoCardsSettings.defaultEnabled(), appAutoCardsSettings.cooldownTurns(),
+            appAutoCardsSettings = new AppAutoCardsSettings(appAutoCardsSettings.cooldownTurns(),
                     appAutoCardsSettings.maxCardsPerRun(), appAutoCardsSettings.candidateWindow(),
                     appAutoCardsSettings.cardLengthLimit(), appAutoCardsSettings.summarizeInsteadOfTrim(),
-                    appAutoCardsSettings.verbosity(), appAutoCardsSettings.loggingLevel());
+                    candidationMode);
             persistAppAutoCardsSettings();
         }
-        autoCardsRunMode.setValue(runMode);
-        autoCardsMinGapSpinner.getValueFactory().setValue(appAutoCardsSettings.minGapSeconds());
-        autoCardsDefaultEnabledBox.setSelected(appAutoCardsSettings.defaultEnabled());
+        autoCardsCandidateSelectionMode.setValue(candidationMode);
         autoCardsCooldownSpinner.getValueFactory().setValue(appAutoCardsSettings.cooldownTurns());
         autoCardsMaxPerRunSpinner.getValueFactory().setValue(appAutoCardsSettings.maxCardsPerRun());
         autoCardsWindowSpinner.getValueFactory().setValue(appAutoCardsSettings.candidateWindow());
         autoCardsLengthLimitSpinner.getValueFactory().setValue(appAutoCardsSettings.cardLengthLimit());
         autoCardsSummarizeBox.setSelected(appAutoCardsSettings.summarizeInsteadOfTrim());
-        autoCardsVerbosity.setValue(appAutoCardsSettings.verbosity());
-        autoCardsLoggingLevel.setValue(appAutoCardsSettings.loggingLevel());
         updatingAutoCardsControls = false;
         updateAutoCardsRunButtonState();
     }
@@ -1210,13 +1178,6 @@ public class App extends Application
         autoCardsMaxTokensCreate.getValueFactory().setValue(modelAutoCardsSettings.maxTokensCreate());
         autoCardsMaxTokensUpdate.getValueFactory().setValue(modelAutoCardsSettings.maxTokensUpdate());
         autoCardsMaxTokensSummarize.getValueFactory().setValue(modelAutoCardsSettings.maxTokensSummarize());
-        boolean override = modelAutoCardsSettings.temperatureOverride() != null;
-        autoCardsTempOverrideEnabled.setSelected(override);
-        autoCardsTempOverrideSlider.setDisable(!override);
-        if (override)
-        {
-            autoCardsTempOverrideSlider.setValue(modelAutoCardsSettings.temperatureOverride());
-        }
         updatingAutoCardsControls = false;
     }
 
@@ -1236,96 +1197,21 @@ public class App extends Application
         updateAutoCardsRunButtonState();
     }
 
-    private void updateAppAutoCardsRunMode(String runMode)
+    private void updateAppAutoCardsCandidateSelectionMode(String mode)
     {
-        if (updatingAutoCardsControls || appAutoCardsSettings == null || runMode == null)
+        if (updatingAutoCardsControls || appAutoCardsSettings == null || mode == null)
         {
             return;
         }
-        if (runMode.equals(appAutoCardsSettings.runMode()))
+        String normalized = normalizeAutoCardsCandidateSelectionMode(mode);
+        if (normalized.equals(appAutoCardsSettings.candidateSelectionMode()))
         {
             return;
         }
-        String normalized = normalizeAutoCardsRunMode(runMode);
-        appAutoCardsSettings = new AppAutoCardsSettings(normalized, appAutoCardsSettings.minGapSeconds(),
-                appAutoCardsSettings.defaultEnabled(), appAutoCardsSettings.cooldownTurns(),
-                appAutoCardsSettings.maxCardsPerRun(), appAutoCardsSettings.candidateWindow(),
-                appAutoCardsSettings.cardLengthLimit(), appAutoCardsSettings.summarizeInsteadOfTrim(),
-                appAutoCardsSettings.verbosity(), appAutoCardsSettings.loggingLevel());
-        persistAppAutoCardsSettings();
-        updateAutoCardsRunButtonState();
-    }
-
-    private void updateAppAutoCardsMinGap(int value)
-    {
-        if (updatingAutoCardsControls || appAutoCardsSettings == null)
-        {
-            return;
-        }
-        int capped = Math.max(0, Math.min(3600, value));
-        if (capped == appAutoCardsSettings.minGapSeconds())
-        {
-            return;
-        }
-        appAutoCardsSettings = new AppAutoCardsSettings(appAutoCardsSettings.runMode(), capped,
-                appAutoCardsSettings.defaultEnabled(), appAutoCardsSettings.cooldownTurns(),
-                appAutoCardsSettings.maxCardsPerRun(), appAutoCardsSettings.candidateWindow(),
-                appAutoCardsSettings.cardLengthLimit(), appAutoCardsSettings.summarizeInsteadOfTrim(),
-                appAutoCardsSettings.verbosity(), appAutoCardsSettings.loggingLevel());
-        persistAppAutoCardsSettings();
-    }
-
-    private void updateAppAutoCardsDefaultEnabled(boolean enabled)
-    {
-        if (updatingAutoCardsControls || appAutoCardsSettings == null)
-        {
-            return;
-        }
-        if (enabled == appAutoCardsSettings.defaultEnabled())
-        {
-            return;
-        }
-        appAutoCardsSettings = new AppAutoCardsSettings(appAutoCardsSettings.runMode(), appAutoCardsSettings.minGapSeconds(),
-                enabled, appAutoCardsSettings.cooldownTurns(), appAutoCardsSettings.maxCardsPerRun(),
+        appAutoCardsSettings = new AppAutoCardsSettings(appAutoCardsSettings.cooldownTurns(),
+                appAutoCardsSettings.maxCardsPerRun(),
                 appAutoCardsSettings.candidateWindow(), appAutoCardsSettings.cardLengthLimit(),
-                appAutoCardsSettings.summarizeInsteadOfTrim(), appAutoCardsSettings.verbosity(),
-                appAutoCardsSettings.loggingLevel());
-        persistAppAutoCardsSettings();
-    }
-
-    private void updateAppAutoCardsVerbosity(String verbosity)
-    {
-        if (updatingAutoCardsControls || appAutoCardsSettings == null || verbosity == null)
-        {
-            return;
-        }
-        if (verbosity.equals(appAutoCardsSettings.verbosity()))
-        {
-            return;
-        }
-        appAutoCardsSettings = new AppAutoCardsSettings(appAutoCardsSettings.runMode(), appAutoCardsSettings.minGapSeconds(),
-                appAutoCardsSettings.defaultEnabled(), appAutoCardsSettings.cooldownTurns(),
-                appAutoCardsSettings.maxCardsPerRun(), appAutoCardsSettings.candidateWindow(),
-                appAutoCardsSettings.cardLengthLimit(), appAutoCardsSettings.summarizeInsteadOfTrim(), verbosity,
-                appAutoCardsSettings.loggingLevel());
-        persistAppAutoCardsSettings();
-    }
-
-    private void updateAppAutoCardsLogging(String loggingLevel)
-    {
-        if (updatingAutoCardsControls || appAutoCardsSettings == null || loggingLevel == null)
-        {
-            return;
-        }
-        if (loggingLevel.equals(appAutoCardsSettings.loggingLevel()))
-        {
-            return;
-        }
-        appAutoCardsSettings = new AppAutoCardsSettings(appAutoCardsSettings.runMode(), appAutoCardsSettings.minGapSeconds(),
-                appAutoCardsSettings.defaultEnabled(), appAutoCardsSettings.cooldownTurns(),
-                appAutoCardsSettings.maxCardsPerRun(), appAutoCardsSettings.candidateWindow(),
-                appAutoCardsSettings.cardLengthLimit(), appAutoCardsSettings.summarizeInsteadOfTrim(),
-                appAutoCardsSettings.verbosity(), loggingLevel);
+                appAutoCardsSettings.summarizeInsteadOfTrim(), normalized);
         persistAppAutoCardsSettings();
     }
 
@@ -1357,11 +1243,9 @@ public class App extends Application
         {
             return;
         }
-        appAutoCardsSettings = new AppAutoCardsSettings(appAutoCardsSettings.runMode(), appAutoCardsSettings.minGapSeconds(),
-                appAutoCardsSettings.defaultEnabled(), capped, appAutoCardsSettings.maxCardsPerRun(),
+        appAutoCardsSettings = new AppAutoCardsSettings(capped, appAutoCardsSettings.maxCardsPerRun(),
                 appAutoCardsSettings.candidateWindow(), appAutoCardsSettings.cardLengthLimit(),
-                appAutoCardsSettings.summarizeInsteadOfTrim(), appAutoCardsSettings.verbosity(),
-                appAutoCardsSettings.loggingLevel());
+                appAutoCardsSettings.summarizeInsteadOfTrim(), appAutoCardsSettings.candidateSelectionMode());
         persistAppAutoCardsSettings();
     }
 
@@ -1376,11 +1260,9 @@ public class App extends Application
         {
             return;
         }
-        appAutoCardsSettings = new AppAutoCardsSettings(appAutoCardsSettings.runMode(), appAutoCardsSettings.minGapSeconds(),
-                appAutoCardsSettings.defaultEnabled(), appAutoCardsSettings.cooldownTurns(), capped,
+        appAutoCardsSettings = new AppAutoCardsSettings(appAutoCardsSettings.cooldownTurns(), capped,
                 appAutoCardsSettings.candidateWindow(), appAutoCardsSettings.cardLengthLimit(),
-                appAutoCardsSettings.summarizeInsteadOfTrim(), appAutoCardsSettings.verbosity(),
-                appAutoCardsSettings.loggingLevel());
+                appAutoCardsSettings.summarizeInsteadOfTrim(), appAutoCardsSettings.candidateSelectionMode());
         persistAppAutoCardsSettings();
     }
 
@@ -1395,11 +1277,9 @@ public class App extends Application
         {
             return;
         }
-        appAutoCardsSettings = new AppAutoCardsSettings(appAutoCardsSettings.runMode(), appAutoCardsSettings.minGapSeconds(),
-                appAutoCardsSettings.defaultEnabled(), appAutoCardsSettings.cooldownTurns(),
+        appAutoCardsSettings = new AppAutoCardsSettings(appAutoCardsSettings.cooldownTurns(),
                 appAutoCardsSettings.maxCardsPerRun(), capped, appAutoCardsSettings.cardLengthLimit(),
-                appAutoCardsSettings.summarizeInsteadOfTrim(), appAutoCardsSettings.verbosity(),
-                appAutoCardsSettings.loggingLevel());
+                appAutoCardsSettings.summarizeInsteadOfTrim(), appAutoCardsSettings.candidateSelectionMode());
         persistAppAutoCardsSettings();
     }
 
@@ -1478,11 +1358,9 @@ public class App extends Application
         {
             return;
         }
-        appAutoCardsSettings = new AppAutoCardsSettings(appAutoCardsSettings.runMode(), appAutoCardsSettings.minGapSeconds(),
-                appAutoCardsSettings.defaultEnabled(), appAutoCardsSettings.cooldownTurns(),
+        appAutoCardsSettings = new AppAutoCardsSettings(appAutoCardsSettings.cooldownTurns(),
                 appAutoCardsSettings.maxCardsPerRun(), appAutoCardsSettings.candidateWindow(), capped,
-                appAutoCardsSettings.summarizeInsteadOfTrim(), appAutoCardsSettings.verbosity(),
-                appAutoCardsSettings.loggingLevel());
+                appAutoCardsSettings.summarizeInsteadOfTrim(), appAutoCardsSettings.candidateSelectionMode());
         persistAppAutoCardsSettings();
     }
 
@@ -1496,11 +1374,9 @@ public class App extends Application
         {
             return;
         }
-        appAutoCardsSettings = new AppAutoCardsSettings(appAutoCardsSettings.runMode(), appAutoCardsSettings.minGapSeconds(),
-                appAutoCardsSettings.defaultEnabled(), appAutoCardsSettings.cooldownTurns(),
+        appAutoCardsSettings = new AppAutoCardsSettings(appAutoCardsSettings.cooldownTurns(),
                 appAutoCardsSettings.maxCardsPerRun(), appAutoCardsSettings.candidateWindow(),
-                appAutoCardsSettings.cardLengthLimit(), value, appAutoCardsSettings.verbosity(),
-                appAutoCardsSettings.loggingLevel());
+                appAutoCardsSettings.cardLengthLimit(), value, appAutoCardsSettings.candidateSelectionMode());
         persistAppAutoCardsSettings();
     }
 
@@ -1521,7 +1397,7 @@ public class App extends Application
         }
         modelAutoCardsSettings = new ModelAutoCardsSettings(modelAutoCardsSettings.modelName(), createPrompt, updatePrompt,
                 summarizePrompt, modelAutoCardsSettings.maxTokensCreate(), modelAutoCardsSettings.maxTokensUpdate(),
-                modelAutoCardsSettings.maxTokensSummarize(), modelAutoCardsSettings.temperatureOverride());
+                modelAutoCardsSettings.maxTokensSummarize());
         persistModelAutoCardsSettings();
     }
 
@@ -1546,29 +1422,7 @@ public class App extends Application
         }
         modelAutoCardsSettings = new ModelAutoCardsSettings(modelAutoCardsSettings.modelName(),
                 modelAutoCardsSettings.createPrompt(), modelAutoCardsSettings.updatePrompt(),
-                modelAutoCardsSettings.summarizePrompt(), createTokens, updateTokens, summarizeTokens,
-                modelAutoCardsSettings.temperatureOverride());
-        persistModelAutoCardsSettings();
-    }
-
-    private void updateModelAutoCardsTempOverride()
-    {
-        if (updatingAutoCardsControls || modelAutoCardsSettings == null)
-        {
-            return;
-        }
-        boolean enabled = autoCardsTempOverrideEnabled.isSelected();
-        autoCardsTempOverrideSlider.setDisable(!enabled);
-        Double override = enabled ? roundTo(autoCardsTempOverrideSlider.getValue(), 0.1) : null;
-        if ((override == null && modelAutoCardsSettings.temperatureOverride() == null)
-                || (override != null && override.equals(modelAutoCardsSettings.temperatureOverride())))
-        {
-            return;
-        }
-        modelAutoCardsSettings = new ModelAutoCardsSettings(modelAutoCardsSettings.modelName(),
-                modelAutoCardsSettings.createPrompt(), modelAutoCardsSettings.updatePrompt(),
-                modelAutoCardsSettings.summarizePrompt(), modelAutoCardsSettings.maxTokensCreate(),
-                modelAutoCardsSettings.maxTokensUpdate(), modelAutoCardsSettings.maxTokensSummarize(), override);
+                modelAutoCardsSettings.summarizePrompt(), createTokens, updateTokens, summarizeTokens);
         persistModelAutoCardsSettings();
     }
 
@@ -1578,10 +1432,7 @@ public class App extends Application
         {
             return;
         }
-        boolean manual = "Manual".equals(appAutoCardsSettings.runMode());
-        boolean enabled = manual && activeStory != null
-                && storyAutoCardsSettings != null
-                && storyAutoCardsSettings.enabled();
+        boolean enabled = activeStory != null && storyAutoCardsSettings != null;
         autoCardsRunButton.setDisable(!enabled);
     }
 
@@ -1592,9 +1443,9 @@ public class App extends Application
             showInfo("Select a story first.");
             return;
         }
-        if (storyAutoCardsSettings == null || !storyAutoCardsSettings.enabled())
+        if (storyAutoCardsSettings == null)
         {
-            showInfo("Auto Cards are disabled for this story.");
+            showInfo("Story settings are not loaded yet.");
             return;
         }
 
@@ -1644,11 +1495,7 @@ public class App extends Application
         {
             return new AutoCardsResult(0, 0, false);
         }
-        if (!storyAutoCardsSettings.enabled())
-        {
-            return new AutoCardsResult(0, 0, false);
-        }
-        if (!manual && !isAutoCardsAutoMode(appAutoCardsSettings.runMode()))
+        if (!manual && !storyAutoCardsSettings.enabled())
         {
             return new AutoCardsResult(0, 0, false);
         }
@@ -1775,14 +1622,13 @@ public class App extends Application
         {
             return false;
         }
-        long elapsed = System.currentTimeMillis() - state.lastRunAt;
-        return elapsed >= appAutoCardsSettings.minGapSeconds() * 1000L;
+        return true;
     }
 
     private void updateAutoCardsRunState(List<Block> currentBlocks)
     {
         int assistantCount = countAssistantBlocks(currentBlocks);
-        autoCardsRunState.put(activeStory.id(), new AutoCardsRunState(assistantCount, System.currentTimeMillis()));
+        autoCardsRunState.put(activeStory.id(), new AutoCardsRunState(assistantCount));
     }
 
     private int countAssistantBlocks(List<Block> currentBlocks)
@@ -1815,6 +1661,18 @@ public class App extends Application
     private List<AutoCardCandidate> extractAutoCardCandidates(String excerpt, List<StoryCard> currentCards, int maxCount)
             throws IOException, InterruptedException
     {
+        String mode = normalizeAutoCardsCandidateSelectionMode(appAutoCardsSettings.candidateSelectionMode());
+        if (AUTO_CARDS_CANDIDATION_MODE_ASK_MODEL.equals(mode))
+        {
+            return extractAutoCardCandidatesByModel(excerpt, currentCards, maxCount);
+        }
+        return extractAutoCardCandidatesByHeuristics(excerpt, currentCards, maxCount);
+    }
+
+    private List<AutoCardCandidate> extractAutoCardCandidatesByModel(String excerpt, List<StoryCard> currentCards,
+            int maxCount)
+            throws IOException, InterruptedException
+    {
         StringBuilder existing = new StringBuilder();
         for (StoryCard card : currentCards)
         {
@@ -1840,6 +1698,264 @@ public class App extends Application
         GenerationSettings autoSettings = buildAutoCardsGenerationSettings(tokenCap);
         String response = ollamaClient.generate(prompt, autoSettings);
         return parseAutoCardCandidates(response, maxCount);
+    }
+
+    private List<AutoCardCandidate> extractAutoCardCandidatesByHeuristics(String excerpt, List<StoryCard> currentCards,
+            int maxCount)
+    {
+        if (excerpt == null || excerpt.isBlank() || maxCount <= 0)
+        {
+            return List.of();
+        }
+        Map<String, StoryCard> existingByTitle = new HashMap<>();
+        for (StoryCard card : currentCards)
+        {
+            if (card.title() == null || card.title().isBlank())
+            {
+                continue;
+            }
+            String titleKey = canonicalizeHeuristicCandidateKey(card.title());
+            if (!titleKey.isBlank())
+            {
+                existingByTitle.putIfAbsent(titleKey, card);
+            }
+            for (String titleToken : card.title().split("\\s+"))
+            {
+                String titleTokenKey = canonicalizeHeuristicCandidateKey(titleToken);
+                if (titleTokenKey.length() >= 3 && !AUTO_CARD_STOPWORDS.contains(titleTokenKey))
+                {
+                    existingByTitle.putIfAbsent(titleTokenKey, card);
+                }
+            }
+            for (String trigger : splitTriggers(card.triggers()))
+            {
+                String triggerKey = canonicalizeHeuristicCandidateKey(trigger);
+                if (!triggerKey.isBlank())
+                {
+                    existingByTitle.putIfAbsent(triggerKey, card);
+                }
+            }
+        }
+
+        Map<String, Integer> hitCounts = new HashMap<>();
+        Map<String, Integer> sentenceStartHitCounts = new HashMap<>();
+        Map<String, Integer> questionOrExclaimHits = new HashMap<>();
+        Map<String, String> orderedTitles = new LinkedHashMap<>();
+        Matcher matcher = AUTO_CARD_PROPER_NOUN_PATTERN.matcher(excerpt);
+        while (matcher.find())
+        {
+            String title = normalizeHeuristicCandidateTitle(matcher.group(1));
+            if (!isValidHeuristicCandidateTitle(title))
+            {
+                continue;
+            }
+            String key = canonicalizeHeuristicCandidateKey(title);
+            if (key.isBlank())
+            {
+                continue;
+            }
+            orderedTitles.putIfAbsent(key, title);
+            hitCounts.merge(key, 1, Integer::sum);
+            if (isHeuristicSentenceStart(excerpt, matcher.start()))
+            {
+                sentenceStartHitCounts.merge(key, 1, Integer::sum);
+            }
+            if (isHeuristicQuestionOrExclamation(excerpt, matcher.end()))
+            {
+                questionOrExclaimHits.merge(key, 1, Integer::sum);
+            }
+        }
+
+        Map<String, AutoCardCandidate> candidates = new LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : orderedTitles.entrySet())
+        {
+            if (candidates.size() >= maxCount)
+            {
+                break;
+            }
+            String key = entry.getKey();
+            String title = entry.getValue();
+            StoryCard existing = existingByTitle.get(key);
+            boolean singleWord = title.indexOf(' ') < 0;
+            if (existing == null && singleWord && hitCounts.getOrDefault(key, 0) < 2)
+            {
+                continue;
+            }
+            if (existing == null
+                    && sentenceStartHitCounts.getOrDefault(key, 0) == hitCounts.getOrDefault(key, 0)
+                    && hitCounts.getOrDefault(key, 0) < 3)
+            {
+                continue;
+            }
+            if (existing == null
+                    && questionOrExclaimHits.getOrDefault(key, 0) == hitCounts.getOrDefault(key, 0)
+                    && hitCounts.getOrDefault(key, 0) < 3)
+            {
+                continue;
+            }
+            String resolvedTitle = existing == null ? title : existing.title();
+            String triggers = existing == null ? buildHeuristicCandidateTriggers(resolvedTitle) : existing.triggers();
+            candidates.put(key, new AutoCardCandidate(resolvedTitle, triggers));
+        }
+        return new ArrayList<>(candidates.values());
+    }
+
+    private String normalizeHeuristicCandidateTitle(String value)
+    {
+        if (value == null)
+        {
+            return "";
+        }
+        String cleaned = value.trim().replaceAll("^[\\p{Punct}\\s]+", "").replaceAll("[\\p{Punct}\\s]+$", "");
+        if (cleaned.isBlank())
+        {
+            return "";
+        }
+        String[] words = cleaned.split("\\s+");
+        List<String> normalizedWords = new ArrayList<>(words.length);
+        for (String word : words)
+        {
+            String normalizedWord = normalizeHeuristicCandidateWord(word);
+            if (normalizedWord.isBlank())
+            {
+                return "";
+            }
+            normalizedWords.add(normalizedWord);
+        }
+        return String.join(" ", normalizedWords);
+    }
+
+    private String normalizeHeuristicCandidateWord(String value)
+    {
+        String cleaned = value.replaceAll("^[^\\p{L}\\p{N}]+", "").replaceAll("[^\\p{L}\\p{N}'’-]+$", "");
+        if (cleaned.isBlank())
+        {
+            return "";
+        }
+        String lower = cleaned.toLowerCase(Locale.ROOT);
+        if (isContractionWord(lower))
+        {
+            return "";
+        }
+        cleaned = cleaned.replaceAll("(?i)['’]s$", "");
+        return cleaned.replaceAll("\\s+", " ").trim();
+    }
+
+    private boolean isContractionWord(String value)
+    {
+        int apostropheIndex = Math.max(value.lastIndexOf('\''), value.lastIndexOf('’'));
+        if (apostropheIndex <= 0 || apostropheIndex >= value.length() - 1)
+        {
+            return false;
+        }
+        String suffix = value.substring(apostropheIndex + 1);
+        return AUTO_CARD_CONTRACTION_SUFFIXES.contains(suffix);
+    }
+
+    private String canonicalizeHeuristicCandidateKey(String value)
+    {
+        String normalized = normalizeHeuristicCandidateTitle(value);
+        return normalized.toLowerCase(Locale.ROOT);
+    }
+
+    private boolean isHeuristicSentenceStart(String text, int index)
+    {
+        int i = index - 1;
+        while (i >= 0 && Character.isWhitespace(text.charAt(i)))
+        {
+            i--;
+        }
+        if (i < 0)
+        {
+            return true;
+        }
+        char previous = text.charAt(i);
+        return previous == '.' || previous == '!' || previous == '?' || previous == ':' || previous == ';'
+                || previous == '\n';
+    }
+
+    private boolean isHeuristicQuestionOrExclamation(String text, int endIndex)
+    {
+        int i = endIndex;
+        while (i < text.length() && Character.isWhitespace(text.charAt(i)))
+        {
+            i++;
+        }
+        if (i >= text.length())
+        {
+            return false;
+        }
+        char c = text.charAt(i);
+        return c == '?' || c == '!';
+    }
+
+    private List<String> splitTriggers(String triggers)
+    {
+        if (triggers == null || triggers.isBlank())
+        {
+            return List.of();
+        }
+        String[] parts = triggers.split("[,\\n;|]");
+        List<String> out = new ArrayList<>(parts.length);
+        for (String part : parts)
+        {
+            String trimmed = part.trim();
+            if (!trimmed.isBlank())
+            {
+                out.add(trimmed);
+            }
+        }
+        return out;
+    }
+
+    private boolean isValidHeuristicCandidateTitle(String title)
+    {
+        if (title == null || title.isBlank() || title.length() < 2)
+        {
+            return false;
+        }
+        String lower = title.toLowerCase(Locale.ROOT);
+        if (AUTO_CARD_STOPWORDS.contains(lower))
+        {
+            return false;
+        }
+        String[] words = title.split("\\s+");
+        if (words.length == 1)
+        {
+            return !AUTO_CARD_STOPWORDS.contains(words[0].toLowerCase(Locale.ROOT));
+        }
+        int nonStopWords = 0;
+        for (String word : words)
+        {
+            if (!AUTO_CARD_STOPWORDS.contains(word.toLowerCase(Locale.ROOT)))
+            {
+                nonStopWords++;
+            }
+        }
+        return nonStopWords > 0;
+    }
+
+    private String buildHeuristicCandidateTriggers(String title)
+    {
+        if (title == null || title.isBlank())
+        {
+            return "";
+        }
+        LinkedHashSet<String> triggers = new LinkedHashSet<>();
+        String key = canonicalizeHeuristicCandidateKey(title);
+        if (!key.isBlank())
+        {
+            triggers.add(key);
+        }
+        for (String token : title.split("\\s+"))
+        {
+            String normalizedToken = normalizeHeuristicCandidateWord(token).toLowerCase(Locale.ROOT);
+            if (normalizedToken.length() >= 3 && !AUTO_CARD_STOPWORDS.contains(normalizedToken))
+            {
+                triggers.add(normalizedToken);
+            }
+        }
+        return String.join(", ", triggers);
     }
 
     private List<AutoCardCandidate> parseAutoCardCandidates(String response, int maxCount)
@@ -1889,26 +2005,13 @@ public class App extends Application
     private String generateAutoCardCreate(AutoCardCandidate candidate, String excerpt)
             throws IOException, InterruptedException
     {
-        String system = """
-                # Write a brief and coherent informational entry for %{title} following these instructions:
-                - Write only third-person pure prose information about %{title} using complete sentences with correct punctuation
-                - Avoid short-term temporary details or actions, instead focus on plot-significant information
-                - Introduce %{title} by stating who/what, followed by a detailed description of permanent physical traits, followed by story-relevant details.
-                - Prioritize story-relevant details about %{title} first to ensure seamless integration with the previous plot
-                - Create new information based on the context and story direction
-                - Mention %{title} in every sentence
-                - Use semicolons if needed
-                - Be concise and grounded
-                - Imitate the story's writing style and infer the reader's preferences
-                """;
-        system = applyPromptTemplate(system, candidate.title(), candidate.triggers(), "", excerpt);
-        String instruction = applyPromptTemplate(modelAutoCardsSettings.createPrompt(), candidate.title(), candidate.triggers(),
-                "", excerpt);
-        String user = "# Card details:\nTitle: " + candidate.title() + "\nTriggers: " + candidate.triggers() + "\n"
-                + "Verbosity: " + appAutoCardsSettings.verbosity() + "\n\n"
-                + "# Story excerpt:\n" + excerpt + "\n\n# Instruction:\n" + instruction
-                + "\n\nReturn only the card content.";
-        String prompt = buildAutoCardsChatPrompt(system, user);
+        AutoCardPromptParts promptParts = buildAutoCardPromptParts(
+                modelAutoCardsSettings.createPrompt(),
+                candidate.title(),
+                candidate.triggers(),
+                "",
+                excerpt);
+        String prompt = buildAutoCardsChatPrompt(promptParts.system(), promptParts.user());
         GenerationSettings autoSettings = buildAutoCardsGenerationSettings(modelAutoCardsSettings.maxTokensCreate());
         return normalizeOutput(ollamaClient.generate(prompt, autoSettings));
     }
@@ -1916,38 +2019,26 @@ public class App extends Application
     private String generateAutoCardUpdate(StoryCard existing, String excerpt)
             throws IOException, InterruptedException
     {
-        String system = """
-                # Update the entry for %{title} following these instructions:
-                - Ensure the passage retains the core meaning and most essential details
-                - Use the third-person perspective
-                - Prioritize information-density, accuracy, and completeness
-                - Remain brief and concise
-                - Introduce %{title} by stating who/what, followed by a detailed description of permanent physical traits, followed by story-relevant details.
-                - Prioritize story-relevant details about %{title} first to ensure seamless integration with the previous plot
-                - Add new information based on the context and story direction
-                - Mention %{title} in every sentence
-                - Use semicolons if needed
-                - Be concise and grounded
-                - Imitate the story's writing style and infer the reader's preferences
-                """;
-        system = applyPromptTemplate(system, existing.title(), existing.triggers(), existing.content(), excerpt);
-        String instruction = applyPromptTemplate(modelAutoCardsSettings.updatePrompt(), existing.title(), existing.triggers(),
-                existing.content(), excerpt);
-        String user = "# Card details:\nTitle: " + existing.title() + "\nTriggers: " + existing.triggers() + "\n"
-                + "Verbosity: " + appAutoCardsSettings.verbosity() + "\n\n"
-                + "# Existing card:\n" + existing.content() + "\n\n# Story excerpt:\n" + excerpt
-                + "\n\n# Instruction:\n" + instruction + "\n\nReturn only the updated card content.";
-        String prompt = buildAutoCardsChatPrompt(system, user);
+        AutoCardPromptParts promptParts = buildAutoCardPromptParts(
+                modelAutoCardsSettings.updatePrompt(),
+                existing.title(),
+                existing.triggers(),
+                existing.content(),
+                excerpt);
+        String prompt = buildAutoCardsChatPrompt(promptParts.system(), promptParts.user());
         GenerationSettings autoSettings = buildAutoCardsGenerationSettings(modelAutoCardsSettings.maxTokensUpdate());
         return normalizeOutput(ollamaClient.generate(prompt, autoSettings));
     }
 
     private String generateAutoCardSummary(String content) throws IOException, InterruptedException
     {
-        String instruction = applyPromptTemplate(modelAutoCardsSettings.summarizePrompt(), "", "", content, "");
-        String user = "Card content:\n" + content + "\n\nInstruction:\n" + instruction
-                + "\n\nReturn only the summarized card content.";
-        String prompt = buildAutoCardsChatPrompt("You summarize existing story card entries, but must keep the facts intact while doing so.", user);
+        AutoCardPromptParts promptParts = buildAutoCardPromptParts(
+                modelAutoCardsSettings.summarizePrompt(),
+                "",
+                "",
+                content,
+                "");
+        String prompt = buildAutoCardsChatPrompt(promptParts.system(), promptParts.user());
         GenerationSettings autoSettings = buildAutoCardsGenerationSettings(modelAutoCardsSettings.maxTokensSummarize());
         return normalizeOutput(ollamaClient.generate(prompt, autoSettings));
     }
@@ -1989,10 +2080,8 @@ public class App extends Application
 
     private GenerationSettings buildAutoCardsGenerationSettings(int maxTokens)
     {
-        double temp = modelAutoCardsSettings.temperatureOverride() == null
-                ? activeModelSettings.temperature()
-                : modelAutoCardsSettings.temperatureOverride();
-        return new GenerationSettings(appSettings.contextLimit(), maxTokens, temp, activeModelSettings.topK(),
+        return new GenerationSettings(appSettings.contextLimit(), maxTokens, activeModelSettings.temperature(),
+                activeModelSettings.topK(),
                 activeModelSettings.topP(), activeModelSettings.minP(), activeModelSettings.presencePenalty(),
                 activeModelSettings.frequencyPenalty(), activeModelSettings.repetitionPenalty(), appSettings.minStoryWindow(),
                 appSettings.storyCardLookback(), appSettings.anPlacement());
@@ -2000,9 +2089,68 @@ public class App extends Application
 
     private String buildAutoCardsChatPrompt(String system, String user)
     {
-        return "<|im_start|>system\n" + system + "<|im_end|>\n"
-                + "<|im_start|>user\n" + user + "<|im_end|>\n"
-                + "<|im_start|>assistant\n";
+        String systemText = system == null ? "" : system.trim();
+        String userText = user == null ? "" : user.trim();
+        StringBuilder prompt = new StringBuilder();
+        if (!systemText.isBlank())
+        {
+            prompt.append("<|im_start|>system\n")
+                    .append(systemText)
+                    .append("<|im_end|>\n");
+        }
+        prompt.append("<|im_start|>user\n")
+                .append(userText)
+                .append("<|im_end|>\n")
+                .append("<|im_start|>assistant\n");
+        return prompt.toString();
+    }
+
+    private AutoCardPromptParts buildAutoCardPromptParts(String template, String title, String triggers, String content,
+            String excerpt)
+    {
+        String rendered = applyPromptTemplate(template, title, triggers, content, excerpt);
+        return splitAutoCardPrompt(rendered);
+    }
+
+    private AutoCardPromptParts splitAutoCardPrompt(String prompt)
+    {
+        if (prompt == null)
+        {
+            return new AutoCardPromptParts("", "");
+        }
+        String raw = prompt.trim();
+        if (raw.isBlank())
+        {
+            return new AutoCardPromptParts("", "");
+        }
+
+        String lowered = raw.toLowerCase(Locale.ROOT);
+        int systemIndex = lowered.indexOf(AUTO_CARDS_PROMPT_SYSTEM_TAG);
+        int userIndex = lowered.indexOf(AUTO_CARDS_PROMPT_USER_TAG);
+
+        if (systemIndex < 0 && userIndex < 0)
+        {
+            return new AutoCardPromptParts("", raw);
+        }
+        if (systemIndex >= 0 && userIndex >= 0)
+        {
+            if (systemIndex < userIndex)
+            {
+                String system = raw.substring(systemIndex + AUTO_CARDS_PROMPT_SYSTEM_TAG.length(), userIndex).trim();
+                String user = raw.substring(userIndex + AUTO_CARDS_PROMPT_USER_TAG.length()).trim();
+                return new AutoCardPromptParts(system, user);
+            }
+            String user = raw.substring(userIndex + AUTO_CARDS_PROMPT_USER_TAG.length(), systemIndex).trim();
+            String system = raw.substring(systemIndex + AUTO_CARDS_PROMPT_SYSTEM_TAG.length()).trim();
+            return new AutoCardPromptParts(system, user);
+        }
+        if (systemIndex >= 0)
+        {
+            String system = raw.substring(systemIndex + AUTO_CARDS_PROMPT_SYSTEM_TAG.length()).trim();
+            return new AutoCardPromptParts(system, "");
+        }
+        String user = raw.substring(userIndex + AUTO_CARDS_PROMPT_USER_TAG.length()).trim();
+        return new AutoCardPromptParts("", user);
     }
 
     private String extractJsonArray(String text)
@@ -4373,33 +4521,20 @@ public class App extends Application
 
     private void logAutoCardsError(String message, Exception e)
     {
-        if (appAutoCardsSettings == null)
-        {
-            return;
-        }
-        String level = appAutoCardsSettings.loggingLevel();
-        if ("errors".equals(level) || "info".equals(level) || "debug".equals(level))
-        {
-            System.err.println(message + ": " + e.getMessage());
-        }
+        System.err.println(message + ": " + e.getMessage());
     }
 
-    private boolean isAutoCardsAutoMode(String mode)
-    {
-        return "Before Generation".equals(mode);
-    }
-
-    private String normalizeAutoCardsRunMode(String mode)
+    private String normalizeAutoCardsCandidateSelectionMode(String mode)
     {
         if (mode == null || mode.isBlank())
         {
-            return "Before Generation";
+            return AUTO_CARDS_CANDIDATION_MODE_HEURISTICS;
         }
-        if ("Manual".equals(mode))
+        if (AUTO_CARDS_CANDIDATION_MODE_ASK_MODEL.equals(mode))
         {
-            return mode;
+            return AUTO_CARDS_CANDIDATION_MODE_ASK_MODEL;
         }
-        return "Before Generation";
+        return AUTO_CARDS_CANDIDATION_MODE_HEURISTICS;
     }
 
     private void showError(String message, Exception e)

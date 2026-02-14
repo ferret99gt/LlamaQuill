@@ -1,11 +1,11 @@
 package com.llamaquill.model;
 
-public record AppAutoCardsSettings(String runMode, int minGapSeconds, boolean defaultEnabled, int cooldownTurns,
-        int maxCardsPerRun, int candidateWindow, int cardLengthLimit, boolean summarizeInsteadOfTrim,
-        String verbosity, String loggingLevel)
+public record AppAutoCardsSettings(int cooldownTurns, int maxCardsPerRun,
+        int candidateWindow, int cardLengthLimit, boolean summarizeInsteadOfTrim,
+        String candidateSelectionMode)
 {
     public static AppAutoCardsSettings defaults()
     {
-        return new AppAutoCardsSettings("Before Generation", 5, false, 8, 3, 12, 2000, true, "detailed", "errors");
+        return new AppAutoCardsSettings(8, 3, 12, 2000, true, "Proper Noun Heuristics");
     }
 }
