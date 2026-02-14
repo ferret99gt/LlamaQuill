@@ -6,6 +6,6 @@ public record AppAutoCardsSettings(String runMode, int minGapSeconds, boolean de
 {
     public static AppAutoCardsSettings defaults()
     {
-        return new AppAutoCardsSettings("Before Generation", 5, false, 8, 3, 8, 1500, true, "concise", "errors");
+        return new AppAutoCardsSettings("Before Generation", 5, false, 8, 3, 12, 2000, true, "detailed", "errors");
     }
 }
