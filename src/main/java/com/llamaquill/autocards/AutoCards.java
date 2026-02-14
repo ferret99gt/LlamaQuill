@@ -19,25 +19,31 @@ public final class AutoCards
 {
     public static final String CANDIDATE_SELECTION_MODE_HEURISTICS = "Proper Noun Heuristics";
     public static final String CANDIDATE_SELECTION_MODE_ASK_MODEL = "Ask Model";
+    public static final String CONTEXT_MODE_WINDOWED_EXCERPT = "Windowed Excerpt";
+    public static final String CONTEXT_MODE_FULL_STORY = "Full Story Context";
 
-    private static final String AUTO_CARD_PROMPT_SYSTEM_TAG = "<system>";
-    private static final String AUTO_CARD_PROMPT_USER_TAG = "<user>";
-    private static final Pattern AUTO_CARD_PROPER_NOUN_PATTERN = Pattern.compile(
-            "\\b([A-Z][\\p{L}\\p{N}'-]*(?:\\s+[A-Z][\\p{L}\\p{N}'-]*){0,3})\\b");
+    private static final Pattern AUTO_CARD_PROMPT_TAG_PATTERN = Pattern.compile("(?i)<(system|user|assistant)>");
     private static final Set<String> AUTO_CARD_CONTRACTION_SUFFIXES = Set.of(
             "re", "ve", "ll", "d", "m", "t");
+    private static final Set<String> AUTO_CARD_MINOR_WORDS = Set.of(
+            "&", "the", "for", "of", "le", "la", "el");
+    private static final Set<String> AUTO_CARD_HONORIFICS = Set.of(
+            "mr.", "ms.", "mrs.", "dr.");
+    private static final Set<String> AUTO_CARD_ABBREVIATIONS = Set.of(
+            "sr.", "jr.", "etc.", "st.", "ex.", "inc.");
     private static final Set<String> AUTO_CARD_STOPWORDS = Set.of(
             "a", "an", "and", "as", "at", "before", "but", "did", "do", "does", "for", "from", "he",
             "her", "hers", "him", "his", "how", "i", "if", "in", "it", "its", "me", "my", "of", "on",
             "or", "our", "ours", "she", "so", "story", "that", "the", "their", "theirs", "them", "then",
             "there", "they", "this", "to", "user", "we", "what", "when", "where", "while", "who", "why",
-            "you", "your", "yours", "here");
+            "you", "your", "yours", "here", "yes", "no", "maybe", "ready", "should", "could", "would",
+            "will", "shall", "must", "can", "may", "might", "is", "are", "was", "were", "am");
 
     public record Candidate(String title, String triggers)
     {
     }
 
-    public record PromptParts(String system, String user)
+    public record PromptParts(String system, String user, String assistant)
     {
     }
 
@@ -56,6 +62,15 @@ public final class AutoCards
             return CANDIDATE_SELECTION_MODE_ASK_MODEL;
         }
         return CANDIDATE_SELECTION_MODE_HEURISTICS;
+    }
+
+    public static String normalizeContextMode(String mode)
+    {
+        if (CONTEXT_MODE_FULL_STORY.equals(mode))
+        {
+            return CONTEXT_MODE_FULL_STORY;
+        }
+        return CONTEXT_MODE_WINDOWED_EXCERPT;
     }
 
     public static List<Candidate> extractCandidatesByHeuristics(String excerpt, List<StoryCard> currentCards, int maxCount)
@@ -96,13 +111,10 @@ public final class AutoCards
         }
 
         Map<String, Integer> hitCounts = new HashMap<>();
-        Map<String, Integer> sentenceStartHitCounts = new HashMap<>();
-        Map<String, Integer> questionOrExclaimHits = new HashMap<>();
         Map<String, String> orderedTitles = new LinkedHashMap<>();
-        Matcher matcher = AUTO_CARD_PROPER_NOUN_PATTERN.matcher(excerpt);
-        while (matcher.find())
+        for (String extractedTitle : extractProperNounTitles(excerpt))
         {
-            String title = normalizeHeuristicCandidateTitle(matcher.group(1));
+            String title = normalizeHeuristicCandidateTitle(extractedTitle);
             if (!isValidHeuristicCandidateTitle(title))
             {
                 continue;
@@ -114,14 +126,6 @@ public final class AutoCards
             }
             orderedTitles.putIfAbsent(key, title);
             hitCounts.merge(key, 1, Integer::sum);
-            if (isHeuristicSentenceStart(excerpt, matcher.start()))
-            {
-                sentenceStartHitCounts.merge(key, 1, Integer::sum);
-            }
-            if (isHeuristicQuestionOrExclamation(excerpt, matcher.end()))
-            {
-                questionOrExclaimHits.merge(key, 1, Integer::sum);
-            }
         }
 
         Map<String, Candidate> candidates = new LinkedHashMap<>();
@@ -136,18 +140,6 @@ public final class AutoCards
             StoryCard existing = existingByTitle.get(key);
             boolean singleWord = title.indexOf(' ') < 0;
             if (existing == null && singleWord && hitCounts.getOrDefault(key, 0) < 2)
-            {
-                continue;
-            }
-            if (existing == null
-                    && sentenceStartHitCounts.getOrDefault(key, 0) == hitCounts.getOrDefault(key, 0)
-                    && hitCounts.getOrDefault(key, 0) < 3)
-            {
-                continue;
-            }
-            if (existing == null
-                    && questionOrExclaimHits.getOrDefault(key, 0) == hitCounts.getOrDefault(key, 0)
-                    && hitCounts.getOrDefault(key, 0) < 3)
             {
                 continue;
             }
@@ -217,8 +209,23 @@ public final class AutoCards
 
     public static String buildChatPrompt(String system, String user)
     {
+        return buildChatPrompt(system, user, "");
+    }
+
+    public static String buildChatPrompt(PromptParts parts)
+    {
+        if (parts == null)
+        {
+            return buildChatPrompt("", "", "");
+        }
+        return buildChatPrompt(parts.system(), parts.user(), parts.assistant());
+    }
+
+    private static String buildChatPrompt(String system, String user, String assistant)
+    {
         String systemText = system == null ? "" : system.trim();
         String userText = user == null ? "" : user.trim();
+        String assistantText = assistant == null ? "" : assistant.trim();
         StringBuilder prompt = new StringBuilder();
         if (!systemText.isBlank())
         {
@@ -226,10 +233,17 @@ public final class AutoCards
                     .append(systemText)
                     .append("<|im_end|>\n");
         }
-        prompt.append("<|im_start|>user\n")
-                .append(userText)
-                .append("<|im_end|>\n")
-                .append("<|im_start|>assistant\n");
+        if (!userText.isBlank())
+        {
+            prompt.append("<|im_start|>user\n")
+                    .append(userText)
+                    .append("<|im_end|>\n");
+        }
+        prompt.append("<|im_start|>assistant\n");
+        if (!assistantText.isBlank())
+        {
+            prompt.append(assistantText);
+        }
         return prompt.toString();
     }
 
@@ -246,10 +260,14 @@ public final class AutoCards
         {
             return "";
         }
+        String contentValue = content == null ? "" : content;
+        String excerptValue = excerpt == null ? "" : excerpt;
         return template.replace("%{title}", title == null ? "" : title)
                 .replace("%{triggers}", triggers == null ? "" : triggers)
-                .replace("%{content}", content == null ? "" : content)
-                .replace("%{excerpt}", excerpt == null ? "" : excerpt)
+                .replace("%{content}", contentValue)
+                .replace("%{memory}", contentValue)
+                .replace("%{entry}", contentValue)
+                .replace("%{excerpt}", excerptValue)
                 .replace("%{verbosity}", "");
     }
 
@@ -257,41 +275,64 @@ public final class AutoCards
     {
         if (prompt == null)
         {
-            return new PromptParts("", "");
+            return new PromptParts("", "", "");
         }
         String raw = prompt.trim();
         if (raw.isBlank())
         {
-            return new PromptParts("", "");
+            return new PromptParts("", "", "");
+        }
+        Matcher matcher = AUTO_CARD_PROMPT_TAG_PATTERN.matcher(raw);
+        List<String> tags = new ArrayList<>();
+        List<Integer> starts = new ArrayList<>();
+        List<Integer> tagStarts = new ArrayList<>();
+        while (matcher.find())
+        {
+            tags.add(matcher.group(1).toLowerCase(Locale.ROOT));
+            starts.add(matcher.end());
+            tagStarts.add(matcher.start());
+        }
+        if (tags.isEmpty())
+        {
+            return new PromptParts("", raw, "");
         }
 
-        String lowered = raw.toLowerCase(Locale.ROOT);
-        int systemIndex = lowered.indexOf(AUTO_CARD_PROMPT_SYSTEM_TAG);
-        int userIndex = lowered.indexOf(AUTO_CARD_PROMPT_USER_TAG);
-
-        if (systemIndex < 0 && userIndex < 0)
+        String system = "";
+        String user = "";
+        String assistant = "";
+        for (int i = 0; i < tags.size(); i++)
         {
-            return new PromptParts("", raw);
-        }
-        if (systemIndex >= 0 && userIndex >= 0)
-        {
-            if (systemIndex < userIndex)
+            int contentStart = starts.get(i);
+            int contentEnd = i + 1 < tags.size() ? tagStarts.get(i + 1) : raw.length();
+            String section = raw.substring(contentStart, contentEnd).trim();
+            if (section.isBlank())
             {
-                String system = raw.substring(systemIndex + AUTO_CARD_PROMPT_SYSTEM_TAG.length(), userIndex).trim();
-                String user = raw.substring(userIndex + AUTO_CARD_PROMPT_USER_TAG.length()).trim();
-                return new PromptParts(system, user);
+                continue;
             }
-            String user = raw.substring(userIndex + AUTO_CARD_PROMPT_USER_TAG.length(), systemIndex).trim();
-            String system = raw.substring(systemIndex + AUTO_CARD_PROMPT_SYSTEM_TAG.length()).trim();
-            return new PromptParts(system, user);
+            String tag = tags.get(i);
+            if ("system".equals(tag))
+            {
+                system = appendSection(system, section);
+            }
+            else if ("user".equals(tag))
+            {
+                user = appendSection(user, section);
+            }
+            else if ("assistant".equals(tag))
+            {
+                assistant = appendSection(assistant, section);
+            }
         }
-        if (systemIndex >= 0)
+        return new PromptParts(system, user, assistant);
+    }
+
+    private static String appendSection(String current, String section)
+    {
+        if (current == null || current.isBlank())
         {
-            String system = raw.substring(systemIndex + AUTO_CARD_PROMPT_SYSTEM_TAG.length()).trim();
-            return new PromptParts(system, "");
+            return section;
         }
-        String user = raw.substring(userIndex + AUTO_CARD_PROMPT_USER_TAG.length()).trim();
-        return new PromptParts("", user);
+        return current + "\n\n" + section;
     }
 
     private static String extractJsonArray(String text)
@@ -374,35 +415,213 @@ public final class AutoCards
         return normalized.toLowerCase(Locale.ROOT);
     }
 
-    private static boolean isHeuristicSentenceStart(String text, int index)
+    private static List<String> extractProperNounTitles(String text)
     {
-        int i = index - 1;
-        while (i >= 0 && Character.isWhitespace(text.charAt(i)))
+        if (text == null || text.isBlank())
         {
-            i--;
+            return List.of();
         }
-        if (i < 0)
+        String normalized = normalizeForTitleDetection(text);
+        if (normalized.isBlank())
         {
-            return true;
+            return List.of();
         }
-        char previous = text.charAt(i);
-        return previous == '.' || previous == '!' || previous == '?' || previous == ':' || previous == ';'
-                || previous == '\n';
+
+        List<String> titles = new ArrayList<>();
+        List<String> incompleteTitle = new ArrayList<>();
+        boolean previousWordTerminates = true;
+        String[] words = normalized.split("\\s+");
+        for (String rawWord : words)
+        {
+            String word = rawWord;
+            while (!word.isEmpty() && startsWithTerminator(word))
+            {
+                pushIncompleteTitle(titles, incompleteTitle);
+                previousWordTerminates = true;
+                word = word.substring(1);
+            }
+            if (word.isEmpty())
+            {
+                continue;
+            }
+
+            if (previousWordTerminates)
+            {
+                if (endsWithTerminator(word))
+                {
+                    continue;
+                }
+                if (startsWithUppercase(word))
+                {
+                    if (isMinorWord(word))
+                    {
+                        previousWordTerminates = false;
+                    }
+                    continue;
+                }
+                if (!isMinorWord(word) && !isAndLikeWord(word))
+                {
+                    previousWordTerminates = false;
+                }
+                continue;
+            }
+
+            boolean terminated = false;
+            while (!word.isEmpty() && endsWithTerminator(word))
+            {
+                previousWordTerminates = true;
+                terminated = true;
+                word = word.substring(0, word.length() - 1);
+            }
+            if (word.isEmpty())
+            {
+                pushIncompleteTitle(titles, incompleteTitle);
+                continue;
+            }
+
+            if (isMinorWord(word))
+            {
+                if (!incompleteTitle.isEmpty())
+                {
+                    if (2 < incompleteTitle.size()
+                            && !(isMinorWord(incompleteTitle.get(incompleteTitle.size() - 1))
+                                    && isMinorWord(incompleteTitle.get(incompleteTitle.size() - 2))))
+                    {
+                        pushIncompleteTitle(titles, incompleteTitle);
+                        continue;
+                    }
+                    incompleteTitle.add(word.toLowerCase(Locale.ROOT));
+                }
+            }
+            else if (startsWithUppercase(word))
+            {
+                incompleteTitle.add(word);
+            }
+            else
+            {
+                pushIncompleteTitle(titles, incompleteTitle);
+                continue;
+            }
+
+            if (terminated)
+            {
+                pushIncompleteTitle(titles, incompleteTitle);
+            }
+        }
+        pushIncompleteTitle(titles, incompleteTitle);
+        return titles;
     }
 
-    private static boolean isHeuristicQuestionOrExclamation(String text, int endIndex)
+    private static String normalizeForTitleDetection(String text)
     {
-        int i = endIndex;
-        while (i < text.length() && Character.isWhitespace(text.charAt(i)))
+        String normalized = text.replace('\u2014', ' ')
+                .replace('\u2013', ' ')
+                .replace('\u201c', '"')
+                .replace('\u201d', '"')
+                .replace('\u2018', '\'')
+                .replace('\u2019', '\'')
+                .replace('\u00b4', '`')
+                .replace('\u3002', '.')
+                .replace('\uff1f', '?')
+                .replace('\uff01', '!');
+        normalized = normalized.replaceAll("(^|\\s+)[\"'`]\\s*", ": ");
+        normalized = normalized.replaceAll("\\s*[\\(\\[{]\\s*", ": ");
+        normalized = normalized.replaceAll("\\s*,?\\s*[\"'`](?:\\s+|$)", ": ");
+        normalized = normalized.replaceAll("[؟،«»¿¡„“…§，、*_~><\\)\\]}#\"`\\s]+", " ");
+        normalized = normalized.replaceAll("\\s*[—;,/\\\\]\\s*", " %@% ");
+        normalized = normalized.replaceAll("(?:^|\\s+|-)I(?:'(?:m|d|ll|ve))?(?:\\s+|-|$)", " %@% ");
+        normalized = normalized.replaceAll("'s(?![a-zA-Z])", "");
+        normalized = normalized.replaceAll("(?<=[a-zA-Z])s'(?![a-zA-Z])", "s");
+        normalized = normalized.replaceAll("(?<![a-zA-Z])'(?![a-zA-Z])", "");
+        normalized = normalized.replaceAll("^\\s*-+\\s*", "");
+        normalized = replaceWordsWithPlaceholder(normalized, AUTO_CARD_HONORIFICS);
+        normalized = removeWords(normalized, AUTO_CARD_ABBREVIATIONS);
+        normalized = normalized.replaceAll("\\s+\\.(?![a-zA-Z])", ".").replaceAll("\\.{2,}", ".");
+        normalized = normalized.replaceAll("\\s+\\?(?![a-zA-Z])", "?").replaceAll("\\?{2,}", "?");
+        normalized = normalized.replaceAll("\\s+!(?![a-zA-Z])", "!").replaceAll("!{2,}", "!");
+        normalized = normalized.replaceAll("\\s+:(?![a-zA-Z])", ":").replaceAll(":{2,}", ":");
+        normalized = capitalizeFirstAfterColon(normalized);
+        return normalized.trim().replaceAll("\\s+", " ");
+    }
+
+    private static String replaceWordsWithPlaceholder(String text, Set<String> words)
+    {
+        if (text.isBlank() || words.isEmpty())
         {
-            i++;
+            return text;
         }
-        if (i >= text.length())
+        String regex = buildWordSetPattern(words);
+        return text.replaceAll(regex, " %@% ");
+    }
+
+    private static String removeWords(String text, Set<String> words)
+    {
+        if (text.isBlank() || words.isEmpty())
         {
-            return false;
+            return text;
         }
-        char c = text.charAt(i);
-        return c == '?' || c == '!';
+        String regex = buildWordSetPattern(words);
+        return text.replaceAll(regex, " ");
+    }
+
+    private static String buildWordSetPattern(Set<String> words)
+    {
+        String joined = words.stream()
+                .map(word -> Pattern.quote(word.replace(".", "")) + "\\.?")
+                .reduce((left, right) -> left + "|" + right)
+                .orElse("");
+        return "(?i)(?:^|\\s+|-)(?:" + joined + ")(?:\\s+|-|$)";
+    }
+
+    private static String capitalizeFirstAfterColon(String text)
+    {
+        Matcher matcher = Pattern.compile(":\\s+(\\S)").matcher(text);
+        StringBuilder sb = new StringBuilder();
+        while (matcher.find())
+        {
+            matcher.appendReplacement(sb, ": " + Matcher.quoteReplacement(
+                    matcher.group(1).toUpperCase(Locale.ROOT)));
+        }
+        matcher.appendTail(sb);
+        return sb.toString();
+    }
+
+    private static void pushIncompleteTitle(List<String> titles, List<String> incompleteTitle)
+    {
+        while (1 < incompleteTitle.size() && isMinorWord(incompleteTitle.get(incompleteTitle.size() - 1)))
+        {
+            incompleteTitle.remove(incompleteTitle.size() - 1);
+        }
+        if (!incompleteTitle.isEmpty())
+        {
+            titles.add(String.join(" ", incompleteTitle));
+            incompleteTitle.clear();
+        }
+    }
+
+    private static boolean isMinorWord(String word)
+    {
+        return AUTO_CARD_MINOR_WORDS.contains(word.toLowerCase(Locale.ROOT));
+    }
+
+    private static boolean startsWithUppercase(String word)
+    {
+        return !word.isEmpty() && Character.isUpperCase(word.codePointAt(0));
+    }
+
+    private static boolean startsWithTerminator(String word)
+    {
+        return !word.isEmpty() && ".?!:".indexOf(word.charAt(0)) >= 0;
+    }
+
+    private static boolean endsWithTerminator(String word)
+    {
+        return !word.isEmpty() && ".?!:".indexOf(word.charAt(word.length() - 1)) >= 0;
+    }
+
+    private static boolean isAndLikeWord(String word)
+    {
+        return word.matches("(?i)^(?:and|&)(?:$|[.?!:]$)");
     }
 
     private static List<String> splitTriggers(String triggers)

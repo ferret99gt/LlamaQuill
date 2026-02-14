@@ -24,7 +24,7 @@ public class AppAutoCardsRepository
         try (PreparedStatement stmt = connection.prepareStatement("""
                 SELECT cooldown_turns, max_cards_per_run,
                        candidate_window, card_length_limit, summarize_instead_of_trim,
-                       candidate_selection_mode
+                       candidate_selection_mode, context_mode
                 FROM app_auto_cards
                 WHERE id = ?
                 """))
@@ -42,7 +42,8 @@ public class AppAutoCardsRepository
                         rs.getInt("candidate_window"),
                         rs.getInt("card_length_limit"),
                         rs.getInt("summarize_instead_of_trim") == 1,
-                        rs.getString("candidate_selection_mode")));
+                        rs.getString("candidate_selection_mode"),
+                        rs.getString("context_mode")));
             }
         }
     }
@@ -53,15 +54,16 @@ public class AppAutoCardsRepository
                 INSERT INTO app_auto_cards (
                     id, cooldown_turns, max_cards_per_run,
                     candidate_window, card_length_limit, summarize_instead_of_trim,
-                    candidate_selection_mode
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    candidate_selection_mode, context_mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     cooldown_turns = excluded.cooldown_turns,
                     max_cards_per_run = excluded.max_cards_per_run,
                     candidate_window = excluded.candidate_window,
                     card_length_limit = excluded.card_length_limit,
                     summarize_instead_of_trim = excluded.summarize_instead_of_trim,
-                    candidate_selection_mode = excluded.candidate_selection_mode
+                    candidate_selection_mode = excluded.candidate_selection_mode,
+                    context_mode = excluded.context_mode
                 """))
         {
             stmt.setInt(1, SETTINGS_ID);
@@ -71,6 +73,7 @@ public class AppAutoCardsRepository
             stmt.setInt(5, settings.cardLengthLimit());
             stmt.setInt(6, settings.summarizeInsteadOfTrim() ? 1 : 0);
             stmt.setString(7, settings.candidateSelectionMode());
+            stmt.setString(8, settings.contextMode());
             stmt.executeUpdate();
         }
     }

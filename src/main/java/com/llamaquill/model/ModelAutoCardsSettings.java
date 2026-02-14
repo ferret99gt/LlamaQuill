@@ -49,14 +49,13 @@ public record ModelAutoCardsSettings(String modelName, String createPrompt, Stri
                 Title: %{title}
                 Triggers: %{triggers}
 
-                # Existing card:
-                %{content}
-
                 # Story excerpt:
                 %{excerpt}
 
                 # Instruction:
-                Update the entry for %{title} while avoiding repetition. Return only the updated card content.
+                Update the entry for %{title} while avoiding repetition. Continue the card as provided:
+                <assistant>
+                %{content}
                 """,
                 """
                 <system>

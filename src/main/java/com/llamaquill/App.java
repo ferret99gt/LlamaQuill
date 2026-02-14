@@ -164,6 +164,7 @@ public class App extends Application
     private CheckBox autoCardsSummarizeBox;
 
     private ComboBox<String> autoCardsCandidateSelectionMode;
+    private ComboBox<String> autoCardsContextMode;
 
     private TextArea autoCardsCreatePrompt;
     private TextArea autoCardsUpdatePrompt;
@@ -724,6 +725,19 @@ public class App extends Application
             }
         });
 
+        autoCardsContextMode = new ComboBox<>();
+        autoCardsContextMode.setItems(FXCollections.observableArrayList(
+                AutoCards.CONTEXT_MODE_WINDOWED_EXCERPT,
+                AutoCards.CONTEXT_MODE_FULL_STORY));
+        autoCardsContextMode.setMaxWidth(Double.MAX_VALUE);
+        autoCardsContextMode.setOnAction(event ->
+        {
+            if (autoCardsContextMode.getValue() != null)
+            {
+                updateAppAutoCardsContextMode(autoCardsContextMode.getValue());
+            }
+        });
+
         autoCardsCooldownSpinner = buildSpinner(0, 100, appAutoCardsSettings.cooldownTurns());
 
         autoCardsMaxPerRunSpinner = buildSpinner(1, 10, appAutoCardsSettings.maxCardsPerRun());
@@ -815,6 +829,7 @@ public class App extends Application
                 spinnerRow("Author's Note Insertion Point", anPlacementSpinner, this::updateAnPlacement),
                 new Label("Auto Cards (Global)"),
                 comboRow("Candidation Selection Mode", autoCardsCandidateSelectionMode),
+                comboRow("Context Mode", autoCardsContextMode),
                 spinnerRow("Cooldown (turns)", autoCardsCooldownSpinner, this::updateAppAutoCardsCooldown),
                 spinnerRow("Max cards per run", autoCardsMaxPerRunSpinner, this::updateAppAutoCardsMaxPerRun),
                 spinnerRow("Candidate window (blocks)", autoCardsWindowSpinner, this::updateAppAutoCardsWindow),
@@ -1111,12 +1126,16 @@ public class App extends Application
         updatingAutoCardsControls = true;
         String candidationMode = AutoCards.normalizeCandidateSelectionMode(
                 appAutoCardsSettings.candidateSelectionMode());
-        if (!candidationMode.equals(appAutoCardsSettings.candidateSelectionMode()))
+        String contextMode = AutoCards.normalizeContextMode(appAutoCardsSettings.contextMode());
+        if (!candidationMode.equals(appAutoCardsSettings.candidateSelectionMode())
+                || !contextMode.equals(appAutoCardsSettings.contextMode()))
         {
             appAutoCardsSettings = SettingsCoordinator.withCandidateSelectionMode(appAutoCardsSettings, candidationMode);
+            appAutoCardsSettings = SettingsCoordinator.withContextMode(appAutoCardsSettings, contextMode);
             persistAppAutoCardsSettings();
         }
         autoCardsCandidateSelectionMode.setValue(candidationMode);
+        autoCardsContextMode.setValue(contextMode);
         autoCardsCooldownSpinner.getValueFactory().setValue(appAutoCardsSettings.cooldownTurns());
         autoCardsMaxPerRunSpinner.getValueFactory().setValue(appAutoCardsSettings.maxCardsPerRun());
         autoCardsWindowSpinner.getValueFactory().setValue(appAutoCardsSettings.candidateWindow());
@@ -1170,6 +1189,21 @@ public class App extends Application
             return;
         }
         appAutoCardsSettings = SettingsCoordinator.withCandidateSelectionMode(appAutoCardsSettings, normalized);
+        persistAppAutoCardsSettings();
+    }
+
+    private void updateAppAutoCardsContextMode(String mode)
+    {
+        if (updatingAutoCardsControls || appAutoCardsSettings == null || mode == null)
+        {
+            return;
+        }
+        String normalized = AutoCards.normalizeContextMode(mode);
+        if (normalized.equals(appAutoCardsSettings.contextMode()))
+        {
+            return;
+        }
+        appAutoCardsSettings = SettingsCoordinator.withContextMode(appAutoCardsSettings, normalized);
         persistAppAutoCardsSettings();
     }
 
@@ -1453,6 +1487,12 @@ public class App extends Application
         {
             return new AutoCardsResult(0, 0, true);
         }
+        String fullStoryPromptPrefix = "";
+        if (AutoCards.CONTEXT_MODE_FULL_STORY.equals(
+                AutoCards.normalizeContextMode(appAutoCardsSettings.contextMode())))
+        {
+            fullStoryPromptPrefix = buildAutoCardsFullStoryPrompt(currentBlocks, currentCards);
+        }
 
         List<AutoCards.Candidate> candidates = extractAutoCardCandidates(excerpt, currentCards,
                 appAutoCardsSettings.maxCardsPerRun());
@@ -1491,12 +1531,13 @@ public class App extends Application
                 {
                     continue;
                 }
-                String updatedContent = generateAutoCardUpdate(existing, excerpt);
+                String updatedContent = generateAutoCardUpdate(existing, excerpt, fullStoryPromptPrefix);
                 if (updatedContent.isBlank())
                 {
                     continue;
                 }
-                updatedContent = enforceCardLength(updatedContent, summarize, limit);
+                updatedContent = enforceCardLength(updatedContent, summarize, limit,
+                        existing.title(), existing.triggers(), excerpt, fullStoryPromptPrefix);
                 if (preview)
                 {
                     String proposed = updatedContent;
@@ -1518,12 +1559,13 @@ public class App extends Application
                 {
                     continue;
                 }
-                String content = generateAutoCardCreate(candidate, excerpt);
+                String content = generateAutoCardCreate(candidate, excerpt, fullStoryPromptPrefix);
                 if (content.isBlank())
                 {
                     continue;
                 }
-                content = enforceCardLength(content, summarize, limit);
+                content = enforceCardLength(content, summarize, limit,
+                        candidate.title(), candidate.triggers(), excerpt, fullStoryPromptPrefix);
                 StoryCard createdCard = new StoryCard(Ids.newId(), activeStory.id(), candidate.title(),
                         candidate.triggers(), content, storyAutoCardsSettings.pinNew());
                 if (preview)
@@ -1646,12 +1688,32 @@ public class App extends Application
                 candidate.triggers(),
                 "",
                 excerpt);
-        String prompt = AutoCards.buildChatPrompt(promptParts.system(), promptParts.user());
+        String prompt = buildAutoCardPrompt(promptParts, "");
+        GenerationSettings autoSettings = buildAutoCardsGenerationSettings(modelAutoCardsSettings.maxTokensCreate());
+        return normalizeOutput(ollamaClient.generate(prompt, autoSettings));
+    }
+
+    private String generateAutoCardCreate(AutoCards.Candidate candidate, String excerpt, String fullStoryPromptPrefix)
+            throws IOException, InterruptedException
+    {
+        AutoCards.PromptParts promptParts = AutoCards.buildPromptParts(
+                modelAutoCardsSettings.createPrompt(),
+                candidate.title(),
+                candidate.triggers(),
+                "",
+                excerpt);
+        String prompt = buildAutoCardPrompt(promptParts, fullStoryPromptPrefix);
         GenerationSettings autoSettings = buildAutoCardsGenerationSettings(modelAutoCardsSettings.maxTokensCreate());
         return normalizeOutput(ollamaClient.generate(prompt, autoSettings));
     }
 
     private String generateAutoCardUpdate(StoryCard existing, String excerpt)
+            throws IOException, InterruptedException
+    {
+        return generateAutoCardUpdate(existing, excerpt, "");
+    }
+
+    private String generateAutoCardUpdate(StoryCard existing, String excerpt, String fullStoryPromptPrefix)
             throws IOException, InterruptedException
     {
         AutoCards.PromptParts promptParts = AutoCards.buildPromptParts(
@@ -1660,25 +1722,41 @@ public class App extends Application
                 existing.triggers(),
                 existing.content(),
                 excerpt);
-        String prompt = AutoCards.buildChatPrompt(promptParts.system(), promptParts.user());
+        String prompt = buildAutoCardPrompt(promptParts, fullStoryPromptPrefix);
         GenerationSettings autoSettings = buildAutoCardsGenerationSettings(modelAutoCardsSettings.maxTokensUpdate());
         return normalizeOutput(ollamaClient.generate(prompt, autoSettings));
     }
 
-    private String generateAutoCardSummary(String content) throws IOException, InterruptedException
+    private String generateAutoCardSummary(String title, String triggers, String content, String excerpt)
+            throws IOException, InterruptedException
+    {
+        return generateAutoCardSummary(title, triggers, content, excerpt, "");
+    }
+
+    private String generateAutoCardSummary(String title, String triggers, String content, String excerpt,
+            String fullStoryPromptPrefix)
+            throws IOException, InterruptedException
     {
         AutoCards.PromptParts promptParts = AutoCards.buildPromptParts(
                 modelAutoCardsSettings.summarizePrompt(),
-                "",
-                "",
+                title,
+                triggers,
                 content,
-                "");
-        String prompt = AutoCards.buildChatPrompt(promptParts.system(), promptParts.user());
+                excerpt);
+        String prompt = buildAutoCardPrompt(promptParts, fullStoryPromptPrefix);
         GenerationSettings autoSettings = buildAutoCardsGenerationSettings(modelAutoCardsSettings.maxTokensSummarize());
         return normalizeOutput(ollamaClient.generate(prompt, autoSettings));
     }
 
-    private String enforceCardLength(String content, boolean summarize, int limit)
+    private String enforceCardLength(String content, boolean summarize, int limit, String title, String triggers,
+            String excerpt)
+            throws IOException, InterruptedException
+    {
+        return enforceCardLength(content, summarize, limit, title, triggers, excerpt, "");
+    }
+
+    private String enforceCardLength(String content, boolean summarize, int limit, String title, String triggers,
+            String excerpt, String fullStoryPromptPrefix)
             throws IOException, InterruptedException
     {
         if (limit <= 0 || content.length() <= limit)
@@ -1687,7 +1765,7 @@ public class App extends Application
         }
         if (summarize)
         {
-            String summarized = generateAutoCardSummary(content);
+            String summarized = generateAutoCardSummary(title, triggers, content, excerpt, fullStoryPromptPrefix);
             if (!summarized.isBlank())
             {
                 if (summarized.length() <= limit)
@@ -1698,6 +1776,32 @@ public class App extends Application
             }
         }
         return AutoCards.truncateContent(content, limit);
+    }
+
+    private String buildAutoCardsFullStoryPrompt(List<Block> currentBlocks, List<StoryCard> currentCards)
+    {
+        int tokenCap = Math.max(modelAutoCardsSettings.maxTokensCreate(),
+                Math.max(modelAutoCardsSettings.maxTokensUpdate(), modelAutoCardsSettings.maxTokensSummarize()));
+        GenerationSettings contextSettings = buildAutoCardsGenerationSettings(tokenCap);
+        PromptCompilation compiled = promptCompiler.compile(activeStory, currentBlocks, currentCards, contextSettings);
+        return compiled.prompt();
+    }
+
+    private String buildAutoCardPrompt(AutoCards.PromptParts promptParts, String fullStoryPromptPrefix)
+    {
+        String autoCardPrompt = AutoCards.buildChatPrompt(promptParts);
+        if (fullStoryPromptPrefix == null || fullStoryPromptPrefix.isBlank())
+        {
+            return autoCardPrompt;
+        }
+        String trimmedPrefix = fullStoryPromptPrefix.trim();
+        StringBuilder combined = new StringBuilder(trimmedPrefix);
+        if (!trimmedPrefix.endsWith("<|im_end|>"))
+        {
+            combined.append("<|im_end|>");
+        }
+        combined.append('\n').append(autoCardPrompt);
+        return combined.toString();
     }
 
     private GenerationSettings buildAutoCardsGenerationSettings(int maxTokens)
