@@ -30,6 +30,7 @@ import com.llamaquill.util.Ids;
 import com.llamaquill.util.Timestamps;
 import javafx.application.Application;
 import javafx.application.Platform;
+import javafx.beans.binding.Bindings;
 import javafx.beans.binding.DoubleBinding;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
@@ -87,6 +88,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.CompletionException;
+import java.util.function.Consumer;
 
 public class App extends Application
 {
@@ -214,6 +217,8 @@ public class App extends Application
     private double restoreH;
     private boolean customMaximized;
     private boolean forceScrollPending;
+    private DoubleBinding storyContentWidthBinding;
+    private DoubleBinding storyRowContentWidthBinding;
 
     private final Map<String, AutoCardsRunState> autoCardsRunState = new HashMap<>();
 
@@ -295,6 +300,8 @@ public class App extends Application
         storyScroll.setFitToWidth(true);
         storyScroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
         storyScroll.getStyleClass().add("story-scroll");
+        storyContentWidthBinding = Bindings.max(0.0, storyScroll.widthProperty().subtract(32));
+        storyRowContentWidthBinding = Bindings.max(0.0, storyContentWidthBinding.subtract(24));
 
         continueButton = new Button("Continue");
         continueButton.setOnAction(event -> runContinue());
@@ -3426,60 +3433,41 @@ public class App extends Application
         {
             return;
         }
-        String blockId = activeAssistantEditId;
-        String normalized = newText == null ? "" : newText;
-        try
-        {
-            updateBlockText(blockId, normalized);
-        }
-        catch (SQLException e)
-        {
-            showError("Failed to update block", e);
-        }
 
-        Block updatedBlock = null;
-        for (Block block : blocks)
-        {
-            if (block.id().equals(blockId))
-            {
-                updatedBlock = block;
-                break;
-            }
-        }
-        if (updatedBlock == null)
+        String blockId = activeAssistantEditId;
+        TextArea editor = activeAssistantEditor;
+        TextFlow flow = activeAssistantFlow;
+        activeAssistantEditId = null;
+        activeAssistantEditor = null;
+        activeAssistantFlow = null;
+
+        Block originalBlock = findBlockById(blockId);
+        if (originalBlock == null)
         {
             return;
         }
 
-        TextFlow flow = activeAssistantFlow;
-        Text updatedText = new Text(normalized);
-        updatedText.setFill(javafx.scene.paint.Color.web("#e6e1d8"));
-        String latestId = findLatestAssistantId();
-        boolean highlight = blockId.equals(latestId);
-        if (highlight)
+        String normalized = newText == null ? "" : newText;
+        if (normalized.equals(originalBlock.text()))
         {
-            updatedText.setStyle("-fx-underline: true;");
+            replaceAssistantEditorWithText(flow, editor, originalBlock, originalBlock.text());
+            return;
         }
-        updatedText.setOnMouseEntered(event -> updatedText.setUnderline(true));
-        updatedText.setOnMouseExited(event ->
-        {
-            if (!highlight)
-            {
-                updatedText.setUnderline(false);
-            }
-        });
-        Block finalUpdatedBlock = updatedBlock;
-        updatedText.setOnMouseClicked(event -> beginAssistantInlineEdit(finalUpdatedBlock, flow, updatedText));
 
-        int index = flow.getChildren().indexOf(activeAssistantEditor);
-        if (index >= 0)
+        editor.setDisable(true);
+        persistBlockTextAsync(blockId, normalized, () ->
         {
-            flow.getChildren().set(index, updatedText);
-            flow.requestLayout();
-        }
-        activeAssistantEditId = null;
-        activeAssistantEditor = null;
-        activeAssistantFlow = null;
+            Block updatedBlock = updateBlockText(blockId, normalized);
+            if (updatedBlock == null)
+            {
+                updatedBlock = originalBlock;
+            }
+            replaceAssistantEditorWithText(flow, editor, updatedBlock, normalized);
+        }, e ->
+        {
+            replaceAssistantEditorWithText(flow, editor, originalBlock, originalBlock.text());
+            showError("Failed to update block", e);
+        });
     }
 
     private Region buildUserBlockNode(Block block)
@@ -3524,8 +3512,8 @@ public class App extends Application
         });
 
         StackPane textStack = new StackPane(label, editor);
-        textStack.prefWidthProperty().bind(contentWidthBinding().subtract(24));
-        textStack.maxWidthProperty().bind(contentWidthBinding().subtract(24));
+        textStack.prefWidthProperty().bind(rowContentWidthBinding());
+        textStack.maxWidthProperty().bind(rowContentWidthBinding());
         HBox row = new HBox(6, icon, textStack);
         HBox.setHgrow(textStack, Priority.ALWAYS);
         row.setAlignment(Pos.TOP_LEFT);
@@ -3551,22 +3539,38 @@ public class App extends Application
     private void commitInlineEdit(String blockId, String newText, Label label, TextArea editor, boolean trailingSpace)
     {
         String normalized = newText == null ? "" : newText;
-        try
+        Block originalBlock = findBlockById(blockId);
+        if (originalBlock == null)
         {
-            updateBlockText(blockId, normalized);
-            label.setText(trailingSpace ? normalized + " " : normalized);
+            label.setVisible(true);
+            label.setManaged(true);
+            editor.setVisible(false);
+            editor.setManaged(false);
+            return;
         }
-        catch (SQLException e)
-        {
-            showError("Failed to update block", e);
-        }
+        String previousDisplay = trailingSpace ? originalBlock.text() + " " : originalBlock.text();
+
+        label.setText(trailingSpace ? normalized + " " : normalized);
         label.setVisible(true);
         label.setManaged(true);
         editor.setVisible(false);
         editor.setManaged(false);
+
+        if (normalized.equals(originalBlock.text()))
+        {
+            return;
+        }
+
+        persistBlockTextAsync(blockId, normalized,
+                () -> updateBlockText(blockId, normalized),
+                e ->
+                {
+                    label.setText(previousDisplay);
+                    showError("Failed to update block", e);
+                });
     }
 
-    private void updateBlockText(String blockId, String text) throws SQLException
+    private Block updateBlockText(String blockId, String text)
     {
         for (int i = 0; i < blocks.size(); i++)
         {
@@ -3577,13 +3581,104 @@ public class App extends Application
             }
             if (text.equals(block.text()))
             {
-                return;
+                return block;
             }
-            blockRepository.updateText(blockId, text);
             Block updated = new Block(block.id(), block.storyId(), block.role(), text, block.createdAt(), block.position());
             blocks.set(i, updated);
+            return updated;
+        }
+        return null;
+    }
+
+    private Block findBlockById(String blockId)
+    {
+        for (Block block : blocks)
+        {
+            if (block.id().equals(blockId))
+            {
+                return block;
+            }
+        }
+        return null;
+    }
+
+    private void replaceAssistantEditorWithText(TextFlow flow, TextArea editor, Block block, String text)
+    {
+        if (flow == null || editor == null || block == null)
+        {
             return;
         }
+        Text updatedText = new Text(text == null ? "" : text);
+        updatedText.setFill(javafx.scene.paint.Color.web("#e6e1d8"));
+        String latestId = findLatestAssistantId();
+        boolean highlight = block.id().equals(latestId);
+        if (highlight)
+        {
+            updatedText.setStyle("-fx-underline: true;");
+        }
+        updatedText.setOnMouseEntered(event -> updatedText.setUnderline(true));
+        updatedText.setOnMouseExited(event ->
+        {
+            if (!highlight)
+            {
+                updatedText.setUnderline(false);
+            }
+        });
+        updatedText.setOnMouseClicked(event -> beginAssistantInlineEdit(block, flow, updatedText));
+
+        int index = flow.getChildren().indexOf(editor);
+        if (index >= 0)
+        {
+            flow.getChildren().set(index, updatedText);
+            flow.requestLayout();
+        }
+    }
+
+    private void persistBlockTextAsync(String blockId, String text, Runnable onSuccess, Consumer<Exception> onFailure)
+    {
+        if (executor == null)
+        {
+            try
+            {
+                blockRepository.updateText(blockId, text);
+                onSuccess.run();
+            }
+            catch (SQLException e)
+            {
+                onFailure.accept(e);
+            }
+            return;
+        }
+
+        CompletableFuture.runAsync(() ->
+        {
+            try
+            {
+                blockRepository.updateText(blockId, text);
+            }
+            catch (SQLException e)
+            {
+                throw new RuntimeException(e);
+            }
+        }, executor).thenRun(() -> Platform.runLater(onSuccess)).exceptionally(throwable ->
+        {
+            Platform.runLater(() -> onFailure.accept(asException(throwable)));
+            return null;
+        });
+    }
+
+    private Exception asException(Throwable throwable)
+    {
+        Throwable current = throwable;
+        while (current instanceof CompletionException && current.getCause() != null)
+        {
+            current = current.getCause();
+        }
+        if (current instanceof Exception e)
+        {
+            return e;
+        }
+        return new RuntimeException(current);
     }
 
     private static String stripTrailingSpace(String text)
@@ -3631,7 +3726,20 @@ public class App extends Application
 
     private DoubleBinding contentWidthBinding()
     {
+        if (storyContentWidthBinding != null)
+        {
+            return storyContentWidthBinding;
+        }
         return storyScroll.widthProperty().subtract(32);
+    }
+
+    private DoubleBinding rowContentWidthBinding()
+    {
+        if (storyRowContentWidthBinding != null)
+        {
+            return storyRowContentWidthBinding;
+        }
+        return contentWidthBinding().subtract(24);
     }
 
     private static String normalizeOutput(String output)
