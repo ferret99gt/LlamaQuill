@@ -52,6 +52,7 @@ import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.ScrollPane;
+import javafx.scene.control.ScrollBar;
 import javafx.scene.control.Slider;
 import javafx.scene.control.OverrunStyle;
 import javafx.scene.control.Tab;
@@ -128,8 +129,8 @@ public class App extends Application
     private final ObservableList<StoryCard> cardItems = FXCollections.observableArrayList();
 
     private Stage primaryStage;
-    private ScrollPane storyScroll;
-    private VBox storyContent;
+    private ListView<Region> storyListView;
+    private final ObservableList<Region> storyRows = FXCollections.observableArrayList();
     private Label statusLabel;
     private Button continueButton;
     private Button takeTurnButton;
@@ -216,9 +217,13 @@ public class App extends Application
     private double restoreW;
     private double restoreH;
     private boolean customMaximized;
-    private boolean forceScrollPending;
     private DoubleBinding storyContentWidthBinding;
     private DoubleBinding storyRowContentWidthBinding;
+
+    private static final int ASSISTANT_FLOW_CHUNK_CHAR_LIMIT = 6000;
+    private static final int ASSISTANT_FLOW_CHUNK_BLOCK_LIMIT = 48;
+    private static final int ASSISTANT_FLOW_CHUNK_HARD_CHAR_LIMIT = 12000;
+    private static final int ASSISTANT_FLOW_CHUNK_HARD_BLOCK_LIMIT = 96;
 
     private final Map<String, AutoCardsRunState> autoCardsRunState = new HashMap<>();
 
@@ -286,21 +291,21 @@ public class App extends Application
             throw new IllegalStateException("Failed to initialize database", e);
         }
 
-        storyContent = new VBox(6);
-        storyContent.getStyleClass().add("story-content");
-        storyContent.heightProperty().addListener((obs, oldValue, newValue) ->
+        storyListView = new ListView<>(storyRows);
+        storyListView.getStyleClass().add("story-list");
+        storyListView.setFocusTraversable(false);
+        storyListView.setCellFactory(list -> new ListCell<>()
         {
-            if (forceScrollPending)
+            @Override
+            protected void updateItem(Region item, boolean empty)
             {
-                scrollToBottom();
-                forceScrollPending = false;
+                super.updateItem(item, empty);
+                setText(null);
+                setGraphic(empty ? null : item);
+                setPadding(Insets.EMPTY);
             }
         });
-        storyScroll = new ScrollPane(storyContent);
-        storyScroll.setFitToWidth(true);
-        storyScroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
-        storyScroll.getStyleClass().add("story-scroll");
-        storyContentWidthBinding = Bindings.max(0.0, storyScroll.widthProperty().subtract(32));
+        storyContentWidthBinding = Bindings.max(0.0, storyListView.widthProperty().subtract(32));
         storyRowContentWidthBinding = Bindings.max(0.0, storyContentWidthBinding.subtract(24));
 
         continueButton = new Button("Continue");
@@ -425,7 +430,7 @@ public class App extends Application
     {
         var centerPane = new BorderPane();
         centerPane.getStyleClass().add("center-pane");
-        centerPane.setCenter(storyScroll);
+        centerPane.setCenter(storyListView);
 
         turnInputArea = new TextArea();
         turnInputArea.setWrapText(true);
@@ -3286,14 +3291,9 @@ public class App extends Application
 
     private void renderStoryBlocks(boolean forceScroll)
     {
-        storyContent.getChildren().clear();
+        storyRows.clear();
         if (blocks.isEmpty())
         {
-            if (forceScroll)
-            {
-                forceScrollPending = true;
-                scrollToBottom();
-            }
             return;
         }
 
@@ -3310,14 +3310,15 @@ public class App extends Application
 
             addAssistantGroup(assistantGroup, latestAssistantId);
             assistantGroup.clear();
-            storyContent.getChildren().add(buildUserBlockNode(block));
+            storyRows.add(buildUserBlockNode(block));
         }
 
         addAssistantGroup(assistantGroup, latestAssistantId);
+        storyListView.getSelectionModel().clearSelection();
+        storyListView.getFocusModel().focus(-1);
 
         if (forceScroll)
         {
-            forceScrollPending = true;
             scrollToBottom();
         }
     }
@@ -3328,6 +3329,15 @@ public class App extends Application
         {
             return;
         }
+        List<List<Block>> chunks = splitAssistantGroup(group);
+        for (List<Block> chunk : chunks)
+        {
+            storyRows.add(buildAssistantFlow(chunk, latestAssistantId));
+        }
+    }
+
+    private TextFlow buildAssistantFlow(List<Block> group, String latestAssistantId)
+    {
         TextFlow flow = new TextFlow();
         flow.setLineSpacing(6);
         flow.setPadding(new Insets(2, 10, 2, 10));
@@ -3363,7 +3373,66 @@ public class App extends Application
         Text sentinel = new Text("");
         sentinel.setUserData("sentinel");
         flow.getChildren().add(sentinel);
-        storyContent.getChildren().add(flow);
+        return flow;
+    }
+
+    private List<List<Block>> splitAssistantGroup(List<Block> group)
+    {
+        List<List<Block>> chunks = new ArrayList<>();
+        List<Block> current = new ArrayList<>();
+        int charCount = 0;
+
+        for (int i = 0; i < group.size(); i++)
+        {
+            Block block = group.get(i);
+            int blockChars = block.text() == null ? 0 : block.text().length();
+            current.add(block);
+            charCount += blockChars;
+
+            boolean softLimitReached = current.size() >= ASSISTANT_FLOW_CHUNK_BLOCK_LIMIT
+                    || charCount >= ASSISTANT_FLOW_CHUNK_CHAR_LIMIT;
+            boolean hardLimitReached = current.size() >= ASSISTANT_FLOW_CHUNK_HARD_BLOCK_LIMIT
+                    || charCount >= ASSISTANT_FLOW_CHUNK_HARD_CHAR_LIMIT;
+            boolean hasNext = i + 1 < group.size();
+            if (!hasNext)
+            {
+                continue;
+            }
+
+            Block next = group.get(i + 1);
+            boolean naturalBoundary = hasHardBreakBetween(block, next);
+            boolean shouldSplit = hardLimitReached || (softLimitReached && naturalBoundary);
+            if (!shouldSplit)
+            {
+                continue;
+            }
+            chunks.add(current);
+            current = new ArrayList<>();
+            charCount = 0;
+        }
+
+        if (!current.isEmpty())
+        {
+            chunks.add(current);
+        }
+        return chunks;
+    }
+
+    private boolean hasHardBreakBetween(Block left, Block right)
+    {
+        String leftText = left == null ? "" : left.text();
+        String rightText = right == null ? "" : right.text();
+        return endsWithNewline(leftText) || startsWithNewline(rightText);
+    }
+
+    private boolean endsWithNewline(String text)
+    {
+        return text != null && !text.isEmpty() && (text.endsWith("\n") || text.endsWith("\r"));
+    }
+
+    private boolean startsWithNewline(String text)
+    {
+        return text != null && !text.isEmpty() && (text.startsWith("\n") || text.startsWith("\r"));
     }
 
     private String findLatestAssistantId()
@@ -3381,6 +3450,7 @@ public class App extends Application
 
     private void beginAssistantInlineEdit(Block block, TextFlow flow, Text textNode)
     {
+        clearStoryListSelection();
         if (activeAssistantEditor != null)
         {
             commitAssistantEdit(activeAssistantEditor.getText());
@@ -3451,6 +3521,7 @@ public class App extends Application
         if (normalized.equals(originalBlock.text()))
         {
             replaceAssistantEditorWithText(flow, editor, originalBlock, originalBlock.text());
+            clearStoryListSelection();
             return;
         }
 
@@ -3463,9 +3534,11 @@ public class App extends Application
                 updatedBlock = originalBlock;
             }
             replaceAssistantEditorWithText(flow, editor, updatedBlock, normalized);
+            clearStoryListSelection();
         }, e ->
         {
             replaceAssistantEditorWithText(flow, editor, originalBlock, originalBlock.text());
+            clearStoryListSelection();
             showError("Failed to update block", e);
         });
     }
@@ -3526,6 +3599,7 @@ public class App extends Application
 
     private void beginInlineEdit(Label label, TextArea editor)
     {
+        clearStoryListSelection();
         String current = stripTrailingSpace(label.getText());
         editor.setText(current);
         label.setVisible(false);
@@ -3546,6 +3620,7 @@ public class App extends Application
             label.setManaged(true);
             editor.setVisible(false);
             editor.setManaged(false);
+            clearStoryListSelection();
             return;
         }
         String previousDisplay = trailingSpace ? originalBlock.text() + " " : originalBlock.text();
@@ -3558,14 +3633,20 @@ public class App extends Application
 
         if (normalized.equals(originalBlock.text()))
         {
+            clearStoryListSelection();
             return;
         }
 
         persistBlockTextAsync(blockId, normalized,
-                () -> updateBlockText(blockId, normalized),
+                () ->
+                {
+                    updateBlockText(blockId, normalized);
+                    clearStoryListSelection();
+                },
                 e ->
                 {
                     label.setText(previousDisplay);
+                    clearStoryListSelection();
                     showError("Failed to update block", e);
                 });
     }
@@ -3718,10 +3799,34 @@ public class App extends Application
     {
         javafx.application.Platform.runLater(() ->
         {
-            storyScroll.applyCss();
-            storyScroll.layout();
-            storyScroll.setVvalue(1.0);
+            if (storyRows.isEmpty())
+            {
+                return;
+            }
+            storyListView.scrollTo(storyRows.size() - 1);
+            javafx.application.Platform.runLater(() ->
+            {
+                storyListView.applyCss();
+                storyListView.layout();
+                for (Node node : storyListView.lookupAll(".scroll-bar"))
+                {
+                    if (node instanceof ScrollBar bar && bar.getOrientation() == Orientation.VERTICAL)
+                    {
+                        bar.setValue(bar.getMax());
+                    }
+                }
+            });
         });
+    }
+
+    private void clearStoryListSelection()
+    {
+        if (storyListView == null)
+        {
+            return;
+        }
+        storyListView.getSelectionModel().clearSelection();
+        storyListView.getFocusModel().focus(-1);
     }
 
     private DoubleBinding contentWidthBinding()
@@ -3730,7 +3835,7 @@ public class App extends Application
         {
             return storyContentWidthBinding;
         }
-        return storyScroll.widthProperty().subtract(32);
+        return storyListView.widthProperty().subtract(32);
     }
 
     private DoubleBinding rowContentWidthBinding()
