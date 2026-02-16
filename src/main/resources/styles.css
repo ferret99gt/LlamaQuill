@@ -246,6 +246,15 @@
   -fx-text-fill: #e6e1d8;
 }
 
+.story-list .list-cell {
+  -fx-padding: 0;
+}
+
+.story-list .list-cell:empty {
+  -fx-background-color: transparent;
+  -fx-padding: 0;
+}
+
 .list-cell:filled:selected,
 .list-cell:filled:selected:hover {
   -fx-background-color: #353535;
@@ -304,7 +313,14 @@
   -fx-background-color: #202020;
 }
 
-.list-view .scroll-bar:horizontal {
+.story-list .scroll-bar:horizontal {
   -fx-opacity: 0;
   -fx-pref-height: 0;
+  -fx-min-height: 0;
+  -fx-max-height: 0;
+  -fx-padding: 0;
+}
+
+.story-list .virtual-flow > .corner {
+  -fx-background-color: transparent;
 }
