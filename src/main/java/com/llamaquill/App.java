@@ -2291,8 +2291,7 @@ public class App extends Application
 
                 settings = buildGenerationSettings();
                 PromptCompilation compilation = promptCompiler.compile(activeStory, promptBlocks, currentCards, settings);
-                String response = ollamaClient.generate(compilation.prompt(), settings);
-                String cleaned = normalizeOutput(response);
+                String cleaned = generateContinuationWithFallback(compilation.prompt(), settings);
                 if (cleaned.isBlank())
                 {
                     return null;
@@ -2775,8 +2774,7 @@ public class App extends Application
 
                 settings = buildGenerationSettings();
                 PromptCompilation compilation = promptCompiler.compile(activeStory, currentBlocks, currentCards, settings);
-                String response = ollamaClient.generate(compilation.prompt(), settings);
-                String cleaned = normalizeOutput(response);
+                String cleaned = generateContinuationWithFallback(compilation.prompt(), settings);
                 if (cleaned.isBlank())
                 {
                     return null;
@@ -3859,6 +3857,33 @@ public class App extends Application
             normalized = normalized.replace("\n\n\n", "\n\n");
         }
         return normalized;
+    }
+
+    private String generateContinuationWithFallback(String prompt, GenerationSettings generationSettings)
+            throws IOException, InterruptedException
+    {
+        String cleaned = normalizeOutput(ollamaClient.generate(prompt, generationSettings));
+        if (!cleaned.isBlank())
+        {
+            return cleaned;
+        }
+
+        String withSpace = prompt + " ";
+        cleaned = normalizeOutput(ollamaClient.generate(withSpace, generationSettings));
+        if (!cleaned.isBlank())
+        {
+            System.out.println("Continuation fallback succeeded with trailing space.");
+            return cleaned;
+        }
+
+        String withNewline = prompt + "\n";
+        cleaned = normalizeOutput(ollamaClient.generate(withNewline, generationSettings));
+        if (!cleaned.isBlank())
+        {
+            System.out.println("Continuation fallback succeeded with trailing newline.");
+            return cleaned;
+        }
+        return cleaned;
     }
 
     private void logAutoCardsError(String message, Exception e)
