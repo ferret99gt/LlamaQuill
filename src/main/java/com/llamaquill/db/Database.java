@@ -104,6 +104,7 @@ public final class Database
                         candidate_window INTEGER NOT NULL,
                         card_length_limit INTEGER NOT NULL,
                         summarize_instead_of_trim INTEGER NOT NULL CHECK (summarize_instead_of_trim IN (0,1)),
+                        use_bulleted_lists INTEGER NOT NULL CHECK (use_bulleted_lists IN (0,1)),
                         candidate_selection_mode TEXT NOT NULL,
                         context_mode TEXT NOT NULL
                     )

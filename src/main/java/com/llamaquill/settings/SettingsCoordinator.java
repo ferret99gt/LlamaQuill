@@ -115,14 +115,21 @@ public final class SettingsCoordinator
     {
         return new AppAutoCardsSettings(current.cooldownTurns(), current.maxCardsPerRun(),
                 current.candidateWindow(), current.cardLengthLimit(), current.summarizeInsteadOfTrim(),
-                mode, current.contextMode());
+                current.useBulletedLists(), mode, current.contextMode());
     }
 
     public static AppAutoCardsSettings withContextMode(AppAutoCardsSettings current, String mode)
     {
         return new AppAutoCardsSettings(current.cooldownTurns(), current.maxCardsPerRun(),
                 current.candidateWindow(), current.cardLengthLimit(), current.summarizeInsteadOfTrim(),
-                current.candidateSelectionMode(), mode);
+                current.useBulletedLists(), current.candidateSelectionMode(), mode);
+    }
+
+    public static AppAutoCardsSettings withUseBulletedLists(AppAutoCardsSettings current, boolean value)
+    {
+        return new AppAutoCardsSettings(current.cooldownTurns(), current.maxCardsPerRun(),
+                current.candidateWindow(), current.cardLengthLimit(), current.summarizeInsteadOfTrim(),
+                value, current.candidateSelectionMode(), current.contextMode());
     }
 
     public static AppAutoCardsSettings withCooldownTurns(AppAutoCardsSettings current, int value)
@@ -130,7 +137,7 @@ public final class SettingsCoordinator
         int capped = Math.max(0, value);
         return new AppAutoCardsSettings(capped, current.maxCardsPerRun(),
                 current.candidateWindow(), current.cardLengthLimit(), current.summarizeInsteadOfTrim(),
-                current.candidateSelectionMode(), current.contextMode());
+                current.useBulletedLists(), current.candidateSelectionMode(), current.contextMode());
     }
 
     public static AppAutoCardsSettings withMaxCardsPerRun(AppAutoCardsSettings current, int value)
@@ -138,7 +145,7 @@ public final class SettingsCoordinator
         int capped = Math.max(1, value);
         return new AppAutoCardsSettings(current.cooldownTurns(), capped,
                 current.candidateWindow(), current.cardLengthLimit(), current.summarizeInsteadOfTrim(),
-                current.candidateSelectionMode(), current.contextMode());
+                current.useBulletedLists(), current.candidateSelectionMode(), current.contextMode());
     }
 
     public static AppAutoCardsSettings withCandidateWindow(AppAutoCardsSettings current, int value)
@@ -146,7 +153,7 @@ public final class SettingsCoordinator
         int capped = Math.max(1, value);
         return new AppAutoCardsSettings(current.cooldownTurns(), current.maxCardsPerRun(),
                 capped, current.cardLengthLimit(), current.summarizeInsteadOfTrim(),
-                current.candidateSelectionMode(), current.contextMode());
+                current.useBulletedLists(), current.candidateSelectionMode(), current.contextMode());
     }
 
     public static AppAutoCardsSettings withCardLengthLimit(AppAutoCardsSettings current, int value)
@@ -154,14 +161,14 @@ public final class SettingsCoordinator
         int capped = Math.max(1, value);
         return new AppAutoCardsSettings(current.cooldownTurns(), current.maxCardsPerRun(),
                 current.candidateWindow(), capped, current.summarizeInsteadOfTrim(),
-                current.candidateSelectionMode(), current.contextMode());
+                current.useBulletedLists(), current.candidateSelectionMode(), current.contextMode());
     }
 
     public static AppAutoCardsSettings withSummarizeInsteadOfTrim(AppAutoCardsSettings current, boolean value)
     {
         return new AppAutoCardsSettings(current.cooldownTurns(), current.maxCardsPerRun(),
                 current.candidateWindow(), current.cardLengthLimit(), value,
-                current.candidateSelectionMode(), current.contextMode());
+                current.useBulletedLists(), current.candidateSelectionMode(), current.contextMode());
     }
 
     public static StoryAutoCardsSettings withEnabled(StoryAutoCardsSettings current, boolean value)

@@ -164,6 +164,7 @@ public class App extends Application
     private CheckBox autoCardsPreviewBox;
     private Spinner<Integer> autoCardsLengthLimitSpinner;
     private CheckBox autoCardsSummarizeBox;
+    private CheckBox autoCardsBulletedListsBox;
 
     private ComboBox<String> autoCardsCandidateSelectionMode;
     private ComboBox<String> autoCardsContextMode;
@@ -753,6 +754,10 @@ public class App extends Application
         autoCardsSummarizeBox.setOnAction(event ->
                 updateAppAutoCardsSummarize(autoCardsSummarizeBox.isSelected()));
 
+        autoCardsBulletedListsBox = new CheckBox("Use Bulleted Lists");
+        autoCardsBulletedListsBox.setOnAction(event ->
+                updateAppAutoCardsUseBulletedLists(autoCardsBulletedListsBox.isSelected()));
+
         autoCardsCreatePrompt = buildStoryArea();
         autoCardsCreatePrompt.setMaxHeight(160);
         autoCardsUpdatePrompt = buildStoryArea();
@@ -838,6 +843,7 @@ public class App extends Application
                 spinnerRow("Candidate window (blocks)", autoCardsWindowSpinner, this::updateAppAutoCardsWindow),
                 spinnerRow("Card length limit (chars)", autoCardsLengthLimitSpinner, this::updateAppAutoCardsLengthLimit),
                 autoCardsSummarizeBox,
+                autoCardsBulletedListsBox,
                 new Label("Auto Cards (Model)"),
                 new Label("Create Prompt"),
                 autoCardsCreatePrompt,
@@ -1144,6 +1150,7 @@ public class App extends Application
         autoCardsWindowSpinner.getValueFactory().setValue(appAutoCardsSettings.candidateWindow());
         autoCardsLengthLimitSpinner.getValueFactory().setValue(appAutoCardsSettings.cardLengthLimit());
         autoCardsSummarizeBox.setSelected(appAutoCardsSettings.summarizeInsteadOfTrim());
+        autoCardsBulletedListsBox.setSelected(appAutoCardsSettings.useBulletedLists());
         updatingAutoCardsControls = false;
         updateAutoCardsRunButtonState();
     }
@@ -1355,6 +1362,20 @@ public class App extends Application
         persistAppAutoCardsSettings();
     }
 
+    private void updateAppAutoCardsUseBulletedLists(boolean value)
+    {
+        if (updatingAutoCardsControls || appAutoCardsSettings == null)
+        {
+            return;
+        }
+        if (value == appAutoCardsSettings.useBulletedLists())
+        {
+            return;
+        }
+        appAutoCardsSettings = SettingsCoordinator.withUseBulletedLists(appAutoCardsSettings, value);
+        persistAppAutoCardsSettings();
+    }
+
     private void updateModelAutoCardsPrompts()
     {
         if (updatingAutoCardsControls || modelAutoCardsSettings == null)
@@ -1544,6 +1565,7 @@ public class App extends Application
                         existing,
                         excerpt,
                         fullStoryPromptPrefix,
+                        appAutoCardsSettings.useBulletedLists(),
                         appSettings,
                         activeModelSettings,
                         modelAutoCardsSettings);
@@ -1551,7 +1573,7 @@ public class App extends Application
                 {
                     continue;
                 }
-                updatedContent = autoCardsService.enforceCardLength(
+                AutoCardsService.LengthEnforcementResult lengthResult = autoCardsService.enforceCardLengthDetailed(
                         updatedContent,
                         summarize,
                         limit,
@@ -1559,13 +1581,17 @@ public class App extends Application
                         existing.triggers(),
                         excerpt,
                         fullStoryPromptPrefix,
+                        appAutoCardsSettings.useBulletedLists(),
                         appSettings,
                         activeModelSettings,
                         modelAutoCardsSettings);
+                updatedContent = lengthResult.content();
                 if (preview)
                 {
                     String proposed = updatedContent;
-                    String approved = runOnUiThreadAndWait(() -> showAutoCardUpdateDialog(existing, proposed));
+                    boolean summarizedForPreview = lengthResult.summarized();
+                    String approved = runOnUiThreadAndWait(
+                            () -> showAutoCardUpdateDialog(existing, proposed, summarizedForPreview));
                     if (approved == null)
                     {
                         continue;
@@ -1587,6 +1613,7 @@ public class App extends Application
                         candidate,
                         excerpt,
                         fullStoryPromptPrefix,
+                        appAutoCardsSettings.useBulletedLists(),
                         appSettings,
                         activeModelSettings,
                         modelAutoCardsSettings);
@@ -1602,6 +1629,7 @@ public class App extends Application
                         candidate.triggers(),
                         excerpt,
                         fullStoryPromptPrefix,
+                        appAutoCardsSettings.useBulletedLists(),
                         appSettings,
                         activeModelSettings,
                         modelAutoCardsSettings);
@@ -2540,7 +2568,7 @@ public class App extends Application
         return dialog.showAndWait().orElse(null);
     }
 
-    private String showAutoCardUpdateDialog(StoryCard existing, String proposedContent)
+    private String showAutoCardUpdateDialog(StoryCard existing, String proposedContent, boolean summarized)
     {
         if (existing == null)
         {
@@ -2549,7 +2577,7 @@ public class App extends Application
 
         Dialog<String> dialog = new Dialog<>();
         dialog.setTitle("Auto Card Preview");
-        dialog.setHeaderText("Update Story Card");
+        dialog.setHeaderText(summarized ? "Summarize Story Card" : "Update Story Card");
         dialog.initOwner(primaryStage);
 
         Label titleLabel = new Label(existing.title());

@@ -12,10 +12,17 @@ import com.llamaquill.prompt.PromptCompilation;
 import com.llamaquill.prompt.PromptCompiler;
 
 import java.io.IOException;
+import java.text.BreakIterator;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 public class AutoCardsService
 {
+    public record LengthEnforcementResult(String content, boolean summarized)
+    {
+    }
+
     private final OllamaClient ollamaClient;
     private final PromptCompiler promptCompiler;
 
@@ -68,6 +75,7 @@ public class AutoCardsService
     }
 
     public String generateCardCreate(AutoCards.Candidate candidate, String excerpt, String fullStoryPromptPrefix,
+            boolean useBulletedLists,
             AppSettings appSettings, ModelSettings modelSettings, ModelAutoCardsSettings modelAutoCardsSettings)
             throws IOException, InterruptedException
     {
@@ -82,10 +90,12 @@ public class AutoCardsService
                 appSettings,
                 modelSettings,
                 modelAutoCardsSettings.maxTokensCreate());
-        return normalizeOutput(ollamaClient.generate(prompt, autoSettings));
+        String generated = normalizeOutput(ollamaClient.generate(prompt, autoSettings));
+        return formatAsBulletedList(generated, useBulletedLists);
     }
 
     public String generateCardUpdate(StoryCard existing, String excerpt, String fullStoryPromptPrefix,
+            boolean useBulletedLists,
             AppSettings appSettings, ModelSettings modelSettings, ModelAutoCardsSettings modelAutoCardsSettings)
             throws IOException, InterruptedException
     {
@@ -100,11 +110,22 @@ public class AutoCardsService
                 appSettings,
                 modelSettings,
                 modelAutoCardsSettings.maxTokensUpdate());
-        return normalizeOutput(ollamaClient.generate(prompt, autoSettings));
+        String continuation = normalizeOutput(ollamaClient.generate(prompt, autoSettings));
+        continuation = formatAsBulletedList(continuation, useBulletedLists);
+        if (continuation.isBlank())
+        {
+            return "";
+        }
+        String merged = appendCardContinuation(existing.content(), continuation, useBulletedLists);
+        if (normalizeOutput(existing.content()).equals(merged))
+        {
+            return "";
+        }
+        return merged;
     }
 
     public String generateCardSummary(String title, String triggers, String content, String excerpt,
-            String fullStoryPromptPrefix, AppSettings appSettings, ModelSettings modelSettings,
+            String fullStoryPromptPrefix, boolean useBulletedLists, AppSettings appSettings, ModelSettings modelSettings,
             ModelAutoCardsSettings modelAutoCardsSettings)
             throws IOException, InterruptedException
     {
@@ -119,32 +140,46 @@ public class AutoCardsService
                 appSettings,
                 modelSettings,
                 modelAutoCardsSettings.maxTokensSummarize());
-        return normalizeOutput(ollamaClient.generate(prompt, autoSettings));
+        String generated = normalizeOutput(ollamaClient.generate(prompt, autoSettings));
+        return formatAsBulletedList(generated, useBulletedLists);
     }
 
     public String enforceCardLength(String content, boolean summarize, int limit, String title, String triggers,
-            String excerpt, String fullStoryPromptPrefix, AppSettings appSettings, ModelSettings modelSettings,
+            String excerpt, String fullStoryPromptPrefix, boolean useBulletedLists, AppSettings appSettings,
+            ModelSettings modelSettings,
             ModelAutoCardsSettings modelAutoCardsSettings)
+            throws IOException, InterruptedException
+    {
+        return enforceCardLengthDetailed(content, summarize, limit, title, triggers, excerpt, fullStoryPromptPrefix,
+                useBulletedLists,
+                appSettings, modelSettings, modelAutoCardsSettings).content();
+    }
+
+    public LengthEnforcementResult enforceCardLengthDetailed(String content, boolean summarize, int limit, String title,
+            String triggers, String excerpt, String fullStoryPromptPrefix, boolean useBulletedLists,
+            AppSettings appSettings,
+            ModelSettings modelSettings, ModelAutoCardsSettings modelAutoCardsSettings)
             throws IOException, InterruptedException
     {
         if (limit <= 0 || content.length() <= limit)
         {
-            return content;
+            return new LengthEnforcementResult(content, false);
         }
         if (summarize)
         {
             String summarized = generateCardSummary(title, triggers, content, excerpt, fullStoryPromptPrefix,
+                    useBulletedLists,
                     appSettings, modelSettings, modelAutoCardsSettings);
             if (!summarized.isBlank())
             {
                 if (summarized.length() <= limit)
                 {
-                    return summarized;
+                    return new LengthEnforcementResult(summarized, true);
                 }
-                return AutoCards.truncateContent(summarized, limit);
+                return new LengthEnforcementResult(AutoCards.truncateContent(summarized, limit), true);
             }
         }
-        return AutoCards.truncateContent(content, limit);
+        return new LengthEnforcementResult(AutoCards.truncateContent(content, limit), false);
     }
 
     private String buildAutoCardPrompt(AutoCards.PromptParts promptParts, String fullStoryPromptPrefix)
@@ -184,5 +219,75 @@ public class AutoCardsService
             normalized = normalized.replace("\n\n\n", "\n\n");
         }
         return normalized;
+    }
+
+    private static String appendCardContinuation(String existingContent, String continuation, boolean useBulletedLists)
+    {
+        String existing = existingContent == null ? "" : existingContent;
+        String continuationText = continuation == null ? "" : continuation;
+        if (continuationText.isBlank())
+        {
+            return normalizeOutput(existing);
+        }
+        if (existing.isBlank())
+        {
+            return continuationText;
+        }
+        if (useBulletedLists)
+        {
+            StringBuilder mergedBullets = new StringBuilder(existing);
+            if (!existing.endsWith("\n"))
+            {
+                mergedBullets.append('\n');
+            }
+            mergedBullets.append(continuationText);
+            return normalizeOutput(mergedBullets.toString());
+        }
+
+        StringBuilder merged = new StringBuilder(existing);
+        char last = merged.charAt(merged.length() - 1);
+        char first = continuationText.charAt(0);
+        boolean needsSpace = !Character.isWhitespace(last)
+                && !Character.isWhitespace(first)
+                && ",.;:!?)]}\"'".indexOf(first) < 0;
+        if (needsSpace)
+        {
+            merged.append(' ');
+        }
+        merged.append(continuationText);
+        return normalizeOutput(merged.toString());
+    }
+
+    private static String formatAsBulletedList(String text, boolean useBulletedLists)
+    {
+        String normalized = normalizeOutput(text);
+        if (!useBulletedLists || normalized.isBlank())
+        {
+            return normalized;
+        }
+
+        List<String> lines = new ArrayList<>();
+        BreakIterator iterator = BreakIterator.getSentenceInstance(Locale.US);
+        iterator.setText(normalized);
+        int start = iterator.first();
+        for (int end = iterator.next(); end != BreakIterator.DONE; start = end, end = iterator.next())
+        {
+            String sentence = normalized.substring(start, end).trim();
+            if (sentence.isBlank())
+            {
+                continue;
+            }
+            sentence = sentence.replaceFirst("^[\\-•*]\\s+", "").trim();
+            if (!sentence.isBlank())
+            {
+                lines.add("- " + sentence);
+            }
+        }
+
+        if (lines.isEmpty())
+        {
+            return "- " + normalized.replaceFirst("^[\\-•*]\\s+", "").trim();
+        }
+        return String.join("\n", lines);
     }
 }
