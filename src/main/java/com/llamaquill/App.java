@@ -224,6 +224,7 @@ public class App extends Application
     private static final int ASSISTANT_FLOW_CHUNK_BLOCK_LIMIT = 48;
     private static final int ASSISTANT_FLOW_CHUNK_HARD_CHAR_LIMIT = 12000;
     private static final int ASSISTANT_FLOW_CHUNK_HARD_BLOCK_LIMIT = 96;
+    private static final double STORY_EDGE_SPACER_HEIGHT = 20.0;
 
     private final Map<String, AutoCardsRunState> autoCardsRunState = new HashMap<>();
 
@@ -3295,6 +3296,7 @@ public class App extends Application
             return;
         }
 
+        storyRows.add(buildStoryEdgeSpacer());
         String latestAssistantId = findLatestAssistantId();
         List<Block> assistantGroup = new ArrayList<>();
 
@@ -3312,6 +3314,7 @@ public class App extends Application
         }
 
         addAssistantGroup(assistantGroup, latestAssistantId);
+        storyRows.add(buildStoryEdgeSpacer());
         storyListView.getSelectionModel().clearSelection();
         storyListView.getFocusModel().focus(-1);
 
@@ -3319,6 +3322,15 @@ public class App extends Application
         {
             scrollToBottom();
         }
+    }
+
+    private Region buildStoryEdgeSpacer()
+    {
+        Region spacer = new Region();
+        spacer.setMinHeight(STORY_EDGE_SPACER_HEIGHT);
+        spacer.setPrefHeight(STORY_EDGE_SPACER_HEIGHT);
+        spacer.setMaxHeight(STORY_EDGE_SPACER_HEIGHT);
+        return spacer;
     }
 
     private void addAssistantGroup(List<Block> group, String latestAssistantId)
@@ -3801,9 +3813,13 @@ public class App extends Application
             {
                 return;
             }
+            storyListView.refresh();
+            storyListView.applyCss();
+            storyListView.layout();
             storyListView.scrollTo(storyRows.size() - 1);
             javafx.application.Platform.runLater(() ->
             {
+                storyListView.refresh();
                 storyListView.applyCss();
                 storyListView.layout();
                 for (Node node : storyListView.lookupAll(".scroll-bar"))
