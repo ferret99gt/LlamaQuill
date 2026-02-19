@@ -157,6 +157,7 @@ public class App extends Application
     private TextArea authorNoteArea;
 
     private Button newCardButton;
+    private Button generateCardButton;
     private Button autoCardsRunButton;
     private Button importCardsButton;
     private ListView<StoryCard> cardList;
@@ -684,6 +685,10 @@ public class App extends Application
         newCardButton.setMaxWidth(Double.MAX_VALUE);
         newCardButton.setOnAction(event -> showCardDialog(null));
 
+        generateCardButton = new Button("Generate New Card");
+        generateCardButton.setMaxWidth(Double.MAX_VALUE);
+        generateCardButton.setOnAction(event -> showGenerateCardDialog());
+
         autoCardsRunButton = new Button("Run Auto Cards");
         autoCardsRunButton.setMaxWidth(Double.MAX_VALUE);
         autoCardsRunButton.setOnAction(event -> runAutoCardsManual());
@@ -731,7 +736,7 @@ public class App extends Application
             }
         });
 
-        VBox content = new VBox(8, newCardButton, cardList, autoCardsRunButton, importCardsButton);
+        VBox content = new VBox(8, newCardButton, generateCardButton, cardList, autoCardsRunButton, importCardsButton);
         content.setPadding(new Insets(10));
         VBox.setVgrow(cardList, Priority.ALWAYS);
 
@@ -2084,6 +2089,218 @@ public class App extends Application
         dialog.showAndWait();
     }
 
+    private void showGenerateCardDialog()
+    {
+        if (activeStory == null)
+        {
+            showInfo("Select a story first.");
+            return;
+        }
+        if (appAutoCardsSettings == null || modelAutoCardsSettings == null)
+        {
+            showInfo("Auto Cards settings are not loaded yet.");
+            return;
+        }
+
+        Dialog<Void> dialog = new Dialog<>();
+        dialog.setTitle("Generate Story Card");
+        dialog.setHeaderText("Generate a new card from a prompt");
+        dialog.initOwner(primaryStage);
+
+        TextField titleField = new TextField();
+        TextArea contentArea = new TextArea();
+        contentArea.setWrapText(true);
+        contentArea.setPrefRowCount(6);
+        TextField triggersField = new TextField();
+        CheckBox pinnedBox = new CheckBox("Pinned");
+        TextArea promptArea = new TextArea();
+        promptArea.setWrapText(true);
+        promptArea.setPrefRowCount(4);
+        promptArea.setPromptText("Example: Generate a new character that is a male warrior.");
+
+        VBox content = new VBox(8,
+                new Label("Prompt"), promptArea,
+                new Label("Title"), titleField,
+                new Label("Content"), contentArea,
+                new Label("Triggers (comma separated)"), triggersField,
+                pinnedBox);
+        content.setPadding(new Insets(10));
+
+        Button generateButton = new Button("Generate");
+        Button createButton = new Button("Create");
+        Button createAndCloseButton = new Button("Create and Close");
+        Button cancelButton = new Button("Cancel");
+
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+        HBox rightActions = new HBox(8, createButton, createAndCloseButton, cancelButton);
+        rightActions.setAlignment(Pos.CENTER_RIGHT);
+        HBox actions = new HBox(8, generateButton, spacer, rightActions);
+        actions.setAlignment(Pos.CENTER_LEFT);
+        content.getChildren().add(actions);
+
+        dialog.getDialogPane().setContent(content);
+        dialog.getDialogPane().getButtonTypes().add(ButtonType.CANCEL);
+        Node cancelNode = dialog.getDialogPane().lookupButton(ButtonType.CANCEL);
+        if (cancelNode != null)
+        {
+            cancelNode.setVisible(false);
+            cancelNode.setManaged(false);
+        }
+
+        Runnable saveAndKeepOpen = () ->
+        {
+            String title = titleField.getText().trim();
+            if (title.isEmpty())
+            {
+                showInfo("Card title cannot be empty.");
+                return;
+            }
+            String contentText = contentArea.getText().trim();
+            if (contentText.isEmpty())
+            {
+                showInfo("Card content cannot be empty.");
+                return;
+            }
+            String triggers = triggersField.getText().trim();
+
+            StoryCard newCard = new StoryCard(Ids.newId(), activeStory.id(), title, triggers, contentText,
+                    pinnedBox.isSelected());
+            try
+            {
+                cardRepository.insert(newCard);
+                refreshCardList(activeStory.id());
+                titleField.clear();
+                triggersField.clear();
+                contentArea.clear();
+            }
+            catch (SQLException e)
+            {
+                showError("Failed to create story card", e);
+            }
+        };
+
+        createButton.setOnAction(event -> saveAndKeepOpen.run());
+        createAndCloseButton.setOnAction(event ->
+        {
+            int before = cardItems.size();
+            saveAndKeepOpen.run();
+            if (cardItems.size() > before)
+            {
+                dialog.close();
+            }
+        });
+        cancelButton.setOnAction(event -> dialog.close());
+
+        generateButton.setOnAction(event ->
+        {
+            String request = promptArea.getText().trim();
+            if (request.isEmpty())
+            {
+                showInfo("Prompt cannot be empty.");
+                return;
+            }
+
+            final String storyId = activeStory.id();
+            final Story story = activeStory;
+            generateButton.setDisable(true);
+            createButton.setDisable(true);
+            createAndCloseButton.setDisable(true);
+            statusLabel.setText("Generating story card...");
+
+            Task<AutoCards.GeneratedCard> task = new Task<>()
+            {
+                @Override
+                protected AutoCards.GeneratedCard call() throws Exception
+                {
+                    List<Block> currentBlocks = blockRepository.listForStory(storyId);
+                    List<StoryCard> currentCards = cardRepository.listForStory(storyId);
+                    String contextMode = AutoCards.normalizeContextMode(appAutoCardsSettings.contextMode());
+                    String excerpt = "";
+                    if (!AutoCards.CONTEXT_MODE_FULL_STORY.equals(contextMode))
+                    {
+                        excerpt = buildAutoCardsExcerpt(currentBlocks, appAutoCardsSettings.candidateWindow());
+                    }
+                    String fullStoryPromptPrefix = "";
+                    if (AutoCards.CONTEXT_MODE_FULL_STORY.equals(contextMode))
+                    {
+                        fullStoryPromptPrefix = autoCardsService.buildFullStoryPrompt(
+                                story,
+                                currentBlocks,
+                                currentCards,
+                                appSettings,
+                                activeModelSettings,
+                                modelAutoCardsSettings);
+                    }
+
+                    AutoCards.GeneratedCard generated = autoCardsService.generateCardFromUserPrompt(
+                            request,
+                            excerpt,
+                            fullStoryPromptPrefix,
+                            appAutoCardsSettings.useBulletedLists(),
+                            appSettings,
+                            activeModelSettings,
+                            modelAutoCardsSettings);
+                    if (generated == null)
+                    {
+                        return null;
+                    }
+                    String enforced = autoCardsService.enforceCardLength(
+                            generated.content(),
+                            appAutoCardsSettings.summarizeInsteadOfTrim(),
+                            appAutoCardsSettings.cardLengthLimit(),
+                            generated.title(),
+                            generated.triggers(),
+                            excerpt,
+                            fullStoryPromptPrefix,
+                            appAutoCardsSettings.useBulletedLists(),
+                            appSettings,
+                            activeModelSettings,
+                            modelAutoCardsSettings);
+                    return new AutoCards.GeneratedCard(generated.title(), generated.triggers(), enforced);
+                }
+            };
+
+            task.setOnSucceeded(e ->
+            {
+                generateButton.setDisable(false);
+                createButton.setDisable(false);
+                createAndCloseButton.setDisable(false);
+                AutoCards.GeneratedCard generated = task.getValue();
+                if (generated == null)
+                {
+                    statusLabel.setText("Generate card: no result");
+                    return;
+                }
+                titleField.setText(generated.title());
+                triggersField.setText(generated.triggers());
+                contentArea.setText(generated.content());
+                statusLabel.setText("Generated story card draft");
+            });
+
+            task.setOnFailed(e ->
+            {
+                generateButton.setDisable(false);
+                createButton.setDisable(false);
+                createAndCloseButton.setDisable(false);
+                Throwable error = task.getException();
+                statusLabel.setText("Generate card failed");
+                if (error instanceof Exception exception)
+                {
+                    showError("Failed to generate story card", exception);
+                }
+                else if (error != null)
+                {
+                    showError("Failed to generate story card", new RuntimeException(error));
+                }
+            });
+
+            executor.submit(task);
+        });
+
+        dialog.showAndWait();
+    }
+
     private void deleteCard(StoryCard card)
     {
         try
@@ -2748,6 +2965,7 @@ public class App extends Application
         plotEssentialsArea.setDisable(!enabled);
         authorNoteArea.setDisable(!enabled);
         newCardButton.setDisable(!enabled);
+        generateCardButton.setDisable(!enabled);
         autoCardsRunButton.setDisable(!enabled);
         importCardsButton.setDisable(!enabled);
         cardList.setDisable(!enabled);

@@ -144,6 +144,52 @@ public class AutoCardsService
         return formatAsBulletedList(generated, useBulletedLists);
     }
 
+    public AutoCards.GeneratedCard generateCardFromUserPrompt(String request, String excerpt, String fullStoryPromptPrefix,
+            boolean useBulletedLists, AppSettings appSettings, ModelSettings modelSettings,
+            ModelAutoCardsSettings modelAutoCardsSettings) throws IOException, InterruptedException
+    {
+        String trimmedRequest = request == null ? "" : request.trim();
+        if (trimmedRequest.isBlank())
+        {
+            return null;
+        }
+
+        StringBuilder user = new StringBuilder();
+        if (excerpt != null && !excerpt.isBlank())
+        {
+            user.append("# Story excerpt:\n")
+                    .append(excerpt.trim())
+                    .append("\n\n");
+        }
+        user.append("# Request:\n")
+                .append(trimmedRequest)
+                .append("\n\n")
+                .append("# Output:\n")
+                .append("Return one JSON object only with keys: title, triggers, content.")
+                .append("The title should be the name of the character, location, etc. Triggers must be comma-separated keywords, and should start with the name (break first and last names apart for characters) followed by unique uncommon descriptors.");
+
+        String system = "You create one grounded story card from the request and context. "
+                + "Return strict JSON only.";
+        String prompt = buildAutoCardPrompt(new AutoCards.PromptParts(system, user.toString(), ""),
+                fullStoryPromptPrefix);
+        GenerationSettings autoSettings = buildGenerationSettings(
+                appSettings,
+                modelSettings,
+                modelAutoCardsSettings.maxTokensCreate());
+        String response = ollamaClient.generate(prompt, autoSettings);
+        AutoCards.GeneratedCard parsed = AutoCards.parseGeneratedCardFromModelResponse(response);
+        if (parsed == null)
+        {
+            return null;
+        }
+        String content = formatAsBulletedList(normalizeOutput(parsed.content()), useBulletedLists);
+        if (content.isBlank())
+        {
+            return null;
+        }
+        return new AutoCards.GeneratedCard(parsed.title().trim(), parsed.triggers().trim(), content);
+    }
+
     public String enforceCardLength(String content, boolean summarize, int limit, String title, String triggers,
             String excerpt, String fullStoryPromptPrefix, boolean useBulletedLists, AppSettings appSettings,
             ModelSettings modelSettings,

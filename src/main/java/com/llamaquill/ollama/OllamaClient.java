@@ -101,6 +101,7 @@ public class OllamaClient
             System.out.println("Ollama final response:");
             System.out.println(doneLine);
         }
+        //System.out.println("Ollama response: \n" + sb);
         return sb.toString();
     }
 

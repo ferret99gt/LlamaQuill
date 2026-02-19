@@ -187,6 +187,7 @@
 .text-field {
   -fx-control-inner-background: #202020;
   -fx-text-fill: #e6e1d8;
+  -fx-prompt-text-fill: #8f8a81;
   -fx-highlight-fill: #3b3b3b;
   -fx-highlight-text-fill: #ffffff;
   -fx-border-color: #3a3a3a;

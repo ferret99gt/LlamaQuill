@@ -43,6 +43,10 @@ public final class AutoCards
     {
     }
 
+    public record GeneratedCard(String title, String triggers, String content)
+    {
+    }
+
     public record PromptParts(String system, String user, String assistant)
     {
     }
@@ -192,6 +196,265 @@ public final class AutoCards
         {
             return List.of();
         }
+    }
+
+    public static GeneratedCard parseGeneratedCardFromModelResponse(String response)
+    {
+        if (response == null || response.isBlank())
+        {
+            return null;
+        }
+
+        LinkedHashSet<String> candidateObjects = new LinkedHashSet<>();
+        String fencedObject = extractJsonObjectFromFencedBlock(response);
+        if (fencedObject != null)
+        {
+            candidateObjects.add(fencedObject);
+        }
+        String json = extractJsonObject(response);
+        if (json != null)
+        {
+            candidateObjects.add(json);
+        }
+
+        for (String objectText : candidateObjects)
+        {
+            GeneratedCard strict = parseGeneratedCardFromJsonObject(objectText);
+            if (strict != null)
+            {
+                return strict;
+            }
+            GeneratedCard loose = parseGeneratedCardLoosely(objectText);
+            if (loose != null)
+            {
+                return loose;
+            }
+        }
+
+        String jsonArray = extractJsonArray(response);
+        if (jsonArray == null)
+        {
+            return null;
+        }
+
+        try
+        {
+            JSONArray arr = new JSONArray(jsonArray);
+            if (arr.length() == 0 || !(arr.get(0) instanceof JSONObject obj))
+            {
+                return null;
+            }
+            return toGeneratedCard(obj);
+        }
+        catch (Exception e)
+        {
+            GeneratedCard loose = parseGeneratedCardLoosely(jsonArray);
+            if (loose != null)
+            {
+                return loose;
+            }
+        }
+        return parseGeneratedCardLoosely(response);
+    }
+
+    private static GeneratedCard parseGeneratedCardFromJsonObject(String json)
+    {
+        try
+        {
+            JSONObject obj = new JSONObject(json);
+            return toGeneratedCard(obj);
+        }
+        catch (Exception e)
+        {
+            return null;
+        }
+    }
+
+    private static GeneratedCard toGeneratedCard(JSONObject obj)
+    {
+        if (obj == null)
+        {
+            return null;
+        }
+        String title = obj.optString("title", "").trim();
+        String triggers = obj.optString("triggers", "").trim();
+        String content = obj.optString("content", "").trim();
+        if (content.isBlank())
+        {
+            content = obj.optString("value", "").trim();
+        }
+        if (title.isBlank() || content.isBlank())
+        {
+            return null;
+        }
+        return new GeneratedCard(title, triggers, content);
+    }
+
+    private static GeneratedCard parseGeneratedCardLoosely(String text)
+    {
+        String title = extractLooseJsonStringField(text, "title");
+        String content = extractLooseJsonStringField(text, "content");
+        if (content.isBlank())
+        {
+            content = extractLooseJsonStringField(text, "value");
+        }
+        String triggers = extractLooseJsonStringField(text, "triggers");
+        if (title.isBlank() || content.isBlank())
+        {
+            return null;
+        }
+        return new GeneratedCard(title.trim(), triggers.trim(), content.trim());
+    }
+
+    private static String extractLooseJsonStringField(String text, String field)
+    {
+        if (text == null || text.isBlank() || field == null || field.isBlank())
+        {
+            return "";
+        }
+        String key = "\"" + field + "\"";
+        int keyIndex = text.toLowerCase(Locale.ROOT).indexOf(key.toLowerCase(Locale.ROOT));
+        if (keyIndex < 0)
+        {
+            return "";
+        }
+
+        int colon = text.indexOf(':', keyIndex + key.length());
+        if (colon < 0)
+        {
+            return "";
+        }
+        int valueStart = skipWhitespace(text, colon + 1);
+        if (valueStart >= text.length())
+        {
+            return "";
+        }
+        if (text.charAt(valueStart) != '"')
+        {
+            return "";
+        }
+        int endQuote = findLooseJsonStringEnd(text, valueStart + 1);
+        if (endQuote <= valueStart)
+        {
+            return "";
+        }
+        String raw = text.substring(valueStart + 1, endQuote);
+        return unescapeLooseJsonString(raw).trim();
+    }
+
+    private static int findLooseJsonStringEnd(String text, int start)
+    {
+        for (int i = start; i < text.length(); i++)
+        {
+            if (text.charAt(i) != '"' || isEscaped(text, i))
+            {
+                continue;
+            }
+            int tail = skipWhitespace(text, i + 1);
+            if (tail >= text.length())
+            {
+                return i;
+            }
+            char next = text.charAt(tail);
+            if (next == '}')
+            {
+                return i;
+            }
+            if (next == ',')
+            {
+                int afterComma = skipWhitespace(text, tail + 1);
+                if (afterComma < text.length() && text.charAt(afterComma) == '"')
+                {
+                    return i;
+                }
+                continue;
+            }
+            if (next == '\n' || next == '\r')
+            {
+                int afterLine = skipWhitespace(text, tail + 1);
+                if (afterLine < text.length() && (text.charAt(afterLine) == '"' || text.charAt(afterLine) == '}'))
+                {
+                    return i;
+                }
+                continue;
+            }
+        }
+        return -1;
+    }
+
+    private static boolean isEscaped(String text, int index)
+    {
+        int slashCount = 0;
+        for (int i = index - 1; i >= 0 && text.charAt(i) == '\\'; i--)
+        {
+            slashCount++;
+        }
+        return (slashCount % 2) == 1;
+    }
+
+    private static int skipWhitespace(String text, int index)
+    {
+        int i = Math.max(0, index);
+        while (i < text.length() && Character.isWhitespace(text.charAt(i)))
+        {
+            i++;
+        }
+        return i;
+    }
+
+    private static String unescapeLooseJsonString(String raw)
+    {
+        StringBuilder sb = new StringBuilder(raw.length());
+        boolean escaping = false;
+        for (int i = 0; i < raw.length(); i++)
+        {
+            char c = raw.charAt(i);
+            if (escaping)
+            {
+                switch (c)
+                {
+                case 'n' -> sb.append('\n');
+                case 'r' -> sb.append('\r');
+                case 't' -> sb.append('\t');
+                case '"' -> sb.append('"');
+                case '\\' -> sb.append('\\');
+                default -> sb.append(c);
+                }
+                escaping = false;
+                continue;
+            }
+            if (c == '\\')
+            {
+                escaping = true;
+                continue;
+            }
+            sb.append(c);
+        }
+        if (escaping)
+        {
+            sb.append('\\');
+        }
+        return sb.toString();
+    }
+
+    private static String extractJsonObjectFromFencedBlock(String text)
+    {
+        if (text == null || text.isBlank())
+        {
+            return null;
+        }
+        Pattern fencePattern = Pattern.compile("(?is)```(?:json)?\\s*(.*?)```");
+        Matcher matcher = fencePattern.matcher(text);
+        while (matcher.find())
+        {
+            String body = matcher.group(1);
+            String object = extractJsonObject(body);
+            if (object != null)
+            {
+                return object;
+            }
+        }
+        return null;
     }
 
     public static String truncateContent(String content, int limit)
@@ -348,11 +611,64 @@ public final class AutoCards
 
     private static String extractJsonObject(String text)
     {
-        int start = text.indexOf('{');
-        int end = text.lastIndexOf('}');
-        if (start >= 0 && end > start)
+        if (text == null || text.isBlank())
         {
-            return text.substring(start, end + 1);
+            return null;
+        }
+        int start = -1;
+        int depth = 0;
+        boolean inString = false;
+        boolean escaping = false;
+        for (int i = 0; i < text.length(); i++)
+        {
+            char c = text.charAt(i);
+            if (start < 0)
+            {
+                if (c == '{')
+                {
+                    start = i;
+                    depth = 1;
+                }
+                continue;
+            }
+
+            if (inString)
+            {
+                if (escaping)
+                {
+                    escaping = false;
+                    continue;
+                }
+                if (c == '\\')
+                {
+                    escaping = true;
+                    continue;
+                }
+                if (c == '"')
+                {
+                    inString = false;
+                }
+                continue;
+            }
+
+            if (c == '"')
+            {
+                inString = true;
+                continue;
+            }
+            if (c == '{')
+            {
+                depth++;
+                continue;
+            }
+            if (c == '}')
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    return text.substring(start, i + 1);
+                }
+            }
         }
         return null;
     }
