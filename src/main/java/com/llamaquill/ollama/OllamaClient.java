@@ -65,8 +65,8 @@ public class OllamaClient
     public String generate(String prompt, GenerationSettings settings) throws IOException, InterruptedException
     {
         String payload = buildPayload(prompt, settings);
-        System.out.println("Ollama payload:");
-        System.out.println(payload);
+        //System.out.println("Ollama payload:");
+        //System.out.println(payload);
         HttpRequest request = HttpRequest.newBuilder().uri(URI.create(host + "/api/generate")).timeout(Duration.ofMinutes(2))
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8)).build();

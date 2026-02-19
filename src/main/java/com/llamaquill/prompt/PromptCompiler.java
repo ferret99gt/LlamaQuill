@@ -17,7 +17,8 @@ import java.util.regex.Pattern;
 public class PromptCompiler
 {
     private static final int CHARS_PER_TOKEN = 4;
-    private static final double TOKEN_ESTIMATE_MULTIPLIER = 0.90;
+    private static final double TOKEN_ESTIMATE_MULTIPLIER = 1.0;
+    private static final int RESPONSE_SAFETY_BAND_MULTIPLIER = 2;
     private static final boolean PREFIX_USER_LINES = true;
     private static final int ASSISTANT_TAIL_MERGE = 3;
 
@@ -28,13 +29,17 @@ public class PromptCompiler
         Objects.requireNonNull(storyCards, "storyCards");
         Objects.requireNonNull(settings, "settings");
 
-        int tokenBudget = Math.max(0, settings.contextLimit() - settings.responseLength());
+        int safetyBand = Math.max(0, settings.responseLength() * RESPONSE_SAFETY_BAND_MULTIPLIER);
+        int tokenBudget = Math.max(0, settings.contextLimit() - settings.responseLength() - safetyBand);
         int minWindowChars = Math.max(0, settings.minStoryWindow()) * CHARS_PER_TOKEN;
 
         List<Block> window = buildStoryWindow(blocks, minWindowChars);
 
         StoryCardSelection selection = selectStoryCards(storyCards, window, settings.storyCardLookback());
-        String plotEssentials = safeText(story.plotEssentials());
+        String originalPlotEssentials = safeText(story.plotEssentials());
+        String plotEssentials = originalPlotEssentials;
+        boolean plotEssentialsTrimmed = false;
+        List<DroppedStoryCard> droppedForSpace = new ArrayList<>();
 
         while (true)
         {
@@ -60,6 +65,8 @@ public class PromptCompiler
 
             if (estimatedTokens <= tokenBudget)
             {
+                logCompilationReport(selection, droppedForSpace, plotEssentialsTrimmed, originalPlotEssentials,
+                        plotEssentials, estimatedTokens, tokenBudget);
                 return new PromptCompilation(prompt, estimatedTokens);
             }
 
@@ -71,23 +78,31 @@ public class PromptCompiler
             }
             else if (!selection.triggered.isEmpty())
             {
-                selection.triggered.remove(selection.triggered.size() - 1);
+                StoryCard removed = selection.triggered.remove(selection.triggered.size() - 1);
+                droppedForSpace.add(new DroppedStoryCard(removed, "triggered"));
                 trimmed = true;
             }
             else if (!selection.pinned.isEmpty())
             {
-                selection.pinned.remove(selection.pinned.size() - 1);
+                StoryCard removed = selection.pinned.remove(selection.pinned.size() - 1);
+                droppedForSpace.add(new DroppedStoryCard(removed, "pinned"));
                 trimmed = true;
             }
             else if (!plotEssentials.isBlank())
             {
                 int excessTokens = estimatedTokens - tokenBudget;
                 plotEssentials = trimFromStart(plotEssentials, excessTokens * CHARS_PER_TOKEN);
+                if (!plotEssentials.equals(originalPlotEssentials))
+                {
+                    plotEssentialsTrimmed = true;
+                }
                 trimmed = true;
             }
 
             if (!trimmed)
             {
+                logCompilationReport(selection, droppedForSpace, plotEssentialsTrimmed, originalPlotEssentials,
+                        plotEssentials, estimatedTokens, tokenBudget);
                 return new PromptCompilation(prompt, estimatedTokens);
             }
         }
@@ -152,6 +167,7 @@ public class PromptCompiler
         List<StoryCard> pinned = new ArrayList<>();
         List<StoryCard> triggered = new ArrayList<>();
         Map<StoryCard, Integer> relevance = new HashMap<>();
+        Map<StoryCard, List<String>> triggerMatches = new HashMap<>();
 
         for (StoryCard card : storyCards)
         {
@@ -160,25 +176,27 @@ public class PromptCompiler
                 pinned.add(card);
                 continue;
             }
-            int hits = countTriggerHits(card.triggers(), matchText);
+            List<String> matchedTriggers = findMatchedTriggers(card.triggers(), matchText);
+            int hits = matchedTriggers.size();
             if (hits > 0)
             {
                 triggered.add(card);
                 relevance.put(card, hits);
+                triggerMatches.put(card, matchedTriggers);
             }
         }
 
         triggered.sort(Comparator.comparingInt(relevance::get).reversed());
-        return new StoryCardSelection(pinned, triggered);
+        return new StoryCardSelection(pinned, triggered, triggerMatches);
     }
 
-    private static int countTriggerHits(String triggers, String text)
+    private static List<String> findMatchedTriggers(String triggers, String text)
     {
         if (triggers == null || triggers.isBlank() || text.isBlank())
         {
-            return 0;
+            return List.of();
         }
-        int hits = 0;
+        List<String> matched = new ArrayList<>();
         for (String trigger : triggers.split(","))
         {
             String trimmed = trigger.trim();
@@ -189,10 +207,10 @@ public class PromptCompiler
             Pattern pattern = Pattern.compile("\\b" + Pattern.quote(trimmed) + "\\b", Pattern.CASE_INSENSITIVE);
             if (pattern.matcher(text).find())
             {
-                hits++;
+                matched.add(trimmed);
             }
         }
-        return hits;
+        return matched;
     }
 
     private static String buildLookbackText(List<Block> window, int lookback)
@@ -376,7 +394,93 @@ public class PromptCompiler
         return text == null ? "" : text;
     }
 
-    private record StoryCardSelection(List<StoryCard> pinned, List<StoryCard> triggered)
+    private static void logCompilationReport(StoryCardSelection selection, List<DroppedStoryCard> droppedForSpace,
+            boolean plotEssentialsTrimmed, String originalPlotEssentials, String finalPlotEssentials,
+            int estimatedTokens, int tokenBudget)
+    {
+        System.out.println("[PromptCompiler] Estimated prompt tokens: " + estimatedTokens + " / budget " + tokenBudget);
+        System.out.println("[PromptCompiler] Included story cards:");
+        if (selection.pinned.isEmpty() && selection.triggered.isEmpty())
+        {
+            System.out.println("[PromptCompiler]   - none");
+        }
+        for (StoryCard card : selection.pinned)
+        {
+            System.out.println("[PromptCompiler]   - " + safeTitle(card) + " (pinned)");
+        }
+        for (StoryCard card : selection.triggered)
+        {
+            List<String> matched = selection.triggerMatches.getOrDefault(card, List.of());
+            if (matched.isEmpty())
+            {
+                System.out.println("[PromptCompiler]   - " + safeTitle(card) + " (triggered)");
+            }
+            else
+            {
+                System.out.println("[PromptCompiler]   - " + safeTitle(card) + " (triggered by: "
+                        + String.join(", ", matched) + ")");
+            }
+        }
+
+        System.out.println("[PromptCompiler] Story cards dropped for space:");
+        if (droppedForSpace.isEmpty())
+        {
+            System.out.println("[PromptCompiler]   - none");
+        }
+        for (DroppedStoryCard dropped : droppedForSpace)
+        {
+            StoryCard card = dropped.card;
+            if ("triggered".equals(dropped.reason))
+            {
+                List<String> matched = selection.triggerMatches.getOrDefault(card, List.of());
+                if (matched.isEmpty())
+                {
+                    System.out.println("[PromptCompiler]   - " + safeTitle(card) + " (triggered)");
+                }
+                else
+                {
+                    System.out.println("[PromptCompiler]   - " + safeTitle(card) + " (triggered by: "
+                            + String.join(", ", matched) + ")");
+                }
+            }
+            else
+            {
+                System.out.println("[PromptCompiler]   - " + safeTitle(card) + " (pinned)");
+            }
+        }
+
+        if (plotEssentialsTrimmed)
+        {
+            System.out.println("[PromptCompiler] Plot essentials trimmed for space: yes ("
+                    + safeText(originalPlotEssentials).length() + " -> " + safeText(finalPlotEssentials).length()
+                    + " chars)");
+        }
+        else
+        {
+            System.out.println("[PromptCompiler] Plot essentials trimmed for space: no");
+        }
+    }
+
+    private static String safeTitle(StoryCard card)
+    {
+        if (card == null)
+        {
+            return "(untitled)";
+        }
+        String title = safeText(card.title()).trim();
+        if (title.isEmpty())
+        {
+            return "(untitled)";
+        }
+        return title;
+    }
+
+    private record StoryCardSelection(List<StoryCard> pinned, List<StoryCard> triggered,
+            Map<StoryCard, List<String>> triggerMatches)
+    {
+    }
+
+    private record DroppedStoryCard(StoryCard card, String reason)
     {
     }
 
