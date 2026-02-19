@@ -318,23 +318,7 @@ public class PromptCompiler
             currentText.append(nextText);
             return;
         }
-        char last = currentText.charAt(currentText.length() - 1);
-        char first = nextText.charAt(0);
-        if (!Character.isWhitespace(last) && !Character.isWhitespace(first) && !startsWithPunctuation(nextText))
-        {
-            currentText.append(' ');
-        }
         currentText.append(nextText);
-    }
-
-    private static boolean startsWithPunctuation(String text)
-    {
-        if (text == null || text.isEmpty())
-        {
-            return false;
-        }
-        char first = text.charAt(0);
-        return ",.;:!?)]}\"'".indexOf(first) >= 0;
     }
 
     private static String normalizeBlockText(Block block)

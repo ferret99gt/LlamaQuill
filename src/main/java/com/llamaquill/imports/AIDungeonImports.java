@@ -356,17 +356,17 @@ public final class AIDungeonImports
     private AdventureAction mapAdventureAction(JSONObject action)
     {
         String type = action.optString("type", "").trim().toLowerCase();
-        String text = action.optString("text", "").trim();
-        if (text.isBlank())
+        String rawText = action.optString("text", "");
+        if (rawText.isBlank())
         {
             return null;
         }
 
         return switch (type)
         {
-        case "story", "continue", "start" -> new AdventureAction(Role.ASSISTANT, text);
-        case "do" -> new AdventureAction(Role.USER, normalizeAdventureActionText(text, false));
-        case "say" -> new AdventureAction(Role.USER, normalizeAdventureActionText(text, true));
+        case "story", "continue", "start" -> new AdventureAction(Role.ASSISTANT, rawText);
+        case "do" -> new AdventureAction(Role.USER, normalizeAdventureActionText(rawText, false));
+        case "say" -> new AdventureAction(Role.USER, normalizeAdventureActionText(rawText, true));
         default -> null;
         };
     }

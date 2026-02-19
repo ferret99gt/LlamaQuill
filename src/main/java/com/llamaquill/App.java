@@ -3619,11 +3619,6 @@ public class App extends Application
             });
             textNode.setOnMouseClicked(event -> beginAssistantInlineEdit(block, flow, textNode));
             flow.getChildren().add(textNode);
-
-            if (i < group.size() - 1 && !endsWithWhitespace(block.text()) && !startsWithPunctuation(group.get(i + 1).text()))
-            {
-                flow.getChildren().add(new Text(" "));
-            }
         }
         Text sentinel = new Text("");
         sentinel.setUserData("sentinel");
@@ -4040,26 +4035,6 @@ public class App extends Application
         return text;
     }
 
-    private static boolean endsWithWhitespace(String text)
-    {
-        if (text == null || text.isEmpty())
-        {
-            return true;
-        }
-        char last = text.charAt(text.length() - 1);
-        return Character.isWhitespace(last);
-    }
-
-    private static boolean startsWithPunctuation(String text)
-    {
-        if (text == null || text.isEmpty())
-        {
-            return false;
-        }
-        char first = text.charAt(0);
-        return ",.;:!?)]}\"'".indexOf(first) >= 0;
-    }
-
     private void scrollToBottom()
     {
         javafx.application.Platform.runLater(() ->
@@ -4230,12 +4205,7 @@ public class App extends Application
         {
             return "";
         }
-        String normalized = output.replace("\r\n", "\n").trim();
-        while (normalized.contains("\n\n\n"))
-        {
-            normalized = normalized.replace("\n\n\n", "\n\n");
-        }
-        return normalized;
+        return output.replace("\r\n", "\n").replace("\r", "\n");
     }
 
     private String generateContinuationWithFallback(String prompt, GenerationSettings generationSettings)
@@ -4252,7 +4222,7 @@ public class App extends Application
         if (!cleaned.isBlank())
         {
             System.out.println("Continuation fallback succeeded with trailing space.");
-            return cleaned;
+            return " " + cleaned;
         }
 
         String withNewline = prompt + "\n";
@@ -4260,7 +4230,7 @@ public class App extends Application
         if (!cleaned.isBlank())
         {
             System.out.println("Continuation fallback succeeded with trailing newline.");
-            return cleaned;
+            return "\n" + cleaned;
         }
         return cleaned;
     }
