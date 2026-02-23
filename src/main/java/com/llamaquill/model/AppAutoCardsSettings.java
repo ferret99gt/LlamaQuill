@@ -6,7 +6,7 @@ public record AppAutoCardsSettings(int cooldownTurns, int maxCardsPerRun,
 {
     public static AppAutoCardsSettings defaults()
     {
-        return new AppAutoCardsSettings(8, 3, 12, 2000, true, false, "Proper Noun Heuristics",
+        return new AppAutoCardsSettings(8, 3, 12, 3200, true, false, "Proper Noun Heuristics",
                 "Full Story Context");
     }
 }
