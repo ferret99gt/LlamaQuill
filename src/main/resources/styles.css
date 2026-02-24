@@ -130,38 +130,6 @@
   -fx-border-width: 1 0 0 0;
 }
 
-.title-bar {
-  -fx-background-color: #242424;
-  -fx-border-color: #343434;
-  -fx-border-width: 0 0 1 0;
-}
-
-.title-bar.inactive {
-  -fx-background-color: #1c1c1c;
-}
-
-.title-text {
-  -fx-text-fill: #e6e1d8;
-  -fx-font-size: 14px;
-}
-
-.title-button {
-  -fx-background-color: #2a2a2a;
-  -fx-text-fill: #e6e1d8;
-  -fx-background-radius: 4;
-  -fx-border-radius: 4;
-  -fx-border-color: #3a3a3a;
-  -fx-border-width: 1;
-  -fx-padding: 2 8 2 8;
-}
-
-.title-button:hover {
-  -fx-background-color: #333333;
-}
-
-.title-button:pressed {
-  -fx-background-color: #2f2f2f;
-}
 .action-row {
   -fx-background-color: #1f1f1f;
 }

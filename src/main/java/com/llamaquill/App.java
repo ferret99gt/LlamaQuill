@@ -81,10 +81,7 @@ import javafx.scene.layout.VBox;
 import javafx.scene.shape.Rectangle;
 import javafx.scene.text.Text;
 import javafx.scene.text.TextFlow;
-import javafx.stage.Screen;
 import javafx.stage.Stage;
-import javafx.stage.StageStyle;
-import javafx.geometry.Rectangle2D;
 import javafx.util.Duration;
 
 import java.nio.file.Files;
@@ -230,14 +227,6 @@ public class App extends Application
     private ComboBox<String> modelSelect;
     private boolean updatingModelControls;
 
-    private HBox titleBar;
-    private double dragOffsetX;
-    private double dragOffsetY;
-    private double restoreX;
-    private double restoreY;
-    private double restoreW;
-    private double restoreH;
-    private boolean customMaximized;
     private DoubleBinding storyContentWidthBinding;
     private DoubleBinding storyRowContentWidthBinding;
     private PauseTransition storyViewportRefreshDebounce;
@@ -325,7 +314,6 @@ public class App extends Application
     public void start(Stage stage)
     {
         this.primaryStage = stage;
-        stage.initStyle(StageStyle.UNDECORATED);
         try
         {
             connection = Database.open();
@@ -441,7 +429,6 @@ public class App extends Application
         root.setLeft(buildStorySidebar());
         root.setCenter(buildCenterPane());
         root.setRight(buildRightSidebar());
-        root.setTop(buildTitleBar());
         root.setBottom(statusBar);
 
         refreshStoryList(activeStory.id());
@@ -569,99 +556,6 @@ public class App extends Application
         centerPane.setBottom(bottomBox);
 
         return centerPane;
-    }
-
-    private HBox buildTitleBar()
-    {
-        Label title = new Label("LlamaQuill");
-        title.getStyleClass().add("title-text");
-        title.setMaxWidth(Double.MAX_VALUE);
-
-        Button minimize = new Button("–");
-        minimize.getStyleClass().add("title-button");
-        minimize.setOnAction(event -> primaryStage.setIconified(true));
-
-        Button maximize = new Button("□");
-        maximize.getStyleClass().add("title-button");
-        maximize.setOnAction(event -> toggleMaximize());
-
-        Button close = new Button("×");
-        close.getStyleClass().add("title-button");
-        close.setOnAction(event -> primaryStage.close());
-
-        HBox buttons = new HBox(6, minimize, maximize, close);
-        buttons.setAlignment(Pos.CENTER_RIGHT);
-
-        titleBar = new HBox(title, buttons);
-        titleBar.getStyleClass().add("title-bar");
-        titleBar.setAlignment(Pos.CENTER_LEFT);
-        titleBar.setPadding(new Insets(6, 10, 6, 10));
-        HBox.setHgrow(title, Priority.ALWAYS);
-
-        titleBar.setOnMousePressed(event ->
-        {
-            dragOffsetX = event.getSceneX();
-            dragOffsetY = event.getSceneY();
-        });
-        titleBar.setOnMouseDragged(event ->
-        {
-            if (customMaximized)
-            {
-                return;
-            }
-            primaryStage.setX(event.getScreenX() - dragOffsetX);
-            primaryStage.setY(event.getScreenY() - dragOffsetY);
-        });
-        titleBar.setOnMouseClicked(event ->
-        {
-            if (event.getClickCount() == 2)
-            {
-                toggleMaximize();
-            }
-        });
-
-        primaryStage.focusedProperty().addListener((obs, oldValue, newValue) ->
-        {
-            if (newValue)
-            {
-                titleBar.getStyleClass().remove("inactive");
-            }
-            else if (!titleBar.getStyleClass().contains("inactive"))
-            {
-                titleBar.getStyleClass().add("inactive");
-            }
-        });
-
-        return titleBar;
-    }
-
-    private void toggleMaximize()
-    {
-        if (!customMaximized)
-        {
-            restoreX = primaryStage.getX();
-            restoreY = primaryStage.getY();
-            restoreW = primaryStage.getWidth();
-            restoreH = primaryStage.getHeight();
-
-            Rectangle2D bounds = Screen
-                    .getScreensForRectangle(primaryStage.getX(), primaryStage.getY(), primaryStage.getWidth(),
-                            primaryStage.getHeight())
-                    .stream().findFirst().map(Screen::getVisualBounds).orElse(Screen.getPrimary().getVisualBounds());
-            primaryStage.setX(bounds.getMinX());
-            primaryStage.setY(bounds.getMinY());
-            primaryStage.setWidth(bounds.getWidth());
-            primaryStage.setHeight(bounds.getHeight());
-            customMaximized = true;
-        }
-        else
-        {
-            primaryStage.setX(restoreX);
-            primaryStage.setY(restoreY);
-            primaryStage.setWidth(restoreW);
-            primaryStage.setHeight(restoreH);
-            customMaximized = false;
-        }
     }
 
     private void showTurnInput(boolean show)
