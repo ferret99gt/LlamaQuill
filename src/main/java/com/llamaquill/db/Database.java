@@ -49,10 +49,25 @@ public final class Database
                     CREATE TABLE IF NOT EXISTS blocks (
                         id TEXT PRIMARY KEY,
                         story_id TEXT NOT NULL,
-                        role TEXT NOT NULL CHECK (role IN ('assistant','user')),
+                        role TEXT NOT NULL CHECK (role IN ('assistant','user','image')),
                         text TEXT NOT NULL,
                         created_at TEXT NOT NULL,
                         position INTEGER NOT NULL,
+                        FOREIGN KEY (story_id) REFERENCES stories(id) ON DELETE CASCADE
+                    )
+                    """);
+
+            stmt.execute("""
+                    CREATE TABLE IF NOT EXISTS images (
+                        id TEXT PRIMARY KEY,
+                        story_id TEXT NOT NULL,
+                        prompt TEXT NOT NULL,
+                        mime_type TEXT NOT NULL,
+                        width INTEGER NOT NULL,
+                        height INTEGER NOT NULL,
+                        workflow_json TEXT NOT NULL,
+                        image_bytes BLOB NOT NULL,
+                        created_at TEXT NOT NULL,
                         FOREIGN KEY (story_id) REFERENCES stories(id) ON DELETE CASCADE
                     )
                     """);
@@ -73,6 +88,7 @@ public final class Database
                     CREATE TABLE IF NOT EXISTS app_settings (
                         id INTEGER PRIMARY KEY CHECK (id = 1),
                         ollama_url TEXT NOT NULL,
+                        comfyui_url TEXT NOT NULL DEFAULT 'http://localhost:8000',
                         selected_model TEXT NOT NULL,
                         context_limit INTEGER NOT NULL,
                         response_length INTEGER NOT NULL,
@@ -144,6 +160,12 @@ public final class Database
                     CREATE INDEX IF NOT EXISTS idx_cards_story_pinned
                     ON story_cards(story_id, pinned)
                     """);
+
+            stmt.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_images_story_created
+                    ON images(story_id, created_at)
+                    """);
+
         }
     }
 

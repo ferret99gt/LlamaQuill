@@ -14,16 +14,22 @@ public final class SettingsCoordinator
 
     public static AppSettings withSelectedModel(AppSettings current, String modelName)
     {
-        return new AppSettings(current.ollamaUrl(), modelName, current.contextLimit(),
+        return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), modelName, current.contextLimit(),
                 current.responseLength(), current.minStoryWindow(), current.storyCardLookback(),
                 current.anPlacement());
     }
 
     public static AppSettings withOllamaUrl(AppSettings current, String url)
     {
-        return new AppSettings(url.trim(), current.selectedModel(), current.contextLimit(),
+        return new AppSettings(url.trim(), current.comfyUiUrl(), current.selectedModel(), current.contextLimit(),
                 current.responseLength(), current.minStoryWindow(), current.storyCardLookback(),
                 current.anPlacement());
+    }
+
+    public static AppSettings withComfyUiUrl(AppSettings current, String url)
+    {
+        return new AppSettings(current.ollamaUrl(), url.trim(), current.selectedModel(), current.contextLimit(),
+                current.responseLength(), current.minStoryWindow(), current.storyCardLookback(), current.anPlacement());
     }
 
     public static AppSettings withContextLimit(AppSettings current, int value, int minStoryPercent)
@@ -31,14 +37,14 @@ public final class SettingsCoordinator
         int capped = Math.max(1024, Math.min(32768, value));
         int percent = Math.max(10, Math.min(100, minStoryPercent));
         int minWindow = (int) Math.round(capped * (percent / 100.0));
-        return new AppSettings(current.ollamaUrl(), current.selectedModel(), capped,
+        return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(), capped,
                 current.responseLength(), minWindow, current.storyCardLookback(), current.anPlacement());
     }
 
     public static AppSettings withResponseLength(AppSettings current, int value)
     {
         int capped = Math.max(1, Math.min(250, value));
-        return new AppSettings(current.ollamaUrl(), current.selectedModel(), current.contextLimit(), capped,
+        return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(), current.contextLimit(), capped,
                 current.minStoryWindow(), current.storyCardLookback(), current.anPlacement());
     }
 
@@ -46,19 +52,19 @@ public final class SettingsCoordinator
     {
         int capped = Math.max(10, Math.min(100, percent));
         int minWindow = (int) Math.round(current.contextLimit() * (capped / 100.0));
-        return new AppSettings(current.ollamaUrl(), current.selectedModel(), current.contextLimit(),
+        return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(), current.contextLimit(),
                 current.responseLength(), minWindow, current.storyCardLookback(), current.anPlacement());
     }
 
     public static AppSettings withStoryCardLookback(AppSettings current, int value)
     {
-        return new AppSettings(current.ollamaUrl(), current.selectedModel(), current.contextLimit(),
+        return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(), current.contextLimit(),
                 current.responseLength(), current.minStoryWindow(), value, current.anPlacement());
     }
 
     public static AppSettings withAnPlacement(AppSettings current, int value)
     {
-        return new AppSettings(current.ollamaUrl(), current.selectedModel(), current.contextLimit(),
+        return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(), current.contextLimit(),
                 current.responseLength(), current.minStoryWindow(), current.storyCardLookback(), value);
     }
 

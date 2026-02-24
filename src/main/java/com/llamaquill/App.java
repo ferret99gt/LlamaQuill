@@ -2,6 +2,7 @@
 
 import com.llamaquill.autocards.AutoCards;
 import com.llamaquill.autocards.AutoCardsService;
+import com.llamaquill.db.ImageRepository;
 import com.llamaquill.db.BlockRepository;
 import com.llamaquill.db.Database;
 import com.llamaquill.db.StoryCardRepository;
@@ -18,13 +19,15 @@ import com.llamaquill.model.ModelSettings;
 import com.llamaquill.model.Role;
 import com.llamaquill.model.Story;
 import com.llamaquill.model.StoryCard;
+import com.llamaquill.model.StoryImage;
 import com.llamaquill.model.AppAutoCardsSettings;
 import com.llamaquill.model.StoryAutoCardsSettings;
 import com.llamaquill.model.ModelAutoCardsSettings;
 import com.llamaquill.imports.AIDungeonImports;
-import com.llamaquill.ollama.OllamaClient;
 import com.llamaquill.prompt.PromptCompilation;
 import com.llamaquill.prompt.PromptCompiler;
+import com.llamaquill.serviceClients.ComfyUiClient;
+import com.llamaquill.serviceClients.OllamaClient;
 import com.llamaquill.settings.SettingsCoordinator;
 import com.llamaquill.util.Ids;
 import com.llamaquill.util.Timestamps;
@@ -63,8 +66,13 @@ import javafx.scene.control.TextField;
 import javafx.scene.control.TextInputDialog;
 import javafx.scene.control.Spinner;
 import javafx.scene.control.SpinnerValueFactory;
+import javafx.scene.control.ToggleButton;
+import javafx.scene.control.ToggleGroup;
 import javafx.stage.FileChooser;
+import javafx.scene.image.Image;
+import javafx.scene.image.ImageView;
 import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.TilePane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
@@ -79,8 +87,12 @@ import javafx.stage.StageStyle;
 import javafx.geometry.Rectangle2D;
 import javafx.util.Duration;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayList;
@@ -108,6 +120,7 @@ public class App extends Application
     private StoryRepository storyRepository;
     private BlockRepository blockRepository;
     private StoryCardRepository cardRepository;
+    private ImageRepository imageRepository;
     private AppSettingsRepository appSettingsRepository;
     private ModelSettingsRepository modelSettingsRepository;
     private AppAutoCardsRepository appAutoCardsRepository;
@@ -117,6 +130,7 @@ public class App extends Application
     private AutoCardsService autoCardsService;
     private AIDungeonImports aiDungeonImports;
     private OllamaClient ollamaClient;
+    private ComfyUiClient comfyUiClient;
     private AppSettings appSettings;
     private ModelSettings activeModelSettings;
     private GenerationSettings settings;
@@ -140,6 +154,8 @@ public class App extends Application
     private Button retryButton;
     private Button deleteButton;
     private Button retryHistoryButton;
+    private Button seeButton;
+    private HBox storyActionRow;
 
     private Button newStoryButton;
     private Button importAdventureButton;
@@ -191,7 +207,7 @@ public class App extends Application
     private Button submitTurnButton;
     private Button cancelTurnButton;
 
-    private final List<String> retryHistory = new ArrayList<>();
+    private final List<RetryHistoryEntry> retryHistory = new ArrayList<>();
     private int retryIndex = -1;
     private String activeAssistantEditId;
     private TextFlow activeAssistantFlow;
@@ -210,6 +226,7 @@ public class App extends Application
     private Spinner<Integer> storyCardLookbackSpinner;
     private Spinner<Integer> anPlacementSpinner;
     private TextField ollamaUrlField;
+    private TextField comfyUiUrlField;
     private ComboBox<String> modelSelect;
     private boolean updatingModelControls;
 
@@ -224,6 +241,7 @@ public class App extends Application
     private DoubleBinding storyContentWidthBinding;
     private DoubleBinding storyRowContentWidthBinding;
     private PauseTransition storyViewportRefreshDebounce;
+    private String comfyWorkflowTemplateJson;
 
     private static final int ASSISTANT_FLOW_CHUNK_CHAR_LIMIT = 6000;
     private static final int ASSISTANT_FLOW_CHUNK_BLOCK_LIMIT = 48;
@@ -231,6 +249,9 @@ public class App extends Application
     private static final int ASSISTANT_FLOW_CHUNK_HARD_BLOCK_LIMIT = 96;
 
     private final Map<String, AutoCardsRunState> autoCardsRunState = new HashMap<>();
+    private final Map<String, StoryImage> storyImageCache = new HashMap<>();
+
+    private static final String DEFAULT_SEE_REQUEST = "Generate an image prompt for the most recent scene in the story.";
 
     private static final class AutoCardsRunState
     {
@@ -256,6 +277,50 @@ public class App extends Application
         }
     }
 
+    private sealed interface RetryHistoryEntry permits TextRetryHistoryEntry, ImageRetryHistoryEntry
+    {
+    }
+
+    private static final class TextRetryHistoryEntry implements RetryHistoryEntry
+    {
+        private final String text;
+
+        private TextRetryHistoryEntry(String text)
+        {
+            this.text = text == null ? "" : text;
+        }
+    }
+
+    private static final class ImageRetryHistoryEntry implements RetryHistoryEntry
+    {
+        private final String prompt;
+        private final byte[] bytes;
+        private final String mimeType;
+        private final String workflowJson;
+
+        private ImageRetryHistoryEntry(String prompt, byte[] bytes, String mimeType, String workflowJson)
+        {
+            this.prompt = prompt == null ? "" : prompt;
+            this.bytes = bytes;
+            this.mimeType = mimeType == null ? "image/png" : mimeType;
+            this.workflowJson = workflowJson == null ? "" : workflowJson;
+        }
+    }
+
+    private static final class PendingSeeImage
+    {
+        private final byte[] bytes;
+        private final String mimeType;
+        private final String workflowJson;
+
+        private PendingSeeImage(byte[] bytes, String mimeType, String workflowJson)
+        {
+            this.bytes = bytes;
+            this.mimeType = mimeType;
+            this.workflowJson = workflowJson;
+        }
+    }
+
     @Override
     public void start(Stage stage)
     {
@@ -268,6 +333,7 @@ public class App extends Application
             storyRepository = new StoryRepository(connection);
             blockRepository = new BlockRepository(connection);
             cardRepository = new StoryCardRepository(connection);
+            imageRepository = new ImageRepository(connection);
             appSettingsRepository = new AppSettingsRepository(connection);
             modelSettingsRepository = new ModelSettingsRepository(connection);
             appAutoCardsRepository = new AppAutoCardsRepository(connection);
@@ -276,10 +342,12 @@ public class App extends Application
             promptCompiler = new PromptCompiler();
             aiDungeonImports = new AIDungeonImports(storyRepository, blockRepository, cardRepository, DEFAULT_SYSTEM_PROMPT);
             ollamaClient = new OllamaClient();
+            comfyUiClient = new ComfyUiClient();
             autoCardsService = new AutoCardsService(ollamaClient, promptCompiler);
             appSettings = loadOrCreateAppSettings();
             appAutoCardsSettings = loadOrCreateAppAutoCardsSettings();
             ollamaClient.setHost(appSettings.ollamaUrl());
+            comfyUiClient.setHost(appSettings.comfyUiUrl());
             syncModelsFromOllama();
             activeModelSettings = loadActiveModelSettings(appSettings.selectedModel());
             modelAutoCardsSettings = loadOrCreateModelAutoCardsSettings(activeModelSettings.modelName());
@@ -358,6 +426,9 @@ public class App extends Application
         retryHistoryButton = new Button("");
         retryHistoryButton.setOnAction(event -> showRetryDialog());
         updateRetryCountLabel();
+
+        seeButton = new Button("See");
+        seeButton.setOnAction(event -> showSeeDialog());
 
         statusLabel = new Label("Ready");
 
@@ -489,12 +560,12 @@ public class App extends Application
         turnInputBox.setPadding(new Insets(10, 10, 0, 10));
         showTurnInput(false);
 
-        var actionRow = new HBox(8, takeTurnButton, continueButton, retryButton, retryHistoryButton, deleteButton);
-        actionRow.getStyleClass().add("action-row");
-        actionRow.setAlignment(Pos.CENTER_LEFT);
-        actionRow.setPadding(new Insets(10));
+        storyActionRow = new HBox(8, takeTurnButton, continueButton, seeButton, retryButton, retryHistoryButton, deleteButton);
+        storyActionRow.getStyleClass().add("action-row");
+        storyActionRow.setAlignment(Pos.CENTER_LEFT);
+        storyActionRow.setPadding(new Insets(10));
 
-        var bottomBox = new VBox(8, turnInputBox, actionRow);
+        var bottomBox = new VBox(8, turnInputBox, storyActionRow);
         centerPane.setBottom(bottomBox);
 
         return centerPane;
@@ -760,6 +831,16 @@ public class App extends Application
             }
         });
 
+        comfyUiUrlField = new TextField(appSettings.comfyUiUrl());
+        comfyUiUrlField.setPromptText("ComfyUI URL");
+        comfyUiUrlField.focusedProperty().addListener((obs, oldValue, newValue) ->
+        {
+            if (!newValue)
+            {
+                updateComfyUiUrl(comfyUiUrlField.getText());
+            }
+        });
+
         modelSelect = new ComboBox<>();
         modelSelect.setMaxWidth(Double.MAX_VALUE);
         refreshModelSelect();
@@ -866,7 +947,9 @@ public class App extends Application
         storyCardLookbackSpinner = buildSpinner(0, 20, appSettings.storyCardLookback());
         anPlacementSpinner = buildSpinner(1, 10, appSettings.anPlacement());
 
-        content.getChildren().addAll(textFieldRow("Ollama URL", ollamaUrlField), comboRow("Model", modelSelect),
+        content.getChildren().addAll(textFieldRow("Ollama URL", ollamaUrlField),
+                textFieldRow("ComfyUI URL", comfyUiUrlField),
+                comboRow("Model", modelSelect),
                 sliderRow("Context Limit", contextLimitSlider, valueLabel(appSettings.contextLimit(), "tokens"),
                         value -> updateContextLimit(value.intValue())),
                 sliderRow("Response Length", responseLengthSlider, valueLabel(appSettings.responseLength(), "tokens"),
@@ -1160,13 +1243,75 @@ public class App extends Application
 
     private void updateOllamaUrl(String url)
     {
-        if (url == null || url.isBlank() || url.equals(appSettings.ollamaUrl()))
+        String normalized = url == null ? "" : url.trim();
+        if (normalized.isBlank())
         {
+            if (ollamaUrlField != null)
+            {
+                ollamaUrlField.setText(appSettings.ollamaUrl());
+            }
             return;
         }
-        appSettings = SettingsCoordinator.withOllamaUrl(appSettings, url);
+        if (normalized.equals(appSettings.ollamaUrl()))
+        {
+            if (ollamaUrlField != null)
+            {
+                ollamaUrlField.setText(normalized);
+            }
+            return;
+        }
+        appSettings = SettingsCoordinator.withOllamaUrl(appSettings, normalized);
         persistAppSettings();
         ollamaClient.setHost(appSettings.ollamaUrl());
+        if (ollamaUrlField != null)
+        {
+            ollamaUrlField.setText(appSettings.ollamaUrl());
+        }
+    }
+
+    private void updateComfyUiUrl(String url)
+    {
+        String normalized = url == null ? "" : url.trim();
+        if (normalized.isBlank())
+        {
+            if (comfyUiUrlField != null)
+            {
+                comfyUiUrlField.setText(appSettings.comfyUiUrl());
+            }
+            return;
+        }
+        if (normalized.equals(appSettings.comfyUiUrl()))
+        {
+            if (comfyUiUrlField != null)
+            {
+                comfyUiUrlField.setText(normalized);
+            }
+            return;
+        }
+        appSettings = SettingsCoordinator.withComfyUiUrl(appSettings, normalized);
+        persistAppSettings();
+        comfyUiClient.setHost(appSettings.comfyUiUrl());
+        if (comfyUiUrlField != null)
+        {
+            comfyUiUrlField.setText(appSettings.comfyUiUrl());
+        }
+    }
+
+    private void setStoryActionButtonsBusy(boolean busy)
+    {
+        if (storyActionRow != null)
+        {
+            storyActionRow.setDisable(busy);
+        }
+    }
+
+    private void restoreStoryActionButtonsState()
+    {
+        setStoryActionButtonsBusy(false);
+        if (activeStory != null && retryHistoryButton != null)
+        {
+            retryHistoryButton.setDisable(retryHistory.size() < 2);
+        }
     }
 
     private void updateModelControls()
@@ -1752,6 +1897,10 @@ public class App extends Application
         for (int i = start; i < currentBlocks.size(); i++)
         {
             Block block = currentBlocks.get(i);
+            if (block.role() != Role.USER && block.role() != Role.ASSISTANT)
+            {
+                continue;
+            }
             sb.append(block.role() == Role.USER ? "User: " : "Story: ");
             sb.append(block.text().trim());
             sb.append("\n\n");
@@ -2301,6 +2450,476 @@ public class App extends Application
         dialog.showAndWait();
     }
 
+    private void showSeeDialog()
+    {
+        showSeeDialog(null, null);
+    }
+
+    private void showSeeDialog(String initialPrompt, Block replaceImageBlock)
+    {
+        if (activeStory == null)
+        {
+            showInfo("Select a story first.");
+            return;
+        }
+        if (appAutoCardsSettings == null || modelAutoCardsSettings == null)
+        {
+            showInfo("Auto Cards settings are not loaded yet.");
+            return;
+        }
+
+        Dialog<Void> dialog = new Dialog<>();
+        dialog.setTitle("See");
+        dialog.setHeaderText(replaceImageBlock == null
+                ? "Generate an image prompt from the story"
+                : "Retry image generation");
+        dialog.initOwner(primaryStage);
+        dialog.setResizable(true);
+
+        TextArea requestArea = new TextArea();
+        requestArea.setWrapText(true);
+        requestArea.setPrefRowCount(3);
+        requestArea.setPromptText("Optional. Leave blank to infer from the latest scene.");
+
+        TextArea promptArea = new TextArea(initialPrompt == null ? "" : initialPrompt);
+        promptArea.setWrapText(true);
+        promptArea.setPrefRowCount(6);
+        promptArea.setPromptText("Generated image prompt will appear here.");
+
+        ImageView selectedPreview = new ImageView();
+        selectedPreview.setPreserveRatio(true);
+        selectedPreview.setSmooth(true);
+        selectedPreview.setFitWidth(640);
+        selectedPreview.setFitHeight(320);
+        selectedPreview.setVisible(false);
+        selectedPreview.setManaged(false);
+
+        TilePane thumbnails = new TilePane();
+        thumbnails.setHgap(8);
+        thumbnails.setVgap(8);
+        thumbnails.setPrefColumns(4);
+        thumbnails.setPrefTileWidth(140);
+        thumbnails.setPrefTileHeight(140);
+        thumbnails.setTileAlignment(Pos.CENTER);
+
+        Label imagesPlaceholder = new Label("No images yet. Generate a prompt, then create images.");
+        imagesPlaceholder.setWrapText(true);
+        imagesPlaceholder.setStyle("-fx-text-fill: #b8b1a5;");
+
+        VBox imageResultsBox = new VBox(8, new Label("Images"), imagesPlaceholder, selectedPreview, thumbnails);
+        imageResultsBox.setPadding(new Insets(8));
+        imageResultsBox.setStyle("-fx-border-color: rgba(255,255,255,0.12); -fx-border-width: 1; -fx-border-radius: 4;");
+
+        Button regeneratePromptButton = new Button("Regenerate Prompt");
+        Button createImagesButton = new Button("Create Images");
+        Button insertImageButton = new Button(replaceImageBlock == null ? "Insert Image" : "Replace Image");
+        Button cancelButton = new Button("Cancel");
+        insertImageButton.setDisable(true);
+
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+        HBox rightButtons = new HBox(8, createImagesButton, insertImageButton, cancelButton);
+        HBox actions = new HBox(8, regeneratePromptButton, spacer, rightButtons);
+        actions.setAlignment(Pos.CENTER_LEFT);
+
+        VBox content = new VBox(10,
+                new Label("Request"),
+                requestArea,
+                new Label("Image Prompt"),
+                promptArea,
+                imageResultsBox,
+                actions);
+        content.setPadding(new Insets(10));
+
+        ScrollPane contentScroll = new ScrollPane(content);
+        contentScroll.setFitToWidth(true);
+        contentScroll.setFitToHeight(false);
+        contentScroll.setPannable(true);
+        contentScroll.setPrefViewportWidth(980);
+        contentScroll.setPrefViewportHeight(660);
+        dialog.getDialogPane().setContent(contentScroll);
+        dialog.getDialogPane().setPrefWidth(1040);
+        dialog.getDialogPane().setPrefHeight(720);
+        dialog.getDialogPane().getButtonTypes().add(ButtonType.CANCEL);
+        Node hiddenCancel = dialog.getDialogPane().lookupButton(ButtonType.CANCEL);
+        if (hiddenCancel != null)
+        {
+            hiddenCancel.setVisible(false);
+            hiddenCancel.setManaged(false);
+        }
+
+        final List<PendingSeeImage>[] pendingImagesRef = new List[] { new ArrayList<>() };
+        final int[] selectedIndexRef = new int[] { -1 };
+
+        Runnable refreshImageSelectionUi = () ->
+        {
+            thumbnails.getChildren().clear();
+            List<PendingSeeImage> pendingImages = pendingImagesRef[0];
+            if (pendingImages == null || pendingImages.isEmpty())
+            {
+                imagesPlaceholder.setVisible(true);
+                imagesPlaceholder.setManaged(true);
+                selectedPreview.setVisible(false);
+                selectedPreview.setManaged(false);
+                insertImageButton.setDisable(true);
+                return;
+            }
+
+            imagesPlaceholder.setVisible(false);
+            imagesPlaceholder.setManaged(false);
+            ToggleGroup group = new ToggleGroup();
+            for (int i = 0; i < pendingImages.size(); i++)
+            {
+                PendingSeeImage pending = pendingImages.get(i);
+                Image img = new Image(new ByteArrayInputStream(pending.bytes));
+                ImageView thumbView = new ImageView(img);
+                thumbView.setPreserveRatio(true);
+                thumbView.setSmooth(true);
+                thumbView.setFitWidth(132);
+                thumbView.setFitHeight(132);
+
+                ToggleButton thumbButton = new ToggleButton();
+                thumbButton.setGraphic(thumbView);
+                thumbButton.setToggleGroup(group);
+                thumbButton.setUserData(i);
+                thumbButton.setContentDisplay(javafx.scene.control.ContentDisplay.GRAPHIC_ONLY);
+                thumbButton.setStyle("-fx-padding: 4;");
+                if (i == selectedIndexRef[0])
+                {
+                    thumbButton.setSelected(true);
+                    selectedPreview.setImage(img);
+                    selectedPreview.setVisible(true);
+                    selectedPreview.setManaged(true);
+                }
+                thumbnails.getChildren().add(thumbButton);
+            }
+
+            group.selectedToggleProperty().addListener((obs, oldToggle, newToggle) ->
+            {
+                if (newToggle == null)
+                {
+                    selectedIndexRef[0] = -1;
+                    insertImageButton.setDisable(true);
+                    return;
+                }
+                int index = (int) newToggle.getUserData();
+                selectedIndexRef[0] = index;
+                PendingSeeImage pending = pendingImagesRef[0].get(index);
+                selectedPreview.setImage(new Image(new ByteArrayInputStream(pending.bytes)));
+                selectedPreview.setVisible(true);
+                selectedPreview.setManaged(true);
+                insertImageButton.setDisable(false);
+            });
+
+            if (selectedIndexRef[0] < 0 && !pendingImages.isEmpty())
+            {
+                selectedIndexRef[0] = 0;
+                PendingSeeImage first = pendingImages.getFirst();
+                selectedPreview.setImage(new Image(new ByteArrayInputStream(first.bytes)));
+                selectedPreview.setVisible(true);
+                selectedPreview.setManaged(true);
+                insertImageButton.setDisable(false);
+            }
+            else
+            {
+                insertImageButton.setDisable(selectedIndexRef[0] < 0);
+            }
+        };
+
+        Runnable restoreSeeButtons = () ->
+        {
+            regeneratePromptButton.setDisable(false);
+            createImagesButton.setDisable(false);
+            insertImageButton.setDisable(selectedIndexRef[0] < 0);
+            cancelButton.setDisable(false);
+            restoreStoryActionButtonsState();
+        };
+
+        cancelButton.setOnAction(event -> dialog.close());
+
+        regeneratePromptButton.setOnAction(event ->
+        {
+            String request = requestArea.getText().trim();
+            if (request.isEmpty())
+            {
+                request = DEFAULT_SEE_REQUEST;
+            }
+
+            final String storyId = activeStory.id();
+            final Story story = activeStory;
+            final String requestFinal = request;
+            regeneratePromptButton.setDisable(true);
+            createImagesButton.setDisable(true);
+            insertImageButton.setDisable(true);
+            cancelButton.setDisable(true);
+            setStoryActionButtonsBusy(true);
+            statusLabel.setText("Generating image prompt...");
+
+            Task<String> task = new Task<>()
+            {
+                @Override
+                protected String call() throws Exception
+                {
+                    List<Block> currentBlocks = blockRepository.listForStory(storyId);
+                    List<StoryCard> currentCards = cardRepository.listForStory(storyId);
+
+                    String contextMode = AutoCards.normalizeContextMode(appAutoCardsSettings.contextMode());
+                    String excerpt = "";
+                    if (!AutoCards.CONTEXT_MODE_FULL_STORY.equals(contextMode))
+                    {
+                        excerpt = buildAutoCardsExcerpt(currentBlocks, appAutoCardsSettings.candidateWindow());
+                    }
+
+                    String fullStoryPromptPrefix = "";
+                    if (AutoCards.CONTEXT_MODE_FULL_STORY.equals(contextMode))
+                    {
+                        fullStoryPromptPrefix = autoCardsService.buildFullStoryPrompt(
+                                story,
+                                currentBlocks,
+                                currentCards,
+                                appSettings,
+                                activeModelSettings,
+                                modelAutoCardsSettings);
+                    }
+
+                    return autoCardsService.generateImagePromptFromUserPrompt(
+                            requestFinal,
+                            excerpt,
+                            fullStoryPromptPrefix,
+                            appSettings,
+                            activeModelSettings,
+                            modelAutoCardsSettings);
+                }
+            };
+
+            task.setOnSucceeded(e ->
+            {
+                restoreSeeButtons.run();
+                String generated = task.getValue();
+                if (generated == null || generated.isBlank())
+                {
+                    statusLabel.setText("Image prompt generation returned empty.");
+                    return;
+                }
+                promptArea.setText(generated);
+                statusLabel.setText("Generated image prompt");
+            });
+
+            task.setOnFailed(e ->
+            {
+                restoreSeeButtons.run();
+                Throwable error = task.getException();
+                statusLabel.setText("Image prompt generation failed");
+                if (error instanceof Exception exception)
+                {
+                    showError("Failed to generate image prompt", exception);
+                }
+                else if (error != null)
+                {
+                    showError("Failed to generate image prompt", new RuntimeException(error));
+                }
+            });
+
+            executor.submit(task);
+        });
+
+        createImagesButton.setOnAction(event ->
+        {
+            String promptText = promptArea.getText();
+            if (promptText == null || promptText.isBlank())
+            {
+                showInfo("Image prompt cannot be empty.");
+                return;
+            }
+            regeneratePromptButton.setDisable(true);
+            createImagesButton.setDisable(true);
+            insertImageButton.setDisable(true);
+            cancelButton.setDisable(true);
+            setStoryActionButtonsBusy(true);
+            statusLabel.setText("Generating images...");
+
+            Task<ComfyUiClient.GenerationResult> task = new Task<>()
+            {
+                @Override
+                protected ComfyUiClient.GenerationResult call() throws Exception
+                {
+                    return comfyUiClient.generateImages(loadComfyWorkflowTemplateJson(), promptText);
+                }
+            };
+
+            task.setOnSucceeded(e ->
+            {
+                restoreSeeButtons.run();
+                ComfyUiClient.GenerationResult result = task.getValue();
+                if (result == null || result.images() == null || result.images().isEmpty())
+                {
+                    statusLabel.setText("ComfyUI returned no images.");
+                    return;
+                }
+                List<PendingSeeImage> pending = new ArrayList<>();
+                for (ComfyUiClient.GeneratedImage image : result.images())
+                {
+                    pending.add(new PendingSeeImage(image.bytes(), image.mimeType(), result.workflowJson()));
+                }
+                pendingImagesRef[0] = pending;
+                selectedIndexRef[0] = pending.isEmpty() ? -1 : 0;
+                refreshImageSelectionUi.run();
+                createImagesButton.setText("Regenerate Images");
+                statusLabel.setText("Generated " + pending.size() + " image(s)");
+            });
+
+            task.setOnFailed(e ->
+            {
+                restoreSeeButtons.run();
+                Throwable error = task.getException();
+                statusLabel.setText("Image generation failed");
+                System.out.println("ComfyUI image generation failed:");
+                if (error != null)
+                {
+                    error.printStackTrace(System.out);
+                }
+                if (error instanceof Exception exception)
+                {
+                    showError("Failed to generate images", exception);
+                }
+                else if (error != null)
+                {
+                    showError("Failed to generate images", new RuntimeException(error));
+                }
+            });
+
+            executor.submit(task);
+        });
+
+        insertImageButton.setOnAction(event ->
+        {
+            int selectedIndex = selectedIndexRef[0];
+            if (selectedIndex < 0 || selectedIndex >= pendingImagesRef[0].size())
+            {
+                showInfo("Select an image first.");
+                return;
+            }
+            PendingSeeImage pending = pendingImagesRef[0].get(selectedIndex);
+            String promptText = promptArea.getText() == null ? "" : promptArea.getText().trim();
+            if (promptText.isBlank())
+            {
+                showInfo("Image prompt cannot be empty.");
+                return;
+            }
+            try
+            {
+                insertOrReplaceImageBlock(pending, promptText, replaceImageBlock);
+                dialog.close();
+            }
+            catch (Exception ex)
+            {
+                if (ex instanceof Exception exception)
+                {
+                    showError("Failed to insert image", exception);
+                }
+                else
+                {
+                    showError("Failed to insert image", new RuntimeException(ex));
+                }
+            }
+        });
+
+        if (promptArea.getText().isBlank())
+        {
+            requestArea.setText("");
+        }
+        refreshImageSelectionUi.run();
+
+        dialog.showAndWait();
+        setStoryDependentControlsEnabled(activeStory != null);
+    }
+
+    private String loadComfyWorkflowTemplateJson() throws IOException
+    {
+        if (comfyWorkflowTemplateJson != null && !comfyWorkflowTemplateJson.isBlank())
+        {
+            return comfyWorkflowTemplateJson;
+        }
+        String[] candidates = { "/LlamaQuillChromaHD.json" };
+        for (String candidate : candidates)
+        {
+            try (InputStream in = App.class.getResourceAsStream(candidate))
+            {
+                if (in == null)
+                {
+                    continue;
+                }
+                comfyWorkflowTemplateJson = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+                System.out.println("Loaded ComfyUI workflow template: " + candidate);
+                return comfyWorkflowTemplateJson;
+            }
+        }
+        throw new IOException("Missing resource: LlamaQuillChromaHD.json");
+    }
+
+    private void insertOrReplaceImageBlock(PendingSeeImage pending, String promptText, Block replaceImageBlock)
+            throws SQLException
+    {
+        if (activeStory == null)
+        {
+            return;
+        }
+        Image decoded = new Image(new ByteArrayInputStream(pending.bytes));
+        int width = (int) Math.round(decoded.getWidth());
+        int height = (int) Math.round(decoded.getHeight());
+        StoryImage storyImage = new StoryImage(
+                Ids.newId(),
+                activeStory.id(),
+                promptText,
+                pending.mimeType == null || pending.mimeType.isBlank() ? "image/png" : pending.mimeType,
+                Math.max(0, width),
+                Math.max(0, height),
+                pending.workflowJson == null ? "" : pending.workflowJson,
+                pending.bytes,
+                Timestamps.now());
+        imageRepository.insert(storyImage);
+        storyImageCache.put(storyImage.id(), storyImage);
+
+        boolean replacingImage = replaceImageBlock != null && replaceImageBlock.role() == Role.IMAGE;
+        if (replacingImage)
+        {
+            seedImageRetryHistoryIfNeeded(replaceImageBlock);
+            String oldImageId = replaceImageBlock.text();
+            Block updated = new Block(replaceImageBlock.id(), replaceImageBlock.storyId(), Role.IMAGE, storyImage.id(),
+                    Timestamps.now(), replaceImageBlock.position());
+            blockRepository.replaceHead(updated);
+            if (oldImageId != null && !oldImageId.isBlank())
+            {
+                imageRepository.deleteById(oldImageId);
+                storyImageCache.remove(oldImageId);
+            }
+            retryHistory.add(new ImageRetryHistoryEntry(storyImage.prompt(), storyImage.imageBytes(), storyImage.mimeType(),
+                    storyImage.workflowJson()));
+            retryIndex = retryHistory.size() - 1;
+            updateRetryCountLabel();
+        }
+        else
+        {
+            int position = blockRepository.nextPosition(activeStory.id());
+            Block imageBlock = new Block(Ids.newId(), activeStory.id(), Role.IMAGE, storyImage.id(), Timestamps.now(), position);
+            blockRepository.insert(imageBlock);
+        }
+
+        String now = Timestamps.now();
+        activeStory = new Story(activeStory.id(), activeStory.title(), activeStory.systemPrompt(),
+                activeStory.plotEssentials(), activeStory.authorNote(), activeStory.createdAt(), now);
+        storyRepository.update(activeStory);
+
+        blocks = blockRepository.listForStory(activeStory.id());
+        renderStoryBlocks(true);
+        if (!replacingImage)
+        {
+            clearRetryHistory();
+        }
+        refreshStoryList(activeStory.id());
+        statusLabel.setText(replaceImageBlock == null ? "Inserted image" : "Replaced image");
+    }
+
     private void deleteCard(StoryCard card)
     {
         try
@@ -2452,7 +3071,9 @@ public class App extends Application
         }
         try
         {
+            Block head = blocks.get(blocks.size() - 1);
             blockRepository.deleteHead(activeStory.id());
+            deleteLinkedImageIfPresent(head);
             blocks = blockRepository.listForStory(activeStory.id());
             renderStoryBlocks(true);
             clearRetryHistory();
@@ -2517,17 +3138,20 @@ public class App extends Application
             return;
         }
         Block head = blocks.get(blocks.size() - 1);
+        if (head.role() == Role.IMAGE)
+        {
+            seedImageRetryHistoryIfNeeded(head);
+            StoryImage image = loadStoryImage(head.text());
+            showSeeDialog(image == null ? null : image.prompt(), head);
+            return;
+        }
         if (head.role() != Role.ASSISTANT)
         {
-            showInfo("The last block is not an assistant response.");
+            showInfo("The last block is not retryable.");
             return;
         }
 
-        continueButton.setDisable(true);
-        takeTurnButton.setDisable(true);
-        retryButton.setDisable(true);
-        deleteButton.setDisable(true);
-        retryHistoryButton.setDisable(true);
+        setStoryActionButtonsBusy(true);
         statusLabel.setText("Generating...");
 
         Task<Block> task = new Task<>()
@@ -2537,7 +3161,7 @@ public class App extends Application
             {
                 if (retryHistory.isEmpty())
                 {
-                    retryHistory.add(head.text());
+                    retryHistory.add(new TextRetryHistoryEntry(head.text()));
                     retryIndex = 0;
                 }
 
@@ -2556,7 +3180,7 @@ public class App extends Application
                 Block updated = new Block(head.id(), head.storyId(), Role.ASSISTANT, cleaned, Timestamps.now(),
                         head.position());
                 blockRepository.replaceHead(updated);
-                retryHistory.add(cleaned);
+                retryHistory.add(new TextRetryHistoryEntry(cleaned));
                 retryIndex = retryHistory.size() - 1;
                 return updated;
             }
@@ -2568,31 +3192,20 @@ public class App extends Application
             if (updated == null)
             {
                 statusLabel.setText("Last generation was empty.");
-                continueButton.setDisable(false);
-                takeTurnButton.setDisable(false);
-                retryButton.setDisable(false);
-                deleteButton.setDisable(false);
+                restoreStoryActionButtonsState();
                 return;
             }
             blocks.set(blocks.size() - 1, updated);
             renderStoryBlocks(true);
             statusLabel.setText("Ready");
             updateRetryCountLabel();
-            continueButton.setDisable(false);
-            takeTurnButton.setDisable(false);
-            retryButton.setDisable(false);
-            deleteButton.setDisable(false);
-            retryHistoryButton.setDisable(retryHistory.size() < 2);
+            restoreStoryActionButtonsState();
         });
 
         task.setOnFailed(event ->
         {
             Throwable error = task.getException();
-            continueButton.setDisable(false);
-            takeTurnButton.setDisable(false);
-            retryButton.setDisable(false);
-            deleteButton.setDisable(false);
-            retryHistoryButton.setDisable(retryHistory.size() < 2);
+            restoreStoryActionButtonsState();
             statusLabel.setText("Error: " + (error == null ? "Unknown" : error.getMessage()));
         });
 
@@ -2605,18 +3218,49 @@ public class App extends Application
         {
             return;
         }
+        if (retryIndex < 0 || retryIndex >= retryHistory.size())
+        {
+            retryIndex = retryHistory.size() - 1;
+        }
 
         Dialog<Void> dialog = new Dialog<>();
         dialog.setTitle("Retry History");
         dialog.setHeaderText("Select a retry");
         dialog.initOwner(primaryStage);
 
-        TextArea preview = new TextArea(retryHistory.get(retryIndex));
-        preview.setWrapText(true);
-        preview.setEditable(false);
-        preview.setPrefRowCount(8);
+        Block head = blocks.isEmpty() ? null : blocks.get(blocks.size() - 1);
+        boolean imageMode = head != null && head.role() == Role.IMAGE;
 
-        VBox content = new VBox(8, preview);
+        Node previewNode;
+        final TextArea[] textPreviewRef = new TextArea[1];
+        final ImageView[] imagePreviewRef = new ImageView[1];
+        final TextArea[] promptPreviewRef = new TextArea[1];
+        if (imageMode)
+        {
+            ImageView imagePreview = new ImageView();
+            imagePreview.setPreserveRatio(true);
+            imagePreview.setSmooth(true);
+            imagePreview.setFitWidth(760);
+            imagePreview.setFitHeight(420);
+            TextArea promptPreview = new TextArea();
+            promptPreview.setWrapText(true);
+            promptPreview.setEditable(false);
+            promptPreview.setPrefRowCount(4);
+            imagePreviewRef[0] = imagePreview;
+            promptPreviewRef[0] = promptPreview;
+            previewNode = new VBox(8, imagePreview, new Label("Prompt"), promptPreview);
+        }
+        else
+        {
+            TextArea textPreview = new TextArea();
+            textPreview.setWrapText(true);
+            textPreview.setEditable(false);
+            textPreview.setPrefRowCount(8);
+            textPreviewRef[0] = textPreview;
+            previewNode = textPreview;
+        }
+
+        VBox content = new VBox(8, previewNode);
         content.setPadding(new Insets(10));
         dialog.getDialogPane().setContent(content);
 
@@ -2632,7 +3276,22 @@ public class App extends Application
 
         Runnable refresh = () ->
         {
-            preview.setText(retryHistory.get(retryIndex));
+            RetryHistoryEntry entry = retryHistory.get(retryIndex);
+            if (imageMode)
+            {
+                if (entry instanceof ImageRetryHistoryEntry imageEntry)
+                {
+                    imagePreviewRef[0].setImage(new Image(new ByteArrayInputStream(imageEntry.bytes)));
+                    promptPreviewRef[0].setText(imageEntry.prompt);
+                }
+            }
+            else
+            {
+                if (entry instanceof TextRetryHistoryEntry textEntry)
+                {
+                    textPreviewRef[0].setText(textEntry.text);
+                }
+            }
             prevButton.setDisable(retryIndex <= 0);
             nextButton.setDisable(retryIndex >= retryHistory.size() - 1);
         };
@@ -2666,21 +3325,31 @@ public class App extends Application
                 dialog.close();
                 return;
             }
-            Block head = blocks.get(blocks.size() - 1);
-            if (head.role() != Role.ASSISTANT)
+            Block currentHead = blocks.get(blocks.size() - 1);
+            RetryHistoryEntry chosen = retryHistory.get(retryIndex);
+            if (currentHead.role() == Role.ASSISTANT && chosen instanceof TextRetryHistoryEntry textEntry)
             {
-                dialog.close();
-                return;
+                if (!textEntry.text.equals(currentHead.text()))
+                {
+                    Block updated = new Block(currentHead.id(), currentHead.storyId(), Role.ASSISTANT, textEntry.text,
+                            Timestamps.now(), currentHead.position());
+                    try
+                    {
+                        blockRepository.replaceHead(updated);
+                        blocks.set(blocks.size() - 1, updated);
+                        renderStoryBlocks(true);
+                    }
+                    catch (SQLException e)
+                    {
+                        showError("Failed to apply retry selection", e);
+                    }
+                }
             }
-            String chosen = retryHistory.get(retryIndex);
-            if (!chosen.equals(head.text()))
+            else if (currentHead.role() == Role.IMAGE && chosen instanceof ImageRetryHistoryEntry imageEntry)
             {
-                Block updated = new Block(head.id(), head.storyId(), Role.ASSISTANT, chosen, Timestamps.now(), head.position());
                 try
                 {
-                    blockRepository.replaceHead(updated);
-                    blocks.set(blocks.size() - 1, updated);
-                    renderStoryBlocks(true);
+                    replaceImageBlockFromRetryHistory(currentHead, imageEntry);
                 }
                 catch (SQLException e)
                 {
@@ -2691,6 +3360,64 @@ public class App extends Application
         });
 
         dialog.showAndWait();
+    }
+
+    private void seedImageRetryHistoryIfNeeded(Block imageHead)
+    {
+        if (imageHead == null || imageHead.role() != Role.IMAGE || !retryHistory.isEmpty())
+        {
+            return;
+        }
+        StoryImage image = loadStoryImage(imageHead.text());
+        if (image == null || image.imageBytes() == null || image.imageBytes().length == 0)
+        {
+            return;
+        }
+        retryHistory.add(new ImageRetryHistoryEntry(image.prompt(), image.imageBytes(), image.mimeType(), image.workflowJson()));
+        retryIndex = 0;
+        updateRetryCountLabel();
+    }
+
+    private void replaceImageBlockFromRetryHistory(Block headBlock, ImageRetryHistoryEntry imageEntry) throws SQLException
+    {
+        if (activeStory == null || headBlock == null || headBlock.role() != Role.IMAGE)
+        {
+            return;
+        }
+        Image decoded = new Image(new ByteArrayInputStream(imageEntry.bytes));
+        int width = (int) Math.round(decoded.getWidth());
+        int height = (int) Math.round(decoded.getHeight());
+        StoryImage storyImage = new StoryImage(
+                Ids.newId(),
+                activeStory.id(),
+                imageEntry.prompt,
+                imageEntry.mimeType,
+                Math.max(0, width),
+                Math.max(0, height),
+                imageEntry.workflowJson,
+                imageEntry.bytes,
+                Timestamps.now());
+        imageRepository.insert(storyImage);
+        storyImageCache.put(storyImage.id(), storyImage);
+
+        String oldImageId = headBlock.text();
+        Block updated = new Block(headBlock.id(), headBlock.storyId(), Role.IMAGE, storyImage.id(), Timestamps.now(),
+                headBlock.position());
+        blockRepository.replaceHead(updated);
+        if (oldImageId != null && !oldImageId.isBlank())
+        {
+            imageRepository.deleteById(oldImageId);
+            storyImageCache.remove(oldImageId);
+        }
+
+        String now = Timestamps.now();
+        activeStory = new Story(activeStory.id(), activeStory.title(), activeStory.systemPrompt(),
+                activeStory.plotEssentials(), activeStory.authorNote(), activeStory.createdAt(), now);
+        storyRepository.update(activeStory);
+        blocks = blockRepository.listForStory(activeStory.id());
+        renderStoryBlocks(true);
+        refreshStoryList(activeStory.id());
+        statusLabel.setText("Applied image retry selection");
     }
 
     private void showImportCardsDialog()
@@ -2961,6 +3688,7 @@ public class App extends Application
         retryButton.setDisable(!enabled);
         deleteButton.setDisable(!enabled);
         retryHistoryButton.setDisable(!enabled || retryHistory.size() < 2);
+        seeButton.setDisable(!enabled);
         systemPromptArea.setDisable(!enabled);
         plotEssentialsArea.setDisable(!enabled);
         authorNoteArea.setDisable(!enabled);
@@ -3004,7 +3732,7 @@ public class App extends Application
         }
 
         clearRetryHistory();
-        continueButton.setDisable(true);
+        setStoryActionButtonsBusy(true);
         statusLabel.setText("Generating...");
 
         Task<Block> task = new Task<>()
@@ -3054,13 +3782,13 @@ public class App extends Application
             Block block = task.getValue();
             if (block == null)
             {
-                continueButton.setDisable(false);
+                restoreStoryActionButtonsState();
                 statusLabel.setText("Last generation was empty.");
                 return;
             }
             blocks.add(block);
             renderStoryBlocks(true);
-            continueButton.setDisable(false);
+            restoreStoryActionButtonsState();
             statusLabel.setText("Ready");
             refreshStoryList(activeStory.id());
             refreshCardList(activeStory.id());
@@ -3069,7 +3797,7 @@ public class App extends Application
         task.setOnFailed(event ->
         {
             Throwable error = task.getException();
-            continueButton.setDisable(false);
+            restoreStoryActionButtonsState();
             statusLabel.setText("Error: " + (error == null ? "Unknown" : error.getMessage()));
         });
 
@@ -3078,10 +3806,7 @@ public class App extends Application
 
     private void runTurn(String userText)
     {
-        continueButton.setDisable(true);
-        takeTurnButton.setDisable(true);
-        retryButton.setDisable(true);
-        deleteButton.setDisable(true);
+        setStoryActionButtonsBusy(true);
         statusLabel.setText("Generating...");
 
         Task<Boolean> task = new Task<>()
@@ -3154,20 +3879,14 @@ public class App extends Application
             }
             finally
             {
-                continueButton.setDisable(false);
-                takeTurnButton.setDisable(false);
-                retryButton.setDisable(false);
-                deleteButton.setDisable(false);
+                restoreStoryActionButtonsState();
             }
         });
 
         task.setOnFailed(event ->
         {
             Throwable error = task.getException();
-            continueButton.setDisable(false);
-            takeTurnButton.setDisable(false);
-            retryButton.setDisable(false);
-            deleteButton.setDisable(false);
+            restoreStoryActionButtonsState();
             statusLabel.setText("Error: " + (error == null ? "Unknown" : error.getMessage()));
         });
 
@@ -3565,7 +4284,14 @@ public class App extends Application
 
             addAssistantGroup(assistantGroup, latestAssistantId);
             assistantGroup.clear();
-            storyRows.add(buildUserBlockNode(block));
+            if (block.role() == Role.USER)
+            {
+                storyRows.add(buildUserBlockNode(block));
+            }
+            else if (block.role() == Role.IMAGE)
+            {
+                storyRows.add(buildImageBlockNode(block));
+            }
         }
 
         addAssistantGroup(assistantGroup, latestAssistantId);
@@ -3847,6 +4573,204 @@ public class App extends Application
             }
         });
         return row;
+    }
+
+    private Region buildImageBlockNode(Block block)
+    {
+        VBox row = new VBox(8);
+        row.setAlignment(Pos.TOP_LEFT);
+        row.setPadding(new Insets(8, 10, 8, 10));
+        row.prefWidthProperty().bind(contentWidthBinding());
+        row.maxWidthProperty().bind(contentWidthBinding());
+        row.setStyle("-fx-border-color: rgba(255,255,255,0.15); -fx-border-width: 1; -fx-border-radius: 4; "
+                + "-fx-background-color: rgba(255,255,255,0.03); -fx-background-radius: 4;");
+
+        Label header = new Label("Image");
+        header.setStyle("-fx-text-fill: #c7c0b5; -fx-font-size: 12px;");
+
+        StoryImage storyImage = loadStoryImage(block.text());
+        if (storyImage == null || storyImage.imageBytes() == null || storyImage.imageBytes().length == 0)
+        {
+            Label missing = new Label("[Missing image: " + (block.text() == null ? "" : block.text()) + "]");
+            missing.setWrapText(true);
+            row.getChildren().addAll(header, missing);
+            return row;
+        }
+
+        Image image;
+        try
+        {
+            image = new Image(new ByteArrayInputStream(storyImage.imageBytes()));
+        }
+        catch (Exception e)
+        {
+            Label failed = new Label("[Failed to decode image]");
+            failed.setWrapText(true);
+            row.getChildren().addAll(header, failed);
+            return row;
+        }
+
+        ImageView preview = new ImageView(image);
+        preview.setPreserveRatio(true);
+        preview.setSmooth(true);
+        preview.fitWidthProperty().bind(rowContentWidthBinding());
+        preview.setFitHeight(256);
+        preview.setOnMouseClicked(event -> showImageBlockDialog(block, storyImage, image));
+        StackPane previewWrap = new StackPane(preview);
+        previewWrap.setAlignment(Pos.CENTER);
+        previewWrap.prefWidthProperty().bind(rowContentWidthBinding());
+        previewWrap.maxWidthProperty().bind(rowContentWidthBinding());
+
+        Label promptSnippet = new Label(snippetFor(storyImage.prompt()));
+        promptSnippet.setWrapText(true);
+        promptSnippet.setStyle("-fx-text-fill: #b8b1a5; -fx-font-size: 11px;");
+
+        row.getChildren().addAll(header, previewWrap, promptSnippet);
+        return row;
+    }
+
+    private StoryImage loadStoryImage(String imageId)
+    {
+        if (imageId == null || imageId.isBlank())
+        {
+            return null;
+        }
+        StoryImage cached = storyImageCache.get(imageId);
+        if (cached != null)
+        {
+            return cached;
+        }
+        try
+        {
+            Optional<StoryImage> loaded = imageRepository.findById(imageId);
+            if (loaded.isPresent())
+            {
+                storyImageCache.put(imageId, loaded.get());
+                return loaded.get();
+            }
+        }
+        catch (SQLException e)
+        {
+            showError("Failed to load image", e);
+        }
+        return null;
+    }
+
+    private void showImageBlockDialog(Block block, StoryImage storyImage, Image image)
+    {
+        Dialog<Void> dialog = new Dialog<>();
+        dialog.setTitle("Story Image");
+        dialog.setHeaderText("Image block");
+        dialog.initOwner(primaryStage);
+        dialog.setResizable(true);
+
+        ImageView large = new ImageView(image);
+        large.setPreserveRatio(true);
+        large.setSmooth(true);
+        large.setFitWidth(860);
+        large.setFitHeight(520);
+
+        TextArea promptArea = new TextArea(storyImage.prompt());
+        promptArea.setWrapText(true);
+        promptArea.setEditable(false);
+        promptArea.setPrefRowCount(5);
+
+        VBox content = new VBox(10, large, new Label("Prompt"), promptArea);
+        content.setPadding(new Insets(10));
+        content.setMaxWidth(980);
+        ScrollPane contentScroll = new ScrollPane(content);
+        contentScroll.setFitToWidth(true);
+        contentScroll.setFitToHeight(false);
+        contentScroll.setPannable(true);
+        contentScroll.setPrefViewportWidth(980);
+        contentScroll.setPrefViewportHeight(660);
+        dialog.getDialogPane().setContent(contentScroll);
+        dialog.getDialogPane().setPrefWidth(1040);
+        dialog.getDialogPane().setPrefHeight(720);
+
+        ButtonType saveType = new ButtonType("Save", ButtonBar.ButtonData.LEFT);
+        ButtonType deleteType = new ButtonType("Delete", ButtonBar.ButtonData.LEFT);
+        ButtonType closeType = new ButtonType("Close", ButtonBar.ButtonData.CANCEL_CLOSE);
+        dialog.getDialogPane().getButtonTypes().addAll(saveType, deleteType, closeType);
+
+        Button saveButton = (Button) dialog.getDialogPane().lookupButton(saveType);
+        saveButton.addEventFilter(ActionEvent.ACTION, event ->
+        {
+            event.consume();
+            saveStoryImageToFile(storyImage);
+        });
+
+        Button deleteButtonLocal = (Button) dialog.getDialogPane().lookupButton(deleteType);
+        deleteButtonLocal.addEventFilter(ActionEvent.ACTION, event ->
+        {
+            event.consume();
+            if (deleteBlockAndLinkedImage(block, false))
+            {
+                dialog.close();
+            }
+        });
+
+        dialog.showAndWait();
+    }
+
+    private void saveStoryImageToFile(StoryImage storyImage)
+    {
+        FileChooser chooser = new FileChooser();
+        chooser.setTitle("Save Image");
+        chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("PNG Files", "*.png"));
+        chooser.setInitialFileName("llamaquill-image-" + storyImage.id() + ".png");
+        java.io.File selected = chooser.showSaveDialog(primaryStage);
+        if (selected == null)
+        {
+            return;
+        }
+        try
+        {
+            Files.write(selected.toPath(), storyImage.imageBytes());
+            statusLabel.setText("Saved image to " + selected.getName());
+        }
+        catch (IOException e)
+        {
+            showError("Failed to save image", e);
+        }
+    }
+
+    private boolean deleteBlockAndLinkedImage(Block block, boolean forceScroll)
+    {
+        if (block == null)
+        {
+            return false;
+        }
+        try
+        {
+            blockRepository.deleteById(block.id());
+            deleteLinkedImageIfPresent(block);
+            blocks = blockRepository.listForStory(activeStory.id());
+            renderStoryBlocks(forceScroll);
+            clearRetryHistory();
+            statusLabel.setText("Ready");
+            return true;
+        }
+        catch (SQLException e)
+        {
+            showError("Failed to delete block", e);
+            return false;
+        }
+    }
+
+    private void deleteLinkedImageIfPresent(Block block) throws SQLException
+    {
+        if (block == null || block.role() != Role.IMAGE)
+        {
+            return;
+        }
+        String imageId = block.text();
+        if (imageId == null || imageId.isBlank())
+        {
+            return;
+        }
+        imageRepository.deleteById(imageId);
+        storyImageCache.remove(imageId);
     }
 
     private void beginInlineEdit(Label label, TextArea editor, Region row)

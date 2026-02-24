@@ -7,9 +7,9 @@ import com.llamaquill.model.ModelAutoCardsSettings;
 import com.llamaquill.model.ModelSettings;
 import com.llamaquill.model.Story;
 import com.llamaquill.model.StoryCard;
-import com.llamaquill.ollama.OllamaClient;
 import com.llamaquill.prompt.PromptCompilation;
 import com.llamaquill.prompt.PromptCompiler;
+import com.llamaquill.serviceClients.OllamaClient;
 
 import java.io.IOException;
 import java.text.BreakIterator;
@@ -188,6 +188,44 @@ public class AutoCardsService
             return null;
         }
         return new AutoCards.GeneratedCard(parsed.title().trim(), parsed.triggers().trim(), content);
+    }
+
+    public String generateImagePromptFromUserPrompt(String request, String excerpt, String fullStoryPromptPrefix,
+            AppSettings appSettings, ModelSettings modelSettings, ModelAutoCardsSettings modelAutoCardsSettings)
+            throws IOException, InterruptedException
+    {
+        String trimmedRequest = request == null ? "" : request.trim();
+        /*
+        if (trimmedRequest.isBlank())
+        {
+            return "";
+        }
+        */
+
+        StringBuilder user = new StringBuilder();
+        if (excerpt != null && !excerpt.isBlank())
+        {
+            user.append("# Story excerpt:\n")
+                    .append(excerpt.trim())
+                    .append("\n\n");
+        }
+        String userPrompt = """
+                Your job is to generate a prompt for an image generator that describes the most recent scene in the story. The prompt must describe each of the important subjects (gender, age, hair, eyes, clothing or naked), what they are doing (eating, walking, holding hands, using a weapon, etc), and where they are doing it (describe the room and theme, such as "a opulent castle bedroom during the morning").
+                """;
+        user.append(userPrompt);
+        if(!trimmedRequest.isBlank())
+        {
+            user.append("\n\n# User specific request:\n")
+                .append(trimmedRequest);
+        }
+        String system = "You create image generation prompts for story scenes.";
+        String prompt = buildAutoCardPrompt(new AutoCards.PromptParts(system, user.toString(), ""),
+                fullStoryPromptPrefix);
+        GenerationSettings autoSettings = buildGenerationSettings(
+                appSettings,
+                modelSettings,
+                modelAutoCardsSettings.maxTokensCreate());
+        return normalizeOutput(ollamaClient.generate(prompt, autoSettings));
     }
 
     public String enforceCardLength(String content, boolean summarize, int limit, String title, String triggers,

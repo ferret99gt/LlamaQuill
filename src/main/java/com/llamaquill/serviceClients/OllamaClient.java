@@ -1,4 +1,4 @@
-﻿package com.llamaquill.ollama;
+﻿package com.llamaquill.serviceClients;
 
 import com.llamaquill.model.GenerationSettings;
 

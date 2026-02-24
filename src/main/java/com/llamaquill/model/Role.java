@@ -3,7 +3,8 @@
 public enum Role
 {
     USER("user"),
-    ASSISTANT("assistant");
+    ASSISTANT("assistant"),
+    IMAGE("image");
 
     private final String wire;
 

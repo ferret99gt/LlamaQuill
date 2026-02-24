@@ -23,7 +23,7 @@ public class AppSettingsRepository
     {
         try (PreparedStatement stmt = connection.prepareStatement("""
                 SELECT ollama_url, selected_model, context_limit, response_length,
-                       min_story_window, story_card_lookback, an_placement
+                       min_story_window, story_card_lookback, an_placement, comfyui_url
                 FROM app_settings
                 WHERE id = ?
                 """))
@@ -37,6 +37,7 @@ public class AppSettingsRepository
                 }
                 return Optional.of(new AppSettings(
                         rs.getString("ollama_url"),
+                        rs.getString("comfyui_url"),
                         rs.getString("selected_model"),
                         rs.getInt("context_limit"),
                         rs.getInt("response_length"),
@@ -52,10 +53,11 @@ public class AppSettingsRepository
         try (PreparedStatement stmt = connection.prepareStatement("""
                 INSERT INTO app_settings (
                     id, ollama_url, selected_model, context_limit, response_length,
-                    min_story_window, story_card_lookback, an_placement
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    min_story_window, story_card_lookback, an_placement, comfyui_url
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     ollama_url = excluded.ollama_url,
+                    comfyui_url = excluded.comfyui_url,
                     selected_model = excluded.selected_model,
                     context_limit = excluded.context_limit,
                     response_length = excluded.response_length,
@@ -72,6 +74,7 @@ public class AppSettingsRepository
             stmt.setInt(6, settings.minStoryWindow());
             stmt.setInt(7, settings.storyCardLookback());
             stmt.setInt(8, settings.anPlacement());
+            stmt.setString(9, settings.comfyUiUrl());
             stmt.executeUpdate();
         }
     }

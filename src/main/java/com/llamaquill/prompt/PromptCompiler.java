@@ -33,7 +33,8 @@ public class PromptCompiler
         int tokenBudget = Math.max(0, settings.contextLimit() - settings.responseLength() - safetyBand);
         int minWindowChars = Math.max(0, settings.minStoryWindow()) * CHARS_PER_TOKEN;
 
-        List<Block> window = buildStoryWindow(blocks, minWindowChars);
+        List<Block> promptBlocks = filterPromptBlocks(blocks);
+        List<Block> window = buildStoryWindow(promptBlocks, minWindowChars);
 
         StoryCardSelection selection = selectStoryCards(storyCards, window, settings.storyCardLookback());
         String originalPlotEssentials = safeText(story.plotEssentials());
@@ -111,6 +112,23 @@ public class PromptCompiler
     private static List<Block> buildStoryWindow(List<Block> blocks, int minWindowChars)
     {
         return new ArrayList<>(blocks);
+    }
+
+    private static List<Block> filterPromptBlocks(List<Block> blocks)
+    {
+        List<Block> filtered = new ArrayList<>(blocks.size());
+        for (Block block : blocks)
+        {
+            if (block == null)
+            {
+                continue;
+            }
+            if (block.role() == Role.USER || block.role() == Role.ASSISTANT)
+            {
+                filtered.add(block);
+            }
+        }
+        return filtered;
     }
 
     private static int windowSizeChars(List<Block> window)
