@@ -23,7 +23,8 @@ public class AppSettingsRepository
     {
         try (PreparedStatement stmt = connection.prepareStatement("""
                 SELECT ollama_url, selected_model, context_limit, response_length,
-                       min_story_window, story_card_lookback, an_placement, comfyui_url
+                       min_story_window, story_card_lookback, an_placement, comfyui_url,
+                       comfy_workflow, comfy_width, comfy_height, comfy_batch_size
                 FROM app_settings
                 WHERE id = ?
                 """))
@@ -43,7 +44,11 @@ public class AppSettingsRepository
                         rs.getInt("response_length"),
                         rs.getInt("min_story_window"),
                         rs.getInt("story_card_lookback"),
-                        rs.getInt("an_placement")));
+                        rs.getInt("an_placement"),
+                        rs.getString("comfy_workflow"),
+                        rs.getInt("comfy_width"),
+                        rs.getInt("comfy_height"),
+                        rs.getInt("comfy_batch_size")));
             }
         }
     }
@@ -53,8 +58,9 @@ public class AppSettingsRepository
         try (PreparedStatement stmt = connection.prepareStatement("""
                 INSERT INTO app_settings (
                     id, ollama_url, selected_model, context_limit, response_length,
-                    min_story_window, story_card_lookback, an_placement, comfyui_url
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    min_story_window, story_card_lookback, an_placement, comfyui_url,
+                    comfy_workflow, comfy_width, comfy_height, comfy_batch_size
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     ollama_url = excluded.ollama_url,
                     comfyui_url = excluded.comfyui_url,
@@ -63,7 +69,11 @@ public class AppSettingsRepository
                     response_length = excluded.response_length,
                     min_story_window = excluded.min_story_window,
                     story_card_lookback = excluded.story_card_lookback,
-                    an_placement = excluded.an_placement
+                    an_placement = excluded.an_placement,
+                    comfy_workflow = excluded.comfy_workflow,
+                    comfy_width = excluded.comfy_width,
+                    comfy_height = excluded.comfy_height,
+                    comfy_batch_size = excluded.comfy_batch_size
                 """))
         {
             stmt.setInt(1, SETTINGS_ID);
@@ -75,6 +85,10 @@ public class AppSettingsRepository
             stmt.setInt(7, settings.storyCardLookback());
             stmt.setInt(8, settings.anPlacement());
             stmt.setString(9, settings.comfyUiUrl());
+            stmt.setString(10, settings.comfyWorkflow());
+            stmt.setInt(11, settings.comfyWidth());
+            stmt.setInt(12, settings.comfyHeight());
+            stmt.setInt(13, settings.comfyBatchSize());
             stmt.executeUpdate();
         }
     }

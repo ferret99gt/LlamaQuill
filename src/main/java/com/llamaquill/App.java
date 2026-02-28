@@ -85,14 +85,22 @@ import javafx.stage.Stage;
 import javafx.util.Duration;
 
 import java.nio.file.Files;
+import java.nio.file.FileSystem;
+import java.nio.file.FileSystemNotFoundException;
+import java.nio.file.FileSystems;
 import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.net.URL;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Enumeration;
 import java.util.List;
 import java.util.Optional;
 import java.util.Map;
@@ -224,13 +232,18 @@ public class App extends Application
     private Spinner<Integer> anPlacementSpinner;
     private TextField ollamaUrlField;
     private TextField comfyUiUrlField;
+    private ComboBox<String> comfyWorkflowSelect;
+    private Spinner<Integer> comfyWidthSpinner;
+    private Spinner<Integer> comfyHeightSpinner;
+    private Spinner<Integer> comfyBatchSizeSpinner;
     private ComboBox<String> modelSelect;
     private boolean updatingModelControls;
 
     private DoubleBinding storyContentWidthBinding;
     private DoubleBinding storyRowContentWidthBinding;
     private PauseTransition storyViewportRefreshDebounce;
-    private String comfyWorkflowTemplateJson;
+    private final Map<String, String> comfyWorkflowTemplateCache = new HashMap<>();
+    private List<String> comfyWorkflowNames = new ArrayList<>();
 
     private static final int ASSISTANT_FLOW_CHUNK_CHAR_LIMIT = 6000;
     private static final int ASSISTANT_FLOW_CHUNK_BLOCK_LIMIT = 48;
@@ -334,6 +347,8 @@ public class App extends Application
             autoCardsService = new AutoCardsService(ollamaClient, promptCompiler);
             appSettings = loadOrCreateAppSettings();
             appAutoCardsSettings = loadOrCreateAppAutoCardsSettings();
+            refreshComfyWorkflowNames();
+            ensureValidComfyWorkflowSelection();
             ollamaClient.setHost(appSettings.ollamaUrl());
             comfyUiClient.setHost(appSettings.comfyUiUrl());
             syncModelsFromOllama();
@@ -735,6 +750,23 @@ public class App extends Application
             }
         });
 
+        comfyWorkflowSelect = new ComboBox<>();
+        comfyWorkflowSelect.setMaxWidth(Double.MAX_VALUE);
+        comfyWorkflowSelect.setItems(FXCollections.observableArrayList(comfyWorkflowNames));
+        comfyWorkflowSelect.setValue(appSettings.comfyWorkflow());
+        comfyWorkflowSelect.setOnAction(event ->
+        {
+            String selected = comfyWorkflowSelect.getValue();
+            if (selected != null)
+            {
+                updateComfyWorkflow(selected);
+            }
+        });
+
+        comfyWidthSpinner = buildSpinner(64, 4096, appSettings.comfyWidth());
+        comfyHeightSpinner = buildSpinner(64, 4096, appSettings.comfyHeight());
+        comfyBatchSizeSpinner = buildSpinner(1, 32, appSettings.comfyBatchSize());
+
         modelSelect = new ComboBox<>();
         modelSelect.setMaxWidth(Double.MAX_VALUE);
         refreshModelSelect();
@@ -843,6 +875,10 @@ public class App extends Application
 
         content.getChildren().addAll(textFieldRow("Ollama URL", ollamaUrlField),
                 textFieldRow("ComfyUI URL", comfyUiUrlField),
+                comboRow("ComfyUI Workflow", comfyWorkflowSelect),
+                spinnerRow("Image Width", comfyWidthSpinner, this::updateComfyWidth),
+                spinnerRow("Image Height", comfyHeightSpinner, this::updateComfyHeight),
+                spinnerRow("Image Batch Size", comfyBatchSizeSpinner, this::updateComfyBatchSize),
                 comboRow("Model", modelSelect),
                 sliderRow("Context Limit", contextLimitSlider, valueLabel(appSettings.contextLimit(), "tokens"),
                         value -> updateContextLimit(value.intValue())),
@@ -1189,6 +1225,178 @@ public class App extends Application
         {
             comfyUiUrlField.setText(appSettings.comfyUiUrl());
         }
+    }
+
+    private void updateComfyWorkflow(String workflowName)
+    {
+        String normalized = workflowName == null ? "" : workflowName.trim();
+        if (normalized.isBlank())
+        {
+            if (comfyWorkflowSelect != null)
+            {
+                comfyWorkflowSelect.setValue(appSettings.comfyWorkflow());
+            }
+            return;
+        }
+        if (normalized.equals(appSettings.comfyWorkflow()))
+        {
+            return;
+        }
+        appSettings = SettingsCoordinator.withComfyWorkflow(appSettings, normalized);
+        comfyWorkflowTemplateCache.clear();
+        persistAppSettings();
+    }
+
+    private void updateComfyWidth(int value)
+    {
+        if (value == appSettings.comfyWidth())
+        {
+            return;
+        }
+        appSettings = SettingsCoordinator.withComfyWidth(appSettings, value);
+        persistAppSettings();
+    }
+
+    private void updateComfyHeight(int value)
+    {
+        if (value == appSettings.comfyHeight())
+        {
+            return;
+        }
+        appSettings = SettingsCoordinator.withComfyHeight(appSettings, value);
+        persistAppSettings();
+    }
+
+    private void updateComfyBatchSize(int value)
+    {
+        if (value == appSettings.comfyBatchSize())
+        {
+            return;
+        }
+        appSettings = SettingsCoordinator.withComfyBatchSize(appSettings, value);
+        persistAppSettings();
+    }
+
+    private void refreshComfyWorkflowNames()
+    {
+        List<String> names = discoverComfyWorkflowNames();
+        if (names.isEmpty())
+        {
+            names = List.of(AppSettings.DEFAULT_COMFY_WORKFLOW);
+        }
+        comfyWorkflowNames = names;
+    }
+
+    private void ensureValidComfyWorkflowSelection()
+    {
+        if (comfyWorkflowNames.isEmpty())
+        {
+            return;
+        }
+        String current = appSettings.comfyWorkflow();
+        if (current != null && comfyWorkflowNames.contains(current))
+        {
+            return;
+        }
+        appSettings = SettingsCoordinator.withComfyWorkflow(appSettings, comfyWorkflowNames.getFirst());
+        persistAppSettings();
+    }
+
+    private List<String> discoverComfyWorkflowNames()
+    {
+        List<String> names = new ArrayList<>();
+        try
+        {
+            Enumeration<URL> urls = Thread.currentThread().getContextClassLoader().getResources("comfyui");
+            while (urls.hasMoreElements())
+            {
+                URL url = urls.nextElement();
+                names.addAll(listWorkflowNamesFromResourceRoot(url));
+            }
+        }
+        catch (IOException e)
+        {
+            // Best effort discovery; defaults will still work.
+        }
+        names = new ArrayList<>(new java.util.LinkedHashSet<>(names));
+        Collections.sort(names);
+        return names;
+    }
+
+    private List<String> listWorkflowNamesFromResourceRoot(URL url)
+    {
+        if (url == null)
+        {
+            return List.of();
+        }
+        String protocol = url.getProtocol();
+        if ("file".equalsIgnoreCase(protocol))
+        {
+            try
+            {
+                return listWorkflowNamesInDirectory(Path.of(url.toURI()));
+            }
+            catch (URISyntaxException e)
+            {
+                return List.of();
+            }
+        }
+        if ("jar".equalsIgnoreCase(protocol))
+        {
+            String external = url.toExternalForm();
+            int sep = external.indexOf("!/");
+            if (sep < 0)
+            {
+                return List.of();
+            }
+            URI jarUri = URI.create(external.substring(0, sep));
+            try
+            {
+                FileSystem existing = FileSystems.getFileSystem(jarUri);
+                return listWorkflowNamesInDirectory(existing.getPath("/comfyui"));
+            }
+            catch (FileSystemNotFoundException ignored)
+            {
+                try
+                {
+                    try (FileSystem created = FileSystems.newFileSystem(jarUri, Map.of()))
+                    {
+                        return listWorkflowNamesInDirectory(created.getPath("/comfyui"));
+                    }
+                }
+                catch (Exception e)
+                {
+                    return List.of();
+                }
+            }
+            catch (Exception e)
+            {
+                return List.of();
+            }
+        }
+        return List.of();
+    }
+
+    private List<String> listWorkflowNamesInDirectory(Path dir)
+    {
+        if (dir == null || !Files.exists(dir))
+        {
+            return List.of();
+        }
+        List<String> names = new ArrayList<>();
+        try (var stream = Files.list(dir))
+        {
+            stream.filter(path -> Files.isRegularFile(path))
+                    .map(path -> path.getFileName().toString())
+                    .filter(name -> name.toLowerCase(java.util.Locale.ROOT).endsWith(".json"))
+                    .map(name -> name.substring(0, name.length() - ".json".length()))
+                    .forEach(names::add);
+        }
+        catch (IOException e)
+        {
+            return List.of();
+        }
+        return names;
     }
 
     private void setStoryActionButtonsBusy(boolean busy)
@@ -2637,7 +2845,8 @@ public class App extends Application
                 @Override
                 protected ComfyUiClient.GenerationResult call() throws Exception
                 {
-                    return comfyUiClient.generateImages(loadComfyWorkflowTemplateJson(), promptText);
+                    return comfyUiClient.generateImages(loadComfyWorkflowTemplateJson(), promptText,
+                            appSettings.comfyWidth(), appSettings.comfyHeight(), appSettings.comfyBatchSize());
                 }
             };
 
@@ -2730,25 +2939,27 @@ public class App extends Application
 
     private String loadComfyWorkflowTemplateJson() throws IOException
     {
-        if (comfyWorkflowTemplateJson != null && !comfyWorkflowTemplateJson.isBlank())
+        String workflowName = appSettings.comfyWorkflow() == null ? "" : appSettings.comfyWorkflow().trim();
+        if (workflowName.isBlank())
         {
-            return comfyWorkflowTemplateJson;
+            workflowName = AppSettings.DEFAULT_COMFY_WORKFLOW;
         }
-        String[] candidates = { "/LlamaQuillChromaHD.json" };
-        for (String candidate : candidates)
+        String cached = comfyWorkflowTemplateCache.get(workflowName);
+        if (cached != null && !cached.isBlank())
         {
-            try (InputStream in = App.class.getResourceAsStream(candidate))
+            return cached;
+        }
+        String resource = "/comfyui/" + workflowName + ".json";
+        try (InputStream in = App.class.getResourceAsStream(resource))
+        {
+            if (in == null)
             {
-                if (in == null)
-                {
-                    continue;
-                }
-                comfyWorkflowTemplateJson = new String(in.readAllBytes(), StandardCharsets.UTF_8);
-                System.out.println("Loaded ComfyUI workflow template: " + candidate);
-                return comfyWorkflowTemplateJson;
+                throw new IOException("Missing workflow resource: " + resource);
             }
+            String template = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            comfyWorkflowTemplateCache.put(workflowName, template);
+            return template;
         }
-        throw new IOException("Missing resource: LlamaQuillChromaHD.json");
     }
 
     private void insertOrReplaceImageBlock(PendingSeeImage pending, String promptText, Block replaceImageBlock)

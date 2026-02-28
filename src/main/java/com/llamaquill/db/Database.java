@@ -94,7 +94,11 @@ public final class Database
                         response_length INTEGER NOT NULL,
                         min_story_window INTEGER NOT NULL,
                         story_card_lookback INTEGER NOT NULL,
-                        an_placement INTEGER NOT NULL
+                        an_placement INTEGER NOT NULL,
+                        comfy_workflow TEXT NOT NULL DEFAULT 'LlamaQuillChromaHD',
+                        comfy_width INTEGER NOT NULL DEFAULT 720,
+                        comfy_height INTEGER NOT NULL DEFAULT 720,
+                        comfy_batch_size INTEGER NOT NULL DEFAULT 4
                     )
                     """);
 

@@ -1,0 +1,170 @@
+{
+	"1": {
+		"class_type": "UNETLoader",
+		"inputs": {
+			"unet_name": "chroma2_kaleidoscope.safetensors",
+			"weight_dtype": "default"
+		}
+	},
+	"2": {
+		"class_type": "CLIPLoader",
+		"inputs": {
+			"clip_name": "qwen_3_4b.safetensors",
+			"type": "flux2",
+			"device": "default"
+		}
+	},
+	"3": {
+		"class_type": "VAELoader",
+		"inputs": {
+			"vae_name": "flux2-vae.safetensors"
+		}
+	},
+	"4": {
+		"class_type": "PrimitiveInt",
+		"inputs": {
+			"value": %{width}
+		}
+	},
+	"5": {
+		"class_type": "PrimitiveInt",
+		"inputs": {
+			"value": %{height}
+		}
+	},
+	"6": {
+		"class_type": "PrimitiveInt",
+		"inputs": {
+			"value": %{batch_size}
+		}
+	},
+	"7": {
+		"class_type": "CLIPTextEncode",
+		"inputs": {
+			"text": "%{prompt}",
+			"clip": [
+				"2",
+				0
+			]
+		}
+	},
+	"8": {
+		"class_type": "CLIPTextEncode",
+		"inputs": {
+			"text": "Low resolution or blurry image, deformed or ugly individuals, overlaid text, watermark or signatures, unrealistic proportions, extra limbs or extra digits, arms or legs passing through solid objects.",
+			"clip": [
+				"2",
+				0
+			]
+		}
+	},
+	"9": {
+		"class_type": "RandomNoise",
+		"inputs": {
+			"noise_seed": %{seed}
+		}
+	},
+	"10": {
+		"class_type": "CFGGuider",
+		"inputs": {
+			"cfg": "5",
+			"model": [
+				"1",
+				0
+			],
+			"positive": [
+				"7",
+				0
+			],
+			"negative": [
+				"8",
+				0
+			]
+		}
+	},
+	"11": {
+		"class_type": "KSamplerSelect",
+		"inputs": {
+			"sampler_name": "euler"
+		}
+	},
+	"12": {
+		"class_type": "Flux2Scheduler",
+		"inputs": {
+			"steps": 20,
+			"width": [
+				"4",
+				0
+			],
+			"height": [
+				"5",
+				0
+			]
+		}
+	},
+	"13": {
+		"class_type": "EmptyFlux2LatentImage",
+		"inputs": {
+			"width": [
+				"4",
+				0
+			],
+			"height": [
+				"5",
+				0
+			],
+			"batch_size": [
+				"6",
+				0
+			]
+		}
+	},
+	"14": {
+		"class_type": "SamplerCustomAdvanced",
+		"inputs": {
+			"noise": [
+				"9",
+				0
+			],
+			"guider": [
+				"10",
+				0
+			],
+			"sampler": [
+				"11",
+				0
+			],
+			"sigmas": [
+				"12",
+				0
+			],
+			"latent_image": [
+				"13",
+				0
+			]
+		}
+	},
+	"15": {
+		"class_type": "VAEDecode",
+		"inputs": {
+			"samples": [
+				"14",
+				0
+			],
+			"vae": [
+				"3",
+				0
+			]
+		}
+	},
+	"16": {
+		"class_type": "SaveImage",
+		"inputs": {
+			"filename_prefix": "LlamaQuill\\StoryImage",
+			"images": [
+				"15",
+				0
+			]
+		}
+	}
+}

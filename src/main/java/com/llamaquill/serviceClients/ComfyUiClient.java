@@ -68,7 +68,7 @@ public class ComfyUiClient
         return normalized;
     }
 
-    public GenerationResult generateImages(String workflowTemplateJson, String promptText)
+    public GenerationResult generateImages(String workflowTemplateJson, String promptText, int width, int height, int batchSize)
             throws IOException, InterruptedException
     {
         if (workflowTemplateJson == null || workflowTemplateJson.isBlank())
@@ -77,7 +77,8 @@ public class ComfyUiClient
         }
 
         long seed = ThreadLocalRandom.current().nextLong(1L, 0x7fff_ffffL);
-        String apiPromptJson = applyApiPromptTemplate(workflowTemplateJson, promptText == null ? "" : promptText, seed);
+        String apiPromptJson = applyApiPromptTemplate(workflowTemplateJson, promptText == null ? "" : promptText, seed,
+                width, height, batchSize);
         JSONObject apiPrompt = new JSONObject(apiPromptJson);
         String promptId = enqueue(apiPrompt);
         List<ImageRef> refs = waitForImages(promptId, Duration.ofMinutes(3));
@@ -89,15 +90,21 @@ public class ComfyUiClient
         return new GenerationResult(apiPromptJson, images);
     }
 
-    private String applyApiPromptTemplate(String template, String promptText, long seed)
+    private String applyApiPromptTemplate(String template, String promptText, long seed, int width, int height, int batchSize)
     {
         String escapedPrompt = JSONObject.quote(promptText);
         if (escapedPrompt.length() >= 2 && escapedPrompt.startsWith("\"") && escapedPrompt.endsWith("\""))
         {
             escapedPrompt = escapedPrompt.substring(1, escapedPrompt.length() - 1);
         }
+        int normalizedWidth = Math.max(64, width);
+        int normalizedHeight = Math.max(64, height);
+        int normalizedBatchSize = Math.max(1, batchSize);
         return template.replace("%{prompt}", escapedPrompt)
-                .replace("%{seed}", Long.toString(seed));
+                .replace("%{seed}", Long.toString(seed))
+                .replace("%{width}", Integer.toString(normalizedWidth))
+                .replace("%{height}", Integer.toString(normalizedHeight))
+                .replace("%{batch_size}", Integer.toString(normalizedBatchSize));
     }
 
     private String enqueue(JSONObject apiPrompt) throws IOException, InterruptedException
