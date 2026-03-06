@@ -12,6 +12,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.ToIntFunction;
 import java.util.regex.Pattern;
 
 public class PromptCompiler
@@ -21,6 +22,12 @@ public class PromptCompiler
     private static final int RESPONSE_SAFETY_BAND_MULTIPLIER = 2;
     private static final boolean PREFIX_USER_LINES = true;
     private static final int ASSISTANT_TAIL_MERGE = 3;
+    private ToIntFunction<String> tokenEstimator = PromptCompiler::estimateTokensHeuristic;
+
+    public void setTokenEstimator(ToIntFunction<String> tokenEstimator)
+    {
+        this.tokenEstimator = tokenEstimator == null ? PromptCompiler::estimateTokensHeuristic : tokenEstimator;
+    }
 
     public PromptCompilation compile(Story story, List<Block> blocks, List<StoryCard> storyCards, GenerationSettings settings)
     {
@@ -41,6 +48,7 @@ public class PromptCompiler
         String plotEssentials = originalPlotEssentials;
         boolean plotEssentialsTrimmed = false;
         List<DroppedStoryCard> droppedForSpace = new ArrayList<>();
+        Map<String, Integer> tokenEstimateCache = new HashMap<>();
 
         while (true)
         {
@@ -62,7 +70,7 @@ public class PromptCompiler
             }
             messages.addAll(groupMessages(windowWithNote));
             String prompt = ChatMl.format(systemText, messages);
-            int estimatedTokens = estimateTokens(prompt);
+            int estimatedTokens = tokenEstimateCache.computeIfAbsent(prompt, this::estimateTokens);
 
             if (estimatedTokens <= tokenBudget)
             {
@@ -381,7 +389,29 @@ public class PromptCompiler
         return text.substring(charsToTrim).stripLeading();
     }
 
-    private static int estimateTokens(String text)
+    private int estimateTokens(String text)
+    {
+        if (text == null || text.isBlank())
+        {
+            return 0;
+        }
+        int estimated = -1;
+        try
+        {
+            estimated = tokenEstimator.applyAsInt(text);
+        }
+        catch (Exception ignored)
+        {
+            // Fall back to heuristic below.
+        }
+        if (estimated > 0)
+        {
+            return estimated;
+        }
+        return estimateTokensHeuristic(text);
+    }
+
+    private static int estimateTokensHeuristic(String text)
     {
         if (text == null || text.isBlank())
         {

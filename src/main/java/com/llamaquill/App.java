@@ -249,9 +249,15 @@ public class App extends Application
     private static final int ASSISTANT_FLOW_CHUNK_BLOCK_LIMIT = 48;
     private static final int ASSISTANT_FLOW_CHUNK_HARD_CHAR_LIMIT = 12000;
     private static final int ASSISTANT_FLOW_CHUNK_HARD_BLOCK_LIMIT = 96;
+    private static final double TOKEN_SCALE_DEFAULT = 1.0;
+    private static final double TOKEN_SCALE_MIN = 0.7;
+    private static final double TOKEN_SCALE_MAX = 1.6;
+    private static final double TOKEN_SCALE_ALPHA = 0.2;
+    private static final int CHARS_PER_TOKEN_ESTIMATE = 4;
 
     private final Map<String, AutoCardsRunState> autoCardsRunState = new HashMap<>();
     private final Map<String, StoryImage> storyImageCache = new HashMap<>();
+    private final Map<String, Double> tokenScaleByModel = new HashMap<>();
 
     private static final String DEFAULT_SEE_REQUEST = "Generate an image prompt for the most recent scene in the story.";
 
@@ -355,6 +361,7 @@ public class App extends Application
             activeModelSettings = loadActiveModelSettings(appSettings.selectedModel());
             modelAutoCardsSettings = loadOrCreateModelAutoCardsSettings(activeModelSettings.modelName());
             ollamaClient.setModel(activeModelSettings.modelName());
+            promptCompiler.setTokenEstimator(this::estimatePromptTokensCalibrated);
             settings = buildGenerationSettings();
             executor = Executors.newSingleThreadExecutor();
 
@@ -1397,6 +1404,52 @@ public class App extends Application
             return List.of();
         }
         return names;
+    }
+
+    private int estimatePromptTokensCalibrated(String prompt)
+    {
+        if (prompt == null || prompt.isBlank())
+        {
+            return 0;
+        }
+        double heuristic = Math.max(1.0, Math.ceil(prompt.length() / (double) CHARS_PER_TOKEN_ESTIMATE));
+        double scale = currentTokenScale();
+        return Math.max(1, (int) Math.ceil(heuristic * scale));
+    }
+
+    private synchronized double currentTokenScale()
+    {
+        String modelName = activeModelSettings == null ? ollamaClient.getModel() : activeModelSettings.modelName();
+        if (modelName == null || modelName.isBlank())
+        {
+            modelName = "__default__";
+        }
+        return tokenScaleByModel.getOrDefault(modelName, TOKEN_SCALE_DEFAULT);
+    }
+
+    private void observePromptCalibration(int estimatedPromptTokens)
+    {
+        int actualPromptTokens = ollamaClient.getLastPromptEvalCount();
+        if (estimatedPromptTokens <= 0 || actualPromptTokens <= 0)
+        {
+            return;
+        }
+        synchronized (this)
+        {
+            String modelName = activeModelSettings == null ? ollamaClient.getModel() : activeModelSettings.modelName();
+            if (modelName == null || modelName.isBlank())
+            {
+                modelName = "__default__";
+            }
+
+            double oldScale = tokenScaleByModel.getOrDefault(modelName, TOKEN_SCALE_DEFAULT);
+            double sampleRatio = actualPromptTokens / (double) estimatedPromptTokens;
+            double targetScale = oldScale * sampleRatio;
+            targetScale = Math.max(TOKEN_SCALE_MIN, Math.min(TOKEN_SCALE_MAX, targetScale));
+            double updated = oldScale + (targetScale - oldScale) * TOKEN_SCALE_ALPHA;
+            updated = Math.max(TOKEN_SCALE_MIN, Math.min(TOKEN_SCALE_MAX, updated));
+            tokenScaleByModel.put(modelName, updated);
+        }
     }
 
     private void setStoryActionButtonsBusy(boolean busy)
@@ -3277,6 +3330,7 @@ public class App extends Application
                 settings = buildGenerationSettings();
                 PromptCompilation compilation = promptCompiler.compile(activeStory, promptBlocks, currentCards, settings);
                 String cleaned = generateContinuationWithFallback(compilation.prompt(), settings);
+                observePromptCalibration(compilation.estimatedTokens());
                 if (cleaned.isBlank())
                 {
                     return null;
@@ -3865,6 +3919,7 @@ public class App extends Application
                 settings = buildGenerationSettings();
                 PromptCompilation compilation = promptCompiler.compile(activeStory, currentBlocks, currentCards, settings);
                 String cleaned = generateContinuationWithFallback(compilation.prompt(), settings);
+                observePromptCalibration(compilation.estimatedTokens());
                 if (cleaned.isBlank())
                 {
                     return null;
@@ -3948,6 +4003,7 @@ public class App extends Application
                 settings = buildGenerationSettings();
                 PromptCompilation compilation = promptCompiler.compile(activeStory, currentBlocks, currentCards, settings);
                 String response = ollamaClient.generate(compilation.prompt(), settings);
+                observePromptCalibration(compilation.estimatedTokens());
                 String cleaned = normalizeOutput(response);
                 if (cleaned.isBlank())
                 {

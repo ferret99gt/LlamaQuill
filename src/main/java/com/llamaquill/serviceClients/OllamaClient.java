@@ -1,6 +1,8 @@
 ﻿package com.llamaquill.serviceClients;
 
 import com.llamaquill.model.GenerationSettings;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -22,6 +24,8 @@ public class OllamaClient
     private final HttpClient client;
     private String host;
     private String model;
+    private Boolean tokenizeSupported;
+    private volatile int lastPromptEvalCount = -1;
 
     public OllamaClient()
     {
@@ -38,11 +42,23 @@ public class OllamaClient
     public void setHost(String host)
     {
         this.host = host;
+        this.tokenizeSupported = null;
     }
 
     public void setModel(String model)
     {
         this.model = model;
+        this.tokenizeSupported = null;
+    }
+
+    public String getModel()
+    {
+        return model;
+    }
+
+    public int getLastPromptEvalCount()
+    {
+        return lastPromptEvalCount;
     }
 
     public String getHost()
@@ -62,8 +78,72 @@ public class OllamaClient
         return Json.extractStringArray(response.body(), "name");
     }
 
+    public int countTokens(String prompt)
+    {
+        if (Boolean.FALSE.equals(tokenizeSupported))
+        {
+            return -1;
+        }
+        try
+        {
+            JSONObject payload = new JSONObject();
+            payload.put("model", model);
+            payload.put("prompt", prompt == null ? "" : prompt);
+            payload.put("text", prompt == null ? "" : prompt);
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(host + "/api/tokenize"))
+                    .timeout(Duration.ofSeconds(20))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(payload.toString(), StandardCharsets.UTF_8))
+                    .build();
+
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() == 404)
+            {
+                tokenizeSupported = Boolean.FALSE;
+                return -1;
+            }
+            if (response.statusCode() < 200 || response.statusCode() >= 300)
+            {
+                return -1;
+            }
+
+            JSONObject json = new JSONObject(response.body());
+            if (json.has("tokens"))
+            {
+                JSONArray tokens = json.optJSONArray("tokens");
+                if (tokens != null)
+                {
+                    tokenizeSupported = Boolean.TRUE;
+                    return Math.max(0, tokens.length());
+                }
+            }
+            if (json.has("token_ids"))
+            {
+                JSONArray tokenIds = json.optJSONArray("token_ids");
+                if (tokenIds != null)
+                {
+                    tokenizeSupported = Boolean.TRUE;
+                    return Math.max(0, tokenIds.length());
+                }
+            }
+            if (json.has("count"))
+            {
+                tokenizeSupported = Boolean.TRUE;
+                return Math.max(0, json.optInt("count", 0));
+            }
+            return -1;
+        }
+        catch (Exception e)
+        {
+            return -1;
+        }
+    }
+
     public String generate(String prompt, GenerationSettings settings) throws IOException, InterruptedException
     {
+        lastPromptEvalCount = -1;
         String payload = buildPayload(prompt, settings);
         //System.out.println("Ollama payload:");
         //System.out.println(payload);
@@ -98,6 +178,11 @@ public class OllamaClient
         }
         if (doneLine != null)
         {
+            Integer promptEvalCount = Json.extractIntField(doneLine, "prompt_eval_count");
+            if (promptEvalCount != null && promptEvalCount > 0)
+            {
+                lastPromptEvalCount = promptEvalCount;
+            }
             System.out.println("Ollama final response:");
             System.out.println(doneLine);
         }
@@ -227,6 +312,51 @@ public class OllamaClient
         static boolean isDone(String jsonLine)
         {
             return jsonLine.contains("\"done\":true");
+        }
+
+        static Integer extractIntField(String jsonLine, String field)
+        {
+            if (jsonLine == null || jsonLine.isBlank() || field == null || field.isBlank())
+            {
+                return null;
+            }
+            String key = "\"" + field + "\"";
+            int idx = jsonLine.indexOf(key);
+            if (idx < 0)
+            {
+                return null;
+            }
+            int colon = jsonLine.indexOf(':', idx + key.length());
+            if (colon < 0)
+            {
+                return null;
+            }
+            int i = colon + 1;
+            while (i < jsonLine.length() && Character.isWhitespace(jsonLine.charAt(i)))
+            {
+                i++;
+            }
+            int start = i;
+            if (i < jsonLine.length() && (jsonLine.charAt(i) == '-' || jsonLine.charAt(i) == '+'))
+            {
+                i++;
+            }
+            while (i < jsonLine.length() && Character.isDigit(jsonLine.charAt(i)))
+            {
+                i++;
+            }
+            if (i <= start)
+            {
+                return null;
+            }
+            try
+            {
+                return Integer.parseInt(jsonLine.substring(start, i));
+            }
+            catch (NumberFormatException e)
+            {
+                return null;
+            }
         }
 
         static List<String> extractStringArray(String json, String fieldName)
