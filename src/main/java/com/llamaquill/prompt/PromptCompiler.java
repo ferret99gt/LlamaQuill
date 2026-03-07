@@ -41,7 +41,7 @@ public class PromptCompiler
         int minWindowChars = Math.max(0, settings.minStoryWindow()) * CHARS_PER_TOKEN;
 
         List<Block> promptBlocks = filterPromptBlocks(blocks);
-        List<Block> window = buildStoryWindow(promptBlocks, minWindowChars);
+        List<Block> window = initializeStoryWindow(promptBlocks);
 
         StoryCardSelection selection = selectStoryCards(storyCards, window, settings.storyCardLookback());
         String originalPlotEssentials = safeText(story.plotEssentials());
@@ -80,6 +80,8 @@ public class PromptCompiler
             }
 
             boolean trimmed = false;
+            // Start from the full promptable story and trim down to fit, preserving
+            // the most recent prose unless higher-priority context must be sacrificed.
             if (window.size() > 1 && windowSizeChars(window) > minWindowChars)
             {
                 window = trimStoryWindow(window, minWindowChars);
@@ -117,7 +119,7 @@ public class PromptCompiler
         }
     }
 
-    private static List<Block> buildStoryWindow(List<Block> blocks, int minWindowChars)
+    private static List<Block> initializeStoryWindow(List<Block> blocks)
     {
         return new ArrayList<>(blocks);
     }

@@ -12,6 +12,7 @@ import com.llamaquill.db.ModelSettingsRepository;
 import com.llamaquill.db.AppAutoCardsRepository;
 import com.llamaquill.db.StoryAutoCardsRepository;
 import com.llamaquill.db.ModelAutoCardsRepository;
+import com.llamaquill.generation.GenerationCoordinator;
 import com.llamaquill.model.Block;
 import com.llamaquill.model.AppSettings;
 import com.llamaquill.model.GenerationSettings;
@@ -24,7 +25,6 @@ import com.llamaquill.model.AppAutoCardsSettings;
 import com.llamaquill.model.StoryAutoCardsSettings;
 import com.llamaquill.model.ModelAutoCardsSettings;
 import com.llamaquill.imports.AIDungeonImports;
-import com.llamaquill.prompt.PromptCompilation;
 import com.llamaquill.prompt.PromptCompiler;
 import com.llamaquill.serviceClients.ComfyUiClient;
 import com.llamaquill.serviceClients.OllamaClient;
@@ -132,6 +132,7 @@ public class App extends Application
     private StoryAutoCardsRepository storyAutoCardsRepository;
     private ModelAutoCardsRepository modelAutoCardsRepository;
     private PromptCompiler promptCompiler;
+    private GenerationCoordinator generationCoordinator;
     private AutoCardsService autoCardsService;
     private AIDungeonImports aiDungeonImports;
     private OllamaClient ollamaClient;
@@ -350,6 +351,8 @@ public class App extends Application
             aiDungeonImports = new AIDungeonImports(storyRepository, blockRepository, cardRepository, DEFAULT_SYSTEM_PROMPT);
             ollamaClient = new OllamaClient();
             comfyUiClient = new ComfyUiClient();
+            generationCoordinator = new GenerationCoordinator(blockRepository, storyRepository, cardRepository, promptCompiler,
+                    ollamaClient);
             autoCardsService = new AutoCardsService(ollamaClient, promptCompiler);
             appSettings = loadOrCreateAppSettings();
             appAutoCardsSettings = loadOrCreateAppAutoCardsSettings();
@@ -1449,6 +1452,19 @@ public class App extends Application
             double updated = oldScale + (targetScale - oldScale) * TOKEN_SCALE_ALPHA;
             updated = Math.max(TOKEN_SCALE_MIN, Math.min(TOKEN_SCALE_MAX, updated));
             tokenScaleByModel.put(modelName, updated);
+        }
+    }
+
+    private boolean runAutoCardsForGeneration(List<Block> currentBlocks, List<StoryCard> currentCards) throws Exception
+    {
+        try
+        {
+            return runAutoCardsIfNeeded(currentBlocks, currentCards, false).ran;
+        }
+        catch (Exception e)
+        {
+            logAutoCardsError("Auto Cards failed to run", e);
+            return false;
         }
     }
 
@@ -3323,23 +3339,15 @@ public class App extends Application
                     retryIndex = 0;
                 }
 
-                List<Block> promptBlocks = new ArrayList<>(blocks);
-                promptBlocks.remove(promptBlocks.size() - 1);
-                List<StoryCard> currentCards = cardRepository.listForStory(activeStory.id());
-
                 settings = buildGenerationSettings();
-                PromptCompilation compilation = promptCompiler.compile(activeStory, promptBlocks, currentCards, settings);
-                String cleaned = generateContinuationWithFallback(compilation.prompt(), settings);
-                observePromptCalibration(compilation.estimatedTokens());
-                if (cleaned.isBlank())
+                GenerationCoordinator.RetryResult result = generationCoordinator.retryAssistantHead(activeStory, blocks, head, settings);
+                observePromptCalibration(result.estimatedPromptTokens());
+                if (result.updatedBlock() == null)
                 {
                     return null;
                 }
-
-                Block updated = new Block(head.id(), head.storyId(), Role.ASSISTANT, cleaned, Timestamps.now(),
-                        head.position());
-                blockRepository.replaceHead(updated);
-                retryHistory.add(new TextRetryHistoryEntry(cleaned));
+                Block updated = result.updatedBlock();
+                retryHistory.add(new TextRetryHistoryEntry(updated.text()));
                 retryIndex = retryHistory.size() - 1;
                 return updated;
             }
@@ -3899,41 +3907,12 @@ public class App extends Application
             @Override
             protected Block call() throws Exception
             {
-                List<Block> currentBlocks = blockRepository.listForStory(activeStory.id());
-                List<StoryCard> currentCards = cardRepository.listForStory(activeStory.id());
-
-                AutoCardsResult autoCardsResult = new AutoCardsResult(0, 0, false);
-                try
-                {
-                    autoCardsResult = runAutoCardsIfNeeded(currentBlocks, currentCards, false);
-                    if (autoCardsResult.ran)
-                    {
-                        currentCards = cardRepository.listForStory(activeStory.id());
-                    }
-                }
-                catch (Exception e)
-                {
-                    logAutoCardsError("Auto Cards failed to run", e);
-                }
-
                 settings = buildGenerationSettings();
-                PromptCompilation compilation = promptCompiler.compile(activeStory, currentBlocks, currentCards, settings);
-                String cleaned = generateContinuationWithFallback(compilation.prompt(), settings);
-                observePromptCalibration(compilation.estimatedTokens());
-                if (cleaned.isBlank())
-                {
-                    return null;
-                }
-
-                int position = blockRepository.nextPosition(activeStory.id());
-                Block block = new Block(Ids.newId(), activeStory.id(), Role.ASSISTANT, cleaned, Timestamps.now(), position);
-                blockRepository.insert(block);
-
-                String now = Timestamps.now();
-                activeStory = new Story(activeStory.id(), activeStory.title(), activeStory.systemPrompt(),
-                        activeStory.plotEssentials(), activeStory.authorNote(), activeStory.createdAt(), now);
-                storyRepository.update(activeStory);
-                return block;
+                GenerationCoordinator.ContinueResult result = generationCoordinator.continueStory(activeStory, settings,
+                        App.this::runAutoCardsForGeneration);
+                observePromptCalibration(result.estimatedPromptTokens());
+                activeStory = result.updatedStory();
+                return result.block();
             }
         };
 
@@ -3974,52 +3953,12 @@ public class App extends Application
             @Override
             protected Boolean call() throws Exception
             {
-                List<Block> currentBlocks = blockRepository.listForStory(activeStory.id());
-                List<StoryCard> currentCards = cardRepository.listForStory(activeStory.id());
-                AutoCardsResult autoCardsResult = new AutoCardsResult(0, 0, false);
-                try
-                {
-                    autoCardsResult = runAutoCardsIfNeeded(currentBlocks, currentCards, false);
-                    if (autoCardsResult.ran)
-                    {
-                        currentCards = cardRepository.listForStory(activeStory.id());
-                    }
-                }
-                catch (Exception e)
-                {
-                    logAutoCardsError("Auto Cards failed to run", e);
-                }
-
-                boolean isFirstTurn = currentBlocks.isEmpty();
-
-                int position = blockRepository.nextPosition(activeStory.id());
-                Role seedRole = isFirstTurn ? Role.ASSISTANT : Role.USER;
-                Block seedBlock = new Block(Ids.newId(), activeStory.id(), seedRole, userText, Timestamps.now(), position);
-                blockRepository.insert(seedBlock);
-
-                currentBlocks = blockRepository.listForStory(activeStory.id());
-                currentCards = cardRepository.listForStory(activeStory.id());
-
                 settings = buildGenerationSettings();
-                PromptCompilation compilation = promptCompiler.compile(activeStory, currentBlocks, currentCards, settings);
-                String response = ollamaClient.generate(compilation.prompt(), settings);
-                observePromptCalibration(compilation.estimatedTokens());
-                String cleaned = normalizeOutput(response);
-                if (cleaned.isBlank())
-                {
-                    return Boolean.FALSE;
-                }
-
-                int assistantPosition = blockRepository.nextPosition(activeStory.id());
-                Block assistantBlock = new Block(Ids.newId(), activeStory.id(), Role.ASSISTANT, cleaned, Timestamps.now(),
-                        assistantPosition);
-                blockRepository.insert(assistantBlock);
-
-                String now = Timestamps.now();
-                activeStory = new Story(activeStory.id(), activeStory.title(), activeStory.systemPrompt(),
-                        activeStory.plotEssentials(), activeStory.authorNote(), activeStory.createdAt(), now);
-                storyRepository.update(activeStory);
-                return Boolean.TRUE;
+                GenerationCoordinator.TurnResult result = generationCoordinator.takeTurn(activeStory, userText, settings,
+                        App.this::runAutoCardsForGeneration);
+                observePromptCalibration(result.estimatedPromptTokens());
+                activeStory = result.updatedStory();
+                return result.generated();
             }
         };
 
@@ -5282,42 +5221,6 @@ public class App extends Application
             return storyRowContentWidthBinding;
         }
         return contentWidthBinding().subtract(24);
-    }
-
-    private static String normalizeOutput(String output)
-    {
-        if (output == null)
-        {
-            return "";
-        }
-        return output.replace("\r\n", "\n").replace("\r", "\n");
-    }
-
-    private String generateContinuationWithFallback(String prompt, GenerationSettings generationSettings)
-            throws IOException, InterruptedException
-    {
-        String cleaned = normalizeOutput(ollamaClient.generate(prompt, generationSettings));
-        if (!cleaned.isBlank())
-        {
-            return cleaned;
-        }
-
-        String withSpace = prompt + " ";
-        cleaned = normalizeOutput(ollamaClient.generate(withSpace, generationSettings));
-        if (!cleaned.isBlank())
-        {
-            System.out.println("Continuation fallback succeeded with trailing space.");
-            return " " + cleaned;
-        }
-
-        String withNewline = prompt + "\n";
-        cleaned = normalizeOutput(ollamaClient.generate(withNewline, generationSettings));
-        if (!cleaned.isBlank())
-        {
-            System.out.println("Continuation fallback succeeded with trailing newline.");
-            return "\n" + cleaned;
-        }
-        return cleaned;
     }
 
     private void logAutoCardsError(String message, Exception e)
