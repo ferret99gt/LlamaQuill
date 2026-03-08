@@ -288,38 +288,38 @@ public final class StoryPaneController
         List<Block> current = new ArrayList<>();
         int charCount = 0;
 
-        for (int i = 0; i < group.size(); i++)
+        for (int i = group.size() - 1; i >= 0; i--)
         {
             Block block = group.get(i);
             int blockChars = block.text() == null ? 0 : block.text().length();
-            current.add(block);
+            current.add(0, block);
             charCount += blockChars;
 
             boolean softLimitReached = current.size() >= ASSISTANT_FLOW_CHUNK_BLOCK_LIMIT
                     || charCount >= ASSISTANT_FLOW_CHUNK_CHAR_LIMIT;
             boolean hardLimitReached = current.size() >= ASSISTANT_FLOW_CHUNK_HARD_BLOCK_LIMIT
                     || charCount >= ASSISTANT_FLOW_CHUNK_HARD_CHAR_LIMIT;
-            boolean hasNext = i + 1 < group.size();
-            if (!hasNext)
+            boolean hasPrevious = i > 0;
+            if (!hasPrevious)
             {
                 continue;
             }
 
-            Block next = group.get(i + 1);
-            boolean naturalBoundary = hasHardBreakBetween(block, next);
+            Block previous = group.get(i - 1);
+            boolean naturalBoundary = hasHardBreakBetween(previous, block);
             boolean shouldSplit = hardLimitReached || (softLimitReached && naturalBoundary);
             if (!shouldSplit)
             {
                 continue;
             }
-            chunks.add(current);
+            chunks.add(0, current);
             current = new ArrayList<>();
             charCount = 0;
         }
 
         if (!current.isEmpty())
         {
-            chunks.add(current);
+            chunks.add(0, current);
         }
         return chunks;
     }
