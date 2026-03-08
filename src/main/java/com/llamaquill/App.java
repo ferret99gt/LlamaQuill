@@ -15,10 +15,8 @@ import com.llamaquill.db.AppAutoCardsRepository;
 import com.llamaquill.db.StoryAutoCardsRepository;
 import com.llamaquill.db.ModelAutoCardsRepository;
 import com.llamaquill.generation.GenerationCoordinator;
-import com.llamaquill.generation.TurnInputPane;
 import com.llamaquill.image.ImageGenerationCoordinator;
 import com.llamaquill.image.SeeDialog;
-import com.llamaquill.image.StoryImageDialogs;
 import com.llamaquill.model.Block;
 import com.llamaquill.model.AppSettings;
 import com.llamaquill.model.GenerationSettings;
@@ -39,20 +37,16 @@ import com.llamaquill.retry.RetryHistoryDialog;
 import com.llamaquill.settings.SettingsCoordinator;
 import com.llamaquill.stories.StoryDialogs;
 import com.llamaquill.storycards.StoryCardDialogs;
+import com.llamaquill.storyview.StoryPaneController;
 import com.llamaquill.util.Ids;
 import com.llamaquill.util.Timestamps;
 import javafx.application.Application;
 import javafx.application.Platform;
-import javafx.animation.PauseTransition;
-import javafx.beans.binding.Bindings;
-import javafx.beans.binding.DoubleBinding;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.concurrent.Task;
 import javafx.geometry.Insets;
-import javafx.geometry.Orientation;
 import javafx.geometry.Pos;
-import javafx.scene.Node;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
@@ -63,9 +57,7 @@ import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.ScrollPane;
-import javafx.scene.control.ScrollBar;
 import javafx.scene.control.Slider;
-import javafx.scene.control.OverrunStyle;
 import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
 import javafx.scene.control.TextArea;
@@ -73,26 +65,17 @@ import javafx.scene.control.TextField;
 import javafx.scene.control.Spinner;
 import javafx.scene.control.SpinnerValueFactory;
 import javafx.stage.FileChooser;
-import javafx.scene.image.Image;
-import javafx.scene.image.ImageView;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
-import javafx.scene.layout.Region;
-import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
-import javafx.scene.shape.Rectangle;
-import javafx.scene.text.Text;
-import javafx.scene.text.TextFlow;
 import javafx.stage.Stage;
-import javafx.util.Duration;
 
 import java.nio.file.Files;
 import java.nio.file.FileSystem;
 import java.nio.file.FileSystemNotFoundException;
 import java.nio.file.FileSystems;
 import java.nio.file.Path;
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -155,8 +138,7 @@ public class App extends Application
     private final ObservableList<StoryCard> cardItems = FXCollections.observableArrayList();
 
     private Stage primaryStage;
-    private ListView<Region> storyListView;
-    private final ObservableList<Region> storyRows = FXCollections.observableArrayList();
+    private StoryPaneController storyPaneController;
     private Label statusLabel;
     private Button continueButton;
     private Button takeTurnButton;
@@ -164,7 +146,6 @@ public class App extends Application
     private Button deleteButton;
     private Button retryHistoryButton;
     private Button seeButton;
-    private HBox storyActionRow;
 
     private Button newStoryButton;
     private Button importAdventureButton;
@@ -211,13 +192,8 @@ public class App extends Application
 
     private boolean updatingAutoCardsControls;
 
-    private TurnInputPane turnInputPane;
-
     private final List<RetryHistoryEntry> retryHistory = new ArrayList<>();
     private int retryIndex = -1;
-    private String activeAssistantEditId;
-    private TextFlow activeAssistantFlow;
-    private TextArea activeAssistantEditor;
 
     private Slider contextLimitSlider;
     private Slider responseLengthSlider;
@@ -240,15 +216,7 @@ public class App extends Application
     private ComboBox<String> modelSelect;
     private boolean updatingModelControls;
 
-    private DoubleBinding storyContentWidthBinding;
-    private DoubleBinding storyRowContentWidthBinding;
-    private PauseTransition storyViewportRefreshDebounce;
     private List<String> comfyWorkflowNames = new ArrayList<>();
-
-    private static final int ASSISTANT_FLOW_CHUNK_CHAR_LIMIT = 6000;
-    private static final int ASSISTANT_FLOW_CHUNK_BLOCK_LIMIT = 48;
-    private static final int ASSISTANT_FLOW_CHUNK_HARD_CHAR_LIMIT = 12000;
-    private static final int ASSISTANT_FLOW_CHUNK_HARD_BLOCK_LIMIT = 96;
     private static final double TOKEN_SCALE_DEFAULT = 1.0;
     private static final double TOKEN_SCALE_MIN = 0.7;
     private static final double TOKEN_SCALE_MAX = 1.6;
@@ -339,58 +307,10 @@ public class App extends Application
             throw new IllegalStateException("Failed to initialize database", e);
         }
 
-        storyListView = new ListView<>(storyRows);
-        storyListView.getStyleClass().add("story-list");
-        storyListView.setFocusTraversable(false);
-        storyListView.setPadding(new Insets(10, 0, 10, 0));
-        storyListView.setCellFactory(list -> new ListCell<>()
-        {
-            private final StackPane clippedGraphic = new StackPane();
-            private final Rectangle graphicClip = new Rectangle();
-
-            {
-                clippedGraphic.setAlignment(Pos.TOP_LEFT);
-                graphicClip.widthProperty().bind(clippedGraphic.widthProperty());
-                graphicClip.heightProperty().bind(clippedGraphic.heightProperty());
-                clippedGraphic.setClip(graphicClip);
-            }
-
-            @Override
-            protected void updateItem(Region item, boolean empty)
-            {
-                super.updateItem(item, empty);
-                setText(null);
-                if (empty || item == null)
-                {
-                    clippedGraphic.getChildren().clear();
-                    setGraphic(null);
-                    setPadding(Insets.EMPTY);
-                    setMinHeight(Region.USE_COMPUTED_SIZE);
-                    setPrefHeight(Region.USE_COMPUTED_SIZE);
-                    setMaxHeight(Region.USE_COMPUTED_SIZE);
-                    return;
-                }
-                clippedGraphic.getChildren().setAll(item);
-                setGraphic(clippedGraphic);
-                setPadding(Insets.EMPTY);
-                setMinHeight(Region.USE_COMPUTED_SIZE);
-                setPrefHeight(Region.USE_COMPUTED_SIZE);
-                setMaxHeight(Region.USE_COMPUTED_SIZE);
-            }
-        });
-        // Keep content narrower than the viewport so ListView never needs a horizontal bar.
-        storyContentWidthBinding = Bindings.max(0.0, storyListView.widthProperty().subtract(52));
-        storyRowContentWidthBinding = Bindings.max(0.0, storyContentWidthBinding.subtract(24));
-        storyViewportRefreshDebounce = new PauseTransition(Duration.millis(120));
-        storyViewportRefreshDebounce.setOnFinished(event -> refreshStoryLayoutPreserveViewport());
-        storyListView.widthProperty().addListener((obs, oldValue, newValue) -> scheduleStoryViewportRefresh());
-        storyListView.heightProperty().addListener((obs, oldValue, newValue) -> scheduleStoryViewportRefresh());
-
         continueButton = new Button("Continue");
         continueButton.setOnAction(event -> runContinue());
 
         takeTurnButton = new Button("Take A Turn");
-        takeTurnButton.setOnAction(event -> showTurnInput(true));
 
         retryButton = new Button("Retry");
         retryButton.setOnAction(event -> runRetry());
@@ -405,6 +325,16 @@ public class App extends Application
         seeButton = new Button("See");
         seeButton.setOnAction(event -> showSeeDialog());
 
+        storyPaneController = new StoryPaneController(
+                primaryStage,
+                this::submitTurn,
+                this::loadStoryImage,
+                this::saveStoryImageToFile,
+                this::deleteBlockAndLinkedImage,
+                this::persistBlockTextAsync,
+                this::showError);
+        takeTurnButton.setOnAction(event -> showTurnInput(true));
+
         statusLabel = new Label("Ready");
 
         var statusBar = new HBox(statusLabel);
@@ -414,7 +344,8 @@ public class App extends Application
         var root = new BorderPane();
         root.getStyleClass().add("app-root");
         root.setLeft(buildStorySidebar());
-        root.setCenter(buildCenterPane());
+        root.setCenter(storyPaneController.buildCenterPane(
+                takeTurnButton, continueButton, seeButton, retryButton, retryHistoryButton, deleteButton));
         root.setRight(buildRightSidebar());
         root.setBottom(statusBar);
 
@@ -506,33 +437,12 @@ public class App extends Application
         return leftSideBar;
     }
 
-    private BorderPane buildCenterPane()
-    {
-        var centerPane = new BorderPane();
-        centerPane.getStyleClass().add("center-pane");
-        StackPane storyViewport = new StackPane(storyListView);
-        Rectangle viewportClip = new Rectangle();
-        viewportClip.widthProperty().bind(storyViewport.widthProperty());
-        viewportClip.heightProperty().bind(storyViewport.heightProperty());
-        storyViewport.setClip(viewportClip);
-        centerPane.setCenter(storyViewport);
-
-        turnInputPane = new TurnInputPane(this::submitTurn, () -> showTurnInput(false));
-
-        storyActionRow = new HBox(8, takeTurnButton, continueButton, seeButton, retryButton, retryHistoryButton, deleteButton);
-        storyActionRow.getStyleClass().add("action-row");
-        storyActionRow.setAlignment(Pos.CENTER_LEFT);
-        storyActionRow.setPadding(new Insets(10));
-
-        var bottomBox = new VBox(8, turnInputPane.root(), storyActionRow);
-        centerPane.setBottom(bottomBox);
-
-        return centerPane;
-    }
-
     private void showTurnInput(boolean show)
     {
-        turnInputPane.setVisible(show);
+        if (storyPaneController != null)
+        {
+            storyPaneController.showTurnInput(show);
+        }
     }
 
     private VBox buildRightSidebar()
@@ -1432,9 +1342,9 @@ public class App extends Application
 
     private void setStoryActionButtonsBusy(boolean busy)
     {
-        if (storyActionRow != null)
+        if (storyPaneController != null)
         {
-            storyActionRow.setDisable(busy);
+            storyPaneController.setActionButtonsDisabled(busy);
         }
     }
 
@@ -2558,14 +2468,17 @@ public class App extends Application
             showInfo("Select a story first.");
             return;
         }
-        String text = turnInputPane.text().trim();
+        String text = storyPaneController == null ? "" : storyPaneController.turnInputText().trim();
         if (text.isEmpty())
         {
             showInfo("Turn text cannot be empty.");
             return;
         }
         showTurnInput(false);
-        turnInputPane.clear();
+        if (storyPaneController != null)
+        {
+            storyPaneController.clearTurnInput();
+        }
         clearRetryHistory();
         runTurn(text);
     }
@@ -3024,366 +2937,11 @@ public class App extends Application
 
     private void renderStoryBlocks(boolean forceScroll)
     {
-        storyRows.clear();
-        if (blocks.isEmpty())
+        if (storyPaneController == null)
         {
             return;
         }
-
-        String latestAssistantId = findLatestAssistantId();
-        List<Block> assistantGroup = new ArrayList<>();
-
-        for (Block block : blocks)
-        {
-            if (block.role() == Role.ASSISTANT)
-            {
-                assistantGroup.add(block);
-                continue;
-            }
-
-            addAssistantGroup(assistantGroup, latestAssistantId);
-            assistantGroup.clear();
-            if (block.role() == Role.USER)
-            {
-                storyRows.add(buildUserBlockNode(block));
-            }
-            else if (block.role() == Role.IMAGE)
-            {
-                storyRows.add(buildImageBlockNode(block));
-            }
-        }
-
-        addAssistantGroup(assistantGroup, latestAssistantId);
-        storyListView.getSelectionModel().clearSelection();
-        storyListView.getFocusModel().focus(-1);
-
-        if (forceScroll)
-        {
-            scrollToBottom();
-        }
-    }
-
-    private void addAssistantGroup(List<Block> group, String latestAssistantId)
-    {
-        if (group.isEmpty())
-        {
-            return;
-        }
-        List<List<Block>> chunks = splitAssistantGroup(group);
-        for (List<Block> chunk : chunks)
-        {
-            storyRows.add(buildAssistantFlow(chunk, latestAssistantId));
-        }
-    }
-
-    private TextFlow buildAssistantFlow(List<Block> group, String latestAssistantId)
-    {
-        TextFlow flow = new TextFlow();
-        flow.setLineSpacing(6);
-        flow.setPadding(new Insets(2, 10, 2, 10));
-        flow.prefWidthProperty().bind(contentWidthBinding());
-        flow.maxWidthProperty().bind(contentWidthBinding());
-
-        for (int i = 0; i < group.size(); i++)
-        {
-            Block block = group.get(i);
-            boolean highlight = block.id().equals(latestAssistantId);
-            Text textNode = new Text(block.text());
-            textNode.setFill(javafx.scene.paint.Color.web("#e6e1d8"));
-            if (highlight)
-            {
-                textNode.setStyle("-fx-underline: true;");
-            }
-            textNode.setOnMouseEntered(event -> textNode.setUnderline(true));
-            textNode.setOnMouseExited(event ->
-            {
-                if (!highlight)
-                {
-                    textNode.setUnderline(false);
-                }
-            });
-            textNode.setOnMouseClicked(event -> beginAssistantInlineEdit(block, flow, textNode));
-            flow.getChildren().add(textNode);
-        }
-        Text sentinel = new Text("");
-        sentinel.setUserData("sentinel");
-        flow.getChildren().add(sentinel);
-        return flow;
-    }
-
-    private List<List<Block>> splitAssistantGroup(List<Block> group)
-    {
-        List<List<Block>> chunks = new ArrayList<>();
-        List<Block> current = new ArrayList<>();
-        int charCount = 0;
-
-        for (int i = 0; i < group.size(); i++)
-        {
-            Block block = group.get(i);
-            int blockChars = block.text() == null ? 0 : block.text().length();
-            current.add(block);
-            charCount += blockChars;
-
-            boolean softLimitReached = current.size() >= ASSISTANT_FLOW_CHUNK_BLOCK_LIMIT
-                    || charCount >= ASSISTANT_FLOW_CHUNK_CHAR_LIMIT;
-            boolean hardLimitReached = current.size() >= ASSISTANT_FLOW_CHUNK_HARD_BLOCK_LIMIT
-                    || charCount >= ASSISTANT_FLOW_CHUNK_HARD_CHAR_LIMIT;
-            boolean hasNext = i + 1 < group.size();
-            if (!hasNext)
-            {
-                continue;
-            }
-
-            Block next = group.get(i + 1);
-            boolean naturalBoundary = hasHardBreakBetween(block, next);
-            boolean shouldSplit = hardLimitReached || (softLimitReached && naturalBoundary);
-            if (!shouldSplit)
-            {
-                continue;
-            }
-            chunks.add(current);
-            current = new ArrayList<>();
-            charCount = 0;
-        }
-
-        if (!current.isEmpty())
-        {
-            chunks.add(current);
-        }
-        return chunks;
-    }
-
-    private boolean hasHardBreakBetween(Block left, Block right)
-    {
-        String leftText = left == null ? "" : left.text();
-        String rightText = right == null ? "" : right.text();
-        return endsWithNewline(leftText) || startsWithNewline(rightText);
-    }
-
-    private boolean endsWithNewline(String text)
-    {
-        return text != null && !text.isEmpty() && (text.endsWith("\n") || text.endsWith("\r"));
-    }
-
-    private boolean startsWithNewline(String text)
-    {
-        return text != null && !text.isEmpty() && (text.startsWith("\n") || text.startsWith("\r"));
-    }
-
-    private String findLatestAssistantId()
-    {
-        for (int i = blocks.size() - 1; i >= 0; i--)
-        {
-            Block block = blocks.get(i);
-            if (block.role() == Role.ASSISTANT)
-            {
-                return block.id();
-            }
-        }
-        return null;
-    }
-
-    private void beginAssistantInlineEdit(Block block, TextFlow flow, Text textNode)
-    {
-        clearStoryListSelection();
-        if (activeAssistantEditor != null)
-        {
-            commitAssistantEdit(activeAssistantEditor.getText());
-        }
-        activeAssistantEditId = block.id();
-        activeAssistantFlow = flow;
-
-        TextArea editor = new TextArea(block.text());
-        editor.setWrapText(true);
-        editor.setMinHeight(Region.USE_PREF_SIZE);
-        editor.setMaxHeight(Double.MAX_VALUE);
-        editor.prefWidthProperty().bind(contentWidthBinding());
-        editor.maxWidthProperty().bind(contentWidthBinding());
-
-        int index = flow.getChildren().indexOf(textNode);
-        if (index < 0)
-        {
-            activeAssistantEditId = null;
-            activeAssistantFlow = null;
-            return;
-        }
-        flow.getChildren().set(index, editor);
-        javafx.application.Platform.runLater(() ->
-        {
-            flow.requestLayout();
-            refreshStoryRow(flow);
-            refreshStoryLayoutPreserveViewport();
-        });
-
-        activeAssistantEditor = editor;
-
-        editor.focusedProperty().addListener((obs, oldValue, newValue) ->
-        {
-            if (!newValue && activeAssistantEditor == editor)
-            {
-                commitAssistantEdit(editor.getText());
-            }
-        });
-
-        javafx.application.Platform.runLater(() ->
-        {
-            editor.requestFocus();
-            editor.positionCaret(editor.getText().length());
-        });
-    }
-
-    private void commitAssistantEdit(String newText)
-    {
-        if (activeAssistantEditId == null || activeAssistantEditor == null || activeAssistantFlow == null)
-        {
-            return;
-        }
-
-        String blockId = activeAssistantEditId;
-        TextArea editor = activeAssistantEditor;
-        TextFlow flow = activeAssistantFlow;
-        activeAssistantEditId = null;
-        activeAssistantEditor = null;
-        activeAssistantFlow = null;
-
-        Block originalBlock = findBlockById(blockId);
-        if (originalBlock == null)
-        {
-            return;
-        }
-
-        String normalized = newText == null ? "" : newText;
-        if (normalized.equals(originalBlock.text()))
-        {
-            replaceAssistantEditorWithText(flow, editor, originalBlock, originalBlock.text());
-            clearStoryListSelection();
-            return;
-        }
-
-        editor.setDisable(true);
-        persistBlockTextAsync(blockId, normalized, () ->
-        {
-            Block updatedBlock = updateBlockText(blockId, normalized);
-            if (updatedBlock == null)
-            {
-                updatedBlock = originalBlock;
-            }
-            replaceAssistantEditorWithText(flow, editor, updatedBlock, normalized);
-            clearStoryListSelection();
-        }, e ->
-        {
-            replaceAssistantEditorWithText(flow, editor, originalBlock, originalBlock.text());
-            clearStoryListSelection();
-            showError("Failed to update block", e);
-        });
-    }
-
-    private Region buildUserBlockNode(Block block)
-    {
-        Label icon = new Label(">");
-        icon.setStyle("-fx-padding: 4 6 0 0;");
-        icon.setTextOverrun(OverrunStyle.CLIP);
-        icon.setMinWidth(Region.USE_PREF_SIZE);
-        icon.setPrefWidth(Region.USE_COMPUTED_SIZE);
-        icon.setMaxWidth(Region.USE_PREF_SIZE);
-
-        Label label = new Label(block.text());
-        label.setWrapText(true);
-        label.setPadding(Insets.EMPTY);
-        label.setTextOverrun(OverrunStyle.CLIP);
-        label.setMinWidth(0);
-        label.prefWidthProperty().bind(contentWidthBinding());
-        label.maxWidthProperty().bind(contentWidthBinding());
-        label.setMinHeight(Region.USE_PREF_SIZE);
-        label.setPrefHeight(Region.USE_COMPUTED_SIZE);
-        label.setMaxHeight(Double.MAX_VALUE);
-
-        TextArea editor = new TextArea(block.text());
-        editor.setWrapText(true);
-        editor.setVisible(false);
-        editor.setManaged(false);
-        editor.setPrefRowCount(3);
-        editor.setMinHeight(Region.USE_PREF_SIZE);
-        editor.prefWidthProperty().bind(contentWidthBinding());
-        editor.maxWidthProperty().bind(contentWidthBinding());
-
-        StackPane textStack = new StackPane(label, editor);
-        textStack.prefWidthProperty().bind(rowContentWidthBinding());
-        textStack.maxWidthProperty().bind(rowContentWidthBinding());
-        HBox row = new HBox(6, icon, textStack);
-        HBox.setHgrow(textStack, Priority.ALWAYS);
-        row.setAlignment(Pos.TOP_LEFT);
-        row.setPadding(new Insets(6, 8, 6, 8));
-        row.setStyle("-fx-border-color: rgba(255,255,255,0.25); -fx-border-width: 0 0 0 2;");
-        row.prefWidthProperty().bind(contentWidthBinding());
-        row.maxWidthProperty().bind(contentWidthBinding());
-
-        label.setOnMouseClicked(event -> beginInlineEdit(label, editor, row));
-        label.setOnMouseEntered(event -> label.setUnderline(true));
-        label.setOnMouseExited(event -> label.setUnderline(false));
-        editor.focusedProperty().addListener((obs, oldValue, newValue) ->
-        {
-            if (!newValue)
-            {
-                String newText = editor.getText();
-                commitInlineEdit(block.id(), newText, label, editor, row, false);
-            }
-        });
-        return row;
-    }
-
-    private Region buildImageBlockNode(Block block)
-    {
-        VBox row = new VBox(8);
-        row.setAlignment(Pos.TOP_LEFT);
-        row.setPadding(new Insets(8, 10, 8, 10));
-        row.prefWidthProperty().bind(contentWidthBinding());
-        row.maxWidthProperty().bind(contentWidthBinding());
-        row.setStyle("-fx-border-color: rgba(255,255,255,0.15); -fx-border-width: 1; -fx-border-radius: 4; "
-                + "-fx-background-color: rgba(255,255,255,0.03); -fx-background-radius: 4;");
-
-        Label header = new Label("Image");
-        header.setStyle("-fx-text-fill: #c7c0b5; -fx-font-size: 12px;");
-
-        StoryImage storyImage = loadStoryImage(block.text());
-        if (storyImage == null || storyImage.imageBytes() == null || storyImage.imageBytes().length == 0)
-        {
-            Label missing = new Label("[Missing image: " + (block.text() == null ? "" : block.text()) + "]");
-            missing.setWrapText(true);
-            row.getChildren().addAll(header, missing);
-            return row;
-        }
-
-        Image image;
-        try
-        {
-            image = new Image(new ByteArrayInputStream(storyImage.imageBytes()));
-        }
-        catch (Exception e)
-        {
-            Label failed = new Label("[Failed to decode image]");
-            failed.setWrapText(true);
-            row.getChildren().addAll(header, failed);
-            return row;
-        }
-
-        ImageView preview = new ImageView(image);
-        preview.setPreserveRatio(true);
-        preview.setSmooth(true);
-        preview.fitWidthProperty().bind(rowContentWidthBinding());
-        preview.setFitHeight(256);
-        preview.setOnMouseClicked(event -> showImageBlockDialog(block, storyImage, image));
-        StackPane previewWrap = new StackPane(preview);
-        previewWrap.setAlignment(Pos.CENTER);
-        previewWrap.prefWidthProperty().bind(rowContentWidthBinding());
-        previewWrap.maxWidthProperty().bind(rowContentWidthBinding());
-
-        Label promptSnippet = new Label(snippetFor(storyImage.prompt()));
-        promptSnippet.setWrapText(true);
-        promptSnippet.setStyle("-fx-text-fill: #b8b1a5; -fx-font-size: 11px;");
-
-        row.getChildren().addAll(header, previewWrap, promptSnippet);
-        return row;
+        storyPaneController.renderBlocks(blocks, forceScroll);
     }
 
     private StoryImage loadStoryImage(String imageId)
@@ -3397,16 +2955,6 @@ public class App extends Application
             showError("Failed to load image", e);
         }
         return null;
-    }
-
-    private void showImageBlockDialog(Block block, StoryImage storyImage, Image image)
-    {
-        StoryImageDialogs.showImageBlockDialog(
-                primaryStage,
-                storyImage,
-                image,
-                () -> saveStoryImageToFile(storyImage),
-                () -> deleteBlockAndLinkedImage(block, false));
     }
 
     private void saveStoryImageToFile(StoryImage storyImage)
@@ -3463,132 +3011,6 @@ public class App extends Application
         imageGenerationCoordinator.deleteImageById(block.text());
     }
 
-    private void beginInlineEdit(Label label, TextArea editor, Region row)
-    {
-        clearStoryListSelection();
-        String current = stripTrailingSpace(label.getText());
-        editor.setText(current);
-        label.setVisible(false);
-        label.setManaged(false);
-        editor.setVisible(true);
-        editor.setManaged(true);
-        refreshStoryRow(row);
-        refreshStoryLayoutPreserveViewport();
-        editor.requestFocus();
-        editor.positionCaret(editor.getText().length());
-    }
-
-    private void commitInlineEdit(String blockId, String newText, Label label, TextArea editor, Region row,
-            boolean trailingSpace)
-    {
-        String normalized = newText == null ? "" : newText;
-        Block originalBlock = findBlockById(blockId);
-        if (originalBlock == null)
-        {
-            label.setVisible(true);
-            label.setManaged(true);
-            editor.setVisible(false);
-            editor.setManaged(false);
-            clearStoryListSelection();
-            return;
-        }
-        String previousDisplay = trailingSpace ? originalBlock.text() + " " : originalBlock.text();
-
-        label.setText(trailingSpace ? normalized + " " : normalized);
-        label.setVisible(true);
-        label.setManaged(true);
-        editor.setVisible(false);
-        editor.setManaged(false);
-        refreshStoryRow(row);
-        refreshStoryLayoutPreserveViewport();
-
-        if (normalized.equals(originalBlock.text()))
-        {
-            clearStoryListSelection();
-            return;
-        }
-
-        persistBlockTextAsync(blockId, normalized,
-                () ->
-                {
-                    updateBlockText(blockId, normalized);
-                    clearStoryListSelection();
-                },
-                e ->
-                {
-                    label.setText(previousDisplay);
-                    refreshStoryRow(row);
-                    clearStoryListSelection();
-                    showError("Failed to update block", e);
-                });
-    }
-
-    private Block updateBlockText(String blockId, String text)
-    {
-        for (int i = 0; i < blocks.size(); i++)
-        {
-            Block block = blocks.get(i);
-            if (!block.id().equals(blockId))
-            {
-                continue;
-            }
-            if (text.equals(block.text()))
-            {
-                return block;
-            }
-            Block updated = new Block(block.id(), block.storyId(), block.role(), text, block.createdAt(), block.position());
-            blocks.set(i, updated);
-            return updated;
-        }
-        return null;
-    }
-
-    private Block findBlockById(String blockId)
-    {
-        for (Block block : blocks)
-        {
-            if (block.id().equals(blockId))
-            {
-                return block;
-            }
-        }
-        return null;
-    }
-
-    private void replaceAssistantEditorWithText(TextFlow flow, TextArea editor, Block block, String text)
-    {
-        if (flow == null || editor == null || block == null)
-        {
-            return;
-        }
-        Text updatedText = new Text(text == null ? "" : text);
-        updatedText.setFill(javafx.scene.paint.Color.web("#e6e1d8"));
-        String latestId = findLatestAssistantId();
-        boolean highlight = block.id().equals(latestId);
-        if (highlight)
-        {
-            updatedText.setStyle("-fx-underline: true;");
-        }
-        updatedText.setOnMouseEntered(event -> updatedText.setUnderline(true));
-        updatedText.setOnMouseExited(event ->
-        {
-            if (!highlight)
-            {
-                updatedText.setUnderline(false);
-            }
-        });
-        updatedText.setOnMouseClicked(event -> beginAssistantInlineEdit(block, flow, updatedText));
-
-        int index = flow.getChildren().indexOf(editor);
-        if (index >= 0)
-        {
-            flow.getChildren().set(index, updatedText);
-            flow.requestLayout();
-            refreshStoryRow(flow);
-            refreshStoryLayoutPreserveViewport();
-        }
-    }
-
     private void persistBlockTextAsync(String blockId, String text, Runnable onSuccess, Consumer<Exception> onFailure)
     {
         if (executor == null)
@@ -3634,183 +3056,6 @@ public class App extends Application
             return e;
         }
         return new RuntimeException(current);
-    }
-
-    private static String stripTrailingSpace(String text)
-    {
-        if (text == null || text.isEmpty())
-        {
-            return "";
-        }
-        if (text.endsWith(" "))
-        {
-            return text.substring(0, text.length() - 1);
-        }
-        return text;
-    }
-
-    private void scrollToBottom()
-    {
-        javafx.application.Platform.runLater(() ->
-        {
-            if (storyRows.isEmpty())
-            {
-                return;
-            }
-            storyListView.refresh();
-            storyListView.applyCss();
-            storyListView.layout();
-            storyListView.scrollTo(storyRows.size() - 1);
-            javafx.application.Platform.runLater(() ->
-            {
-                storyListView.refresh();
-                storyListView.applyCss();
-                storyListView.layout();
-                for (Node node : storyListView.lookupAll(".scroll-bar"))
-                {
-                    if (!(node instanceof ScrollBar bar))
-                    {
-                        continue;
-                    }
-                    if (bar.getOrientation() == Orientation.HORIZONTAL)
-                    {
-                        bar.setVisible(false);
-                        bar.setManaged(false);
-                        bar.setMinHeight(0);
-                        bar.setPrefHeight(0);
-                        bar.setMaxHeight(0);
-                        continue;
-                    }
-                    if (bar.getOrientation() == Orientation.VERTICAL)
-                    {
-                        bar.setValue(bar.getMax());
-                    }
-                }
-            });
-        });
-    }
-
-    private void clearStoryListSelection()
-    {
-        if (storyListView == null)
-        {
-            return;
-        }
-        storyListView.getSelectionModel().clearSelection();
-    }
-
-    private void refreshStoryLayoutPreserveViewport()
-    {
-        if (storyListView == null)
-        {
-            return;
-        }
-        ScrollBar before = findStoryVerticalScrollBar();
-        double previousValue = before == null ? Double.NaN : before.getValue();
-        boolean stickToBottom = before != null && previousValue >= (before.getMax() - 0.5);
-        javafx.application.Platform.runLater(() ->
-        {
-            storyListView.refresh();
-            storyListView.applyCss();
-            storyListView.layout();
-            if (Double.isNaN(previousValue))
-            {
-                return;
-            }
-            ScrollBar after = findStoryVerticalScrollBar();
-            if (after == null)
-            {
-                return;
-            }
-            hideStoryHorizontalScrollBar();
-            if (stickToBottom)
-            {
-                after.setValue(after.getMax());
-            }
-            else
-            {
-                double clamped = Math.max(after.getMin(), Math.min(after.getMax(), previousValue));
-                after.setValue(clamped);
-            }
-        });
-    }
-
-    private void scheduleStoryViewportRefresh()
-    {
-        if (storyViewportRefreshDebounce == null)
-        {
-            refreshStoryLayoutPreserveViewport();
-            return;
-        }
-        storyViewportRefreshDebounce.playFromStart();
-    }
-
-    private void refreshStoryRow(Region row)
-    {
-        if (storyListView == null || row == null)
-        {
-            return;
-        }
-        int index = storyRows.indexOf(row);
-        if (index < 0)
-        {
-            return;
-        }
-        storyRows.set(index, row);
-    }
-
-    private ScrollBar findStoryVerticalScrollBar()
-    {
-        if (storyListView == null)
-        {
-            return null;
-        }
-        for (Node node : storyListView.lookupAll(".scroll-bar"))
-        {
-            if (node instanceof ScrollBar bar && bar.getOrientation() == Orientation.VERTICAL)
-            {
-                return bar;
-            }
-        }
-        return null;
-    }
-
-    private void hideStoryHorizontalScrollBar()
-    {
-        if (storyListView == null)
-        {
-            return;
-        }
-        for (Node node : storyListView.lookupAll(".scroll-bar"))
-        {
-            if (!(node instanceof ScrollBar bar) || bar.getOrientation() != Orientation.HORIZONTAL)
-            {
-                continue;
-            }
-            bar.setVisible(false);
-            bar.setManaged(false);
-            bar.setMinHeight(0);
-            bar.setPrefHeight(0);
-            bar.setMaxHeight(0);
-        }
-    }
-
-    private DoubleBinding contentWidthBinding()
-    {
-        if (storyContentWidthBinding != null)
-        {
-            return storyContentWidthBinding;
-        }
-        return storyListView.widthProperty().subtract(32);
-    }
-
-    private DoubleBinding rowContentWidthBinding()
-    {
-        if (storyRowContentWidthBinding != null)
-        {
-            return storyRowContentWidthBinding;
-        }
-        return contentWidthBinding().subtract(24);
     }
 
     private void logAutoCardsError(String message, Exception e)
