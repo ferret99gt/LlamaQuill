@@ -158,7 +158,8 @@ public final class AutoCardsCoordinator
 
                 if (preview && previewCallbacks != null)
                 {
-                    String approved = previewCallbacks.previewUpdate(existing, updatedContent, lengthResult.summarized());
+                    String approved = previewCallbacks.previewUpdate().preview(existing, updatedContent,
+                            lengthResult.summarized());
                     if (approved == null)
                     {
                         continue;
@@ -208,7 +209,7 @@ public final class AutoCardsCoordinator
                     content, storySettings.pinNew());
             if (preview && previewCallbacks != null)
             {
-                StoryCard approved = previewCallbacks.previewCreate(createdCard);
+                StoryCard approved = previewCallbacks.previewCreate().preview(createdCard);
                 if (approved == null)
                 {
                     continue;
@@ -352,13 +353,13 @@ public final class AutoCardsCoordinator
     @FunctionalInterface
     public interface CreatePreview
     {
-        StoryCard preview(StoryCard draft) throws Exception;
+        StoryCard preview(StoryCard draft);
     }
 
     @FunctionalInterface
     public interface UpdatePreview
     {
-        String preview(StoryCard existing, String proposedContent, boolean summarized) throws Exception;
+        String preview(StoryCard existing, String proposedContent, boolean summarized);
     }
 
     public record PreviewCallbacks(CreatePreview previewCreate, UpdatePreview previewUpdate)
