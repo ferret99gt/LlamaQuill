@@ -16,6 +16,7 @@ import com.llamaquill.db.StoryAutoCardsRepository;
 import com.llamaquill.db.ModelAutoCardsRepository;
 import com.llamaquill.generation.GenerationCoordinator;
 import com.llamaquill.image.ImageGenerationCoordinator;
+import com.llamaquill.image.SeeDialog;
 import com.llamaquill.image.StoryImageDialogs;
 import com.llamaquill.model.Block;
 import com.llamaquill.model.AppSettings;
@@ -32,6 +33,7 @@ import com.llamaquill.imports.AIDungeonImports;
 import com.llamaquill.prompt.PromptCompiler;
 import com.llamaquill.serviceClients.ComfyUiClient;
 import com.llamaquill.serviceClients.OllamaClient;
+import com.llamaquill.retry.RetryHistoryDialog;
 import com.llamaquill.settings.SettingsCoordinator;
 import com.llamaquill.util.Ids;
 import com.llamaquill.util.Timestamps;
@@ -70,13 +72,10 @@ import javafx.scene.control.TextField;
 import javafx.scene.control.TextInputDialog;
 import javafx.scene.control.Spinner;
 import javafx.scene.control.SpinnerValueFactory;
-import javafx.scene.control.ToggleButton;
-import javafx.scene.control.ToggleGroup;
 import javafx.stage.FileChooser;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.BorderPane;
-import javafx.scene.layout.TilePane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
@@ -2332,322 +2331,77 @@ public class App extends Application
             return;
         }
 
-        Dialog<Void> dialog = new Dialog<>();
-        dialog.setTitle("See");
-        dialog.setHeaderText(replaceImageBlock == null
-                ? "Generate an image prompt from the story"
-                : "Retry image generation");
-        dialog.initOwner(primaryStage);
-        dialog.setResizable(true);
-
-        TextArea requestArea = new TextArea();
-        requestArea.setWrapText(true);
-        requestArea.setPrefRowCount(3);
-        requestArea.setPromptText("Optional. Leave blank to infer from the latest scene.");
-
-        TextArea promptArea = new TextArea(initialPrompt == null ? "" : initialPrompt);
-        promptArea.setWrapText(true);
-        promptArea.setPrefRowCount(6);
-        promptArea.setPromptText("Generated image prompt will appear here.");
-
-        ImageView selectedPreview = new ImageView();
-        selectedPreview.setPreserveRatio(true);
-        selectedPreview.setSmooth(true);
-        selectedPreview.setFitWidth(640);
-        selectedPreview.setFitHeight(320);
-        selectedPreview.setVisible(false);
-        selectedPreview.setManaged(false);
-
-        TilePane thumbnails = new TilePane();
-        thumbnails.setHgap(8);
-        thumbnails.setVgap(8);
-        thumbnails.setPrefColumns(4);
-        thumbnails.setPrefTileWidth(140);
-        thumbnails.setPrefTileHeight(140);
-        thumbnails.setTileAlignment(Pos.CENTER);
-
-        Label imagesPlaceholder = new Label("No images yet. Generate a prompt, then create images.");
-        imagesPlaceholder.setWrapText(true);
-        imagesPlaceholder.setStyle("-fx-text-fill: #b8b1a5;");
-
-        VBox imageResultsBox = new VBox(8, new Label("Images"), imagesPlaceholder, selectedPreview, thumbnails);
-        imageResultsBox.setPadding(new Insets(8));
-        imageResultsBox.setStyle("-fx-border-color: rgba(255,255,255,0.12); -fx-border-width: 1; -fx-border-radius: 4;");
-
-        Button regeneratePromptButton = new Button("Regenerate Prompt");
-        Button createImagesButton = new Button("Create Images");
-        Button insertImageButton = new Button(replaceImageBlock == null ? "Insert Image" : "Replace Image");
-        Button cancelButton = new Button("Cancel");
-        insertImageButton.setDisable(true);
-
-        Region spacer = new Region();
-        HBox.setHgrow(spacer, Priority.ALWAYS);
-        HBox rightButtons = new HBox(8, createImagesButton, insertImageButton, cancelButton);
-        HBox actions = new HBox(8, regeneratePromptButton, spacer, rightButtons);
-        actions.setAlignment(Pos.CENTER_LEFT);
-
-        VBox content = new VBox(10,
-                new Label("Request"),
-                requestArea,
-                new Label("Image Prompt"),
-                promptArea,
-                imageResultsBox,
-                actions);
-        content.setPadding(new Insets(10));
-
-        ScrollPane contentScroll = new ScrollPane(content);
-        contentScroll.setFitToWidth(true);
-        contentScroll.setFitToHeight(false);
-        contentScroll.setPannable(true);
-        contentScroll.setPrefViewportWidth(980);
-        contentScroll.setPrefViewportHeight(660);
-        dialog.getDialogPane().setContent(contentScroll);
-        dialog.getDialogPane().setPrefWidth(1040);
-        dialog.getDialogPane().setPrefHeight(720);
-        dialog.getDialogPane().getButtonTypes().add(ButtonType.CANCEL);
-        Node hiddenCancel = dialog.getDialogPane().lookupButton(ButtonType.CANCEL);
-        if (hiddenCancel != null)
-        {
-            hiddenCancel.setVisible(false);
-            hiddenCancel.setManaged(false);
-        }
-
-        final List<ImageGenerationCoordinator.PendingImage>[] pendingImagesRef = new List[] { new ArrayList<>() };
-        final int[] selectedIndexRef = new int[] { -1 };
-
-        Runnable refreshImageSelectionUi = () ->
-        {
-            thumbnails.getChildren().clear();
-            List<ImageGenerationCoordinator.PendingImage> pendingImages = pendingImagesRef[0];
-            if (pendingImages == null || pendingImages.isEmpty())
-            {
-                imagesPlaceholder.setVisible(true);
-                imagesPlaceholder.setManaged(true);
-                selectedPreview.setVisible(false);
-                selectedPreview.setManaged(false);
-                insertImageButton.setDisable(true);
-                return;
-            }
-
-            imagesPlaceholder.setVisible(false);
-            imagesPlaceholder.setManaged(false);
-            ToggleGroup group = new ToggleGroup();
-            for (int i = 0; i < pendingImages.size(); i++)
-            {
-                ImageGenerationCoordinator.PendingImage pending = pendingImages.get(i);
-                Image img = new Image(new ByteArrayInputStream(pending.bytes()));
-                ImageView thumbView = new ImageView(img);
-                thumbView.setPreserveRatio(true);
-                thumbView.setSmooth(true);
-                thumbView.setFitWidth(132);
-                thumbView.setFitHeight(132);
-
-                ToggleButton thumbButton = new ToggleButton();
-                thumbButton.setGraphic(thumbView);
-                thumbButton.setToggleGroup(group);
-                thumbButton.setUserData(i);
-                thumbButton.setContentDisplay(javafx.scene.control.ContentDisplay.GRAPHIC_ONLY);
-                thumbButton.setStyle("-fx-padding: 4;");
-                if (i == selectedIndexRef[0])
-                {
-                    thumbButton.setSelected(true);
-                    selectedPreview.setImage(img);
-                    selectedPreview.setVisible(true);
-                    selectedPreview.setManaged(true);
-                }
-                thumbnails.getChildren().add(thumbButton);
-            }
-
-            group.selectedToggleProperty().addListener((obs, oldToggle, newToggle) ->
-            {
-                if (newToggle == null)
-                {
-                    selectedIndexRef[0] = -1;
-                    insertImageButton.setDisable(true);
-                    return;
-                }
-                int index = (int) newToggle.getUserData();
-                selectedIndexRef[0] = index;
-                ImageGenerationCoordinator.PendingImage pending = pendingImagesRef[0].get(index);
-                selectedPreview.setImage(new Image(new ByteArrayInputStream(pending.bytes())));
-                selectedPreview.setVisible(true);
-                selectedPreview.setManaged(true);
-                insertImageButton.setDisable(false);
-            });
-
-            if (selectedIndexRef[0] < 0 && !pendingImages.isEmpty())
-            {
-                selectedIndexRef[0] = 0;
-                ImageGenerationCoordinator.PendingImage first = pendingImages.getFirst();
-                selectedPreview.setImage(new Image(new ByteArrayInputStream(first.bytes())));
-                selectedPreview.setVisible(true);
-                selectedPreview.setManaged(true);
-                insertImageButton.setDisable(false);
-            }
-            else
-            {
-                insertImageButton.setDisable(selectedIndexRef[0] < 0);
-            }
-        };
-
-        Runnable restoreSeeButtons = () ->
-        {
-            regeneratePromptButton.setDisable(false);
-            createImagesButton.setDisable(false);
-            insertImageButton.setDisable(selectedIndexRef[0] < 0);
-            cancelButton.setDisable(false);
-            restoreStoryActionButtonsState();
-        };
-
-        cancelButton.setOnAction(event -> dialog.close());
-
-        regeneratePromptButton.setOnAction(event ->
-        {
-            String request = requestArea.getText().trim();
-            if (request.isEmpty())
-            {
-                request = DEFAULT_SEE_REQUEST;
-            }
-
-            final Story story = activeStory;
-            final String requestFinal = request;
-            regeneratePromptButton.setDisable(true);
-            createImagesButton.setDisable(true);
-            insertImageButton.setDisable(true);
-            cancelButton.setDisable(true);
-            setStoryActionButtonsBusy(true);
-            statusLabel.setText("Generating image prompt...");
-            submitTask(() -> imageGenerationCoordinator.generateImagePrompt(
-                            story,
-                            requestFinal,
-                            appSettings,
-                            activeModelSettings,
-                            appAutoCardsSettings,
-                            modelAutoCardsSettings),
-                    generated ->
-                    {
-                        restoreSeeButtons.run();
-                        if (generated == null || generated.isBlank())
+        String header = replaceImageBlock == null ? "Generate an image prompt from the story" : "Retry image generation";
+        String insertLabel = replaceImageBlock == null ? "Insert Image" : "Replace Image";
+        Story story = activeStory;
+        SeeDialog.show(
+                primaryStage,
+                header,
+                initialPrompt,
+                DEFAULT_SEE_REQUEST,
+                insertLabel,
+                this::showInfo,
+                this::showError,
+                textValue -> statusLabel.setText(textValue),
+                () -> setStoryActionButtonsBusy(true),
+                this::restoreStoryActionButtonsState,
+                (request, onSuccess, onFailure) -> submitTask(
+                        () -> imageGenerationCoordinator.generateImagePrompt(
+                                story,
+                                request,
+                                appSettings,
+                                activeModelSettings,
+                                appAutoCardsSettings,
+                                modelAutoCardsSettings),
+                        onSuccess,
+                        onFailure),
+                (promptText, onSuccess, onFailure) -> submitTask(
+                        () ->
                         {
-                            statusLabel.setText("Image prompt generation returned empty.");
-                            return;
-                        }
-                        promptArea.setText(generated);
-                        statusLabel.setText("Generated image prompt");
-                    },
-                    error ->
-                    {
-                        restoreSeeButtons.run();
-                        statusLabel.setText("Image prompt generation failed");
-                        showError("Failed to generate image prompt", error);
-                    });
-        });
-
-        createImagesButton.setOnAction(event ->
-        {
-            String promptText = promptArea.getText();
-            if (promptText == null || promptText.isBlank())
-            {
-                showInfo("Image prompt cannot be empty.");
-                return;
-            }
-            regeneratePromptButton.setDisable(true);
-            createImagesButton.setDisable(true);
-            insertImageButton.setDisable(true);
-            cancelButton.setDisable(true);
-            setStoryActionButtonsBusy(true);
-            statusLabel.setText("Generating images...");
-            submitTask(() -> imageGenerationCoordinator.generateImages(appSettings, promptText),
-                    result ->
-                    {
-                        restoreSeeButtons.run();
-                        if (result == null || result.images() == null || result.images().isEmpty())
+                            ComfyUiClient.GenerationResult result = imageGenerationCoordinator.generateImages(appSettings, promptText);
+                            List<ImageGenerationCoordinator.PendingImage> pending = new ArrayList<>();
+                            if (result != null && result.images() != null)
+                            {
+                                for (ComfyUiClient.GeneratedImage image : result.images())
+                                {
+                                    pending.add(new ImageGenerationCoordinator.PendingImage(
+                                            image.bytes(), image.mimeType(), result.workflowJson()));
+                                }
+                            }
+                            return pending;
+                        },
+                        onSuccess,
+                        error ->
                         {
-                            statusLabel.setText("ComfyUI returned no images.");
-                            return;
-                        }
-                        List<ImageGenerationCoordinator.PendingImage> pending = new ArrayList<>();
-                        for (ComfyUiClient.GeneratedImage image : result.images())
-                        {
-                            pending.add(new ImageGenerationCoordinator.PendingImage(image.bytes(), image.mimeType(), result.workflowJson()));
-                        }
-                        pendingImagesRef[0] = pending;
-                        selectedIndexRef[0] = pending.isEmpty() ? -1 : 0;
-                        refreshImageSelectionUi.run();
-                        createImagesButton.setText("Regenerate Images");
-                        statusLabel.setText("Generated " + pending.size() + " image(s)");
-                    },
-                    error ->
+                            System.out.println("ComfyUI image generation failed:");
+                            if (error != null)
+                            {
+                                error.printStackTrace(System.out);
+                            }
+                            onFailure.accept(error);
+                        }),
+                (pending, promptText) ->
+                {
+                    ImageGenerationCoordinator.ImageMutationResult result = imageGenerationCoordinator.insertOrReplaceImage(
+                            activeStory, pending, promptText, replaceImageBlock);
+                    activeStory = result.updatedStory();
+                    blocks = blockRepository.listForStory(activeStory.id());
+                    renderStoryBlocks(true);
+                    if (!result.replaced())
                     {
-                        restoreSeeButtons.run();
-                        statusLabel.setText("Image generation failed");
-                        System.out.println("ComfyUI image generation failed:");
-                        if (error != null)
-                        {
-                            error.printStackTrace(System.out);
-                        }
-                        showError("Failed to generate images", error);
-                    });
-        });
-
-        insertImageButton.setOnAction(event ->
-        {
-            int selectedIndex = selectedIndexRef[0];
-            if (selectedIndex < 0 || selectedIndex >= pendingImagesRef[0].size())
-            {
-                showInfo("Select an image first.");
-                return;
-            }
-            ImageGenerationCoordinator.PendingImage pending = pendingImagesRef[0].get(selectedIndex);
-            String promptText = promptArea.getText() == null ? "" : promptArea.getText().trim();
-            if (promptText.isBlank())
-            {
-                showInfo("Image prompt cannot be empty.");
-                return;
-            }
-            try
-            {
-                ImageGenerationCoordinator.ImageMutationResult result = imageGenerationCoordinator.insertOrReplaceImage(
-                        activeStory, pending, promptText, replaceImageBlock);
-                activeStory = result.updatedStory();
-                blocks = blockRepository.listForStory(activeStory.id());
-                renderStoryBlocks(true);
-                if (!result.replaced())
-                {
-                    clearRetryHistory();
-                }
-                else
-                {
-                    StoryImage storyImage = result.storyImage();
-                    retryHistory.add(new ImageRetryHistoryEntry(storyImage.prompt(), storyImage.imageBytes(), storyImage.mimeType(),
-                            storyImage.workflowJson()));
-                    retryIndex = retryHistory.size() - 1;
-                    updateRetryCountLabel();
-                }
-                refreshStoryList(activeStory.id());
-                statusLabel.setText(replaceImageBlock == null ? "Inserted image" : "Replaced image");
-                dialog.close();
-            }
-            catch (Exception ex)
-            {
-                if (ex instanceof Exception exception)
-                {
-                    showError("Failed to insert image", exception);
-                }
-                else
-                {
-                    showError("Failed to insert image", new RuntimeException(ex));
-                }
-            }
-        });
-
-        if (promptArea.getText().isBlank())
-        {
-            requestArea.setText("");
-        }
-        refreshImageSelectionUi.run();
-
-        dialog.showAndWait();
+                        clearRetryHistory();
+                    }
+                    else
+                    {
+                        StoryImage storyImage = result.storyImage();
+                        retryHistory.add(new ImageRetryHistoryEntry(storyImage.prompt(), storyImage.imageBytes(), storyImage.mimeType(),
+                                storyImage.workflowJson()));
+                        retryIndex = retryHistory.size() - 1;
+                        updateRetryCountLabel();
+                    }
+                    refreshStoryList(activeStory.id());
+                    statusLabel.setText(replaceImageBlock == null ? "Inserted image" : "Replaced image");
+                });
         setStoryDependentControlsEnabled(activeStory != null);
     }
 
@@ -2936,143 +2690,64 @@ public class App extends Application
             retryIndex = retryHistory.size() - 1;
         }
 
-        Dialog<Void> dialog = new Dialog<>();
-        dialog.setTitle("Retry History");
-        dialog.setHeaderText("Select a retry");
-        dialog.initOwner(primaryStage);
-
         Block head = blocks.isEmpty() ? null : blocks.get(blocks.size() - 1);
         boolean imageMode = head != null && head.role() == Role.IMAGE;
 
-        Node previewNode;
-        final TextArea[] textPreviewRef = new TextArea[1];
-        final ImageView[] imagePreviewRef = new ImageView[1];
-        final TextArea[] promptPreviewRef = new TextArea[1];
-        if (imageMode)
+        List<RetryHistoryDialog.Entry> entries = new ArrayList<>(retryHistory.size());
+        for (RetryHistoryEntry entry : retryHistory)
         {
-            ImageView imagePreview = new ImageView();
-            imagePreview.setPreserveRatio(true);
-            imagePreview.setSmooth(true);
-            imagePreview.setFitWidth(760);
-            imagePreview.setFitHeight(420);
-            TextArea promptPreview = new TextArea();
-            promptPreview.setWrapText(true);
-            promptPreview.setEditable(false);
-            promptPreview.setPrefRowCount(4);
-            imagePreviewRef[0] = imagePreview;
-            promptPreviewRef[0] = promptPreview;
-            previewNode = new VBox(8, imagePreview, new Label("Prompt"), promptPreview);
-        }
-        else
-        {
-            TextArea textPreview = new TextArea();
-            textPreview.setWrapText(true);
-            textPreview.setEditable(false);
-            textPreview.setPrefRowCount(8);
-            textPreviewRef[0] = textPreview;
-            previewNode = textPreview;
+            if (entry instanceof TextRetryHistoryEntry textEntry)
+            {
+                entries.add(new RetryHistoryDialog.TextEntry(textEntry.text));
+            }
+            else if (entry instanceof ImageRetryHistoryEntry imageEntry)
+            {
+                entries.add(new RetryHistoryDialog.ImageEntry(imageEntry.prompt, imageEntry.bytes));
+            }
         }
 
-        VBox content = new VBox(8, previewNode);
-        content.setPadding(new Insets(10));
-        dialog.getDialogPane().setContent(content);
-
-        ButtonType prevType = new ButtonType("<", ButtonBar.ButtonData.LEFT);
-        ButtonType nextType = new ButtonType(">", ButtonBar.ButtonData.LEFT);
-        ButtonType selectType = new ButtonType("Select", ButtonBar.ButtonData.OK_DONE);
-        ButtonType closeType = new ButtonType("Close", ButtonBar.ButtonData.CANCEL_CLOSE);
-        dialog.getDialogPane().getButtonTypes().addAll(prevType, nextType, selectType, closeType);
-
-        Button prevButton = (Button) dialog.getDialogPane().lookupButton(prevType);
-        Button nextButton = (Button) dialog.getDialogPane().lookupButton(nextType);
-        Button selectButton = (Button) dialog.getDialogPane().lookupButton(selectType);
-
-        Runnable refresh = () ->
+        Integer selectedIndex = RetryHistoryDialog.show(primaryStage, entries, retryIndex, imageMode);
+        if (selectedIndex == null)
         {
-            RetryHistoryEntry entry = retryHistory.get(retryIndex);
-            if (imageMode)
-            {
-                if (entry instanceof ImageRetryHistoryEntry imageEntry)
-                {
-                    imagePreviewRef[0].setImage(new Image(new ByteArrayInputStream(imageEntry.bytes)));
-                    promptPreviewRef[0].setText(imageEntry.prompt);
-                }
-            }
-            else
-            {
-                if (entry instanceof TextRetryHistoryEntry textEntry)
-                {
-                    textPreviewRef[0].setText(textEntry.text);
-                }
-            }
-            prevButton.setDisable(retryIndex <= 0);
-            nextButton.setDisable(retryIndex >= retryHistory.size() - 1);
-        };
-        refresh.run();
-
-        prevButton.addEventFilter(ActionEvent.ACTION, event ->
+            return;
+        }
+        retryIndex = selectedIndex;
+        if (blocks.isEmpty())
         {
-            event.consume();
-            if (retryIndex > 0)
-            {
-                retryIndex--;
-                refresh.run();
-            }
-        });
+            return;
+        }
 
-        nextButton.addEventFilter(ActionEvent.ACTION, event ->
+        Block currentHead = blocks.get(blocks.size() - 1);
+        RetryHistoryEntry chosen = retryHistory.get(retryIndex);
+        if (currentHead.role() == Role.ASSISTANT && chosen instanceof TextRetryHistoryEntry textEntry)
         {
-            event.consume();
-            if (retryIndex < retryHistory.size() - 1)
+            if (!textEntry.text.equals(currentHead.text()))
             {
-                retryIndex++;
-                refresh.run();
-            }
-        });
-
-        selectButton.addEventFilter(ActionEvent.ACTION, event ->
-        {
-            event.consume();
-            if (blocks.isEmpty())
-            {
-                dialog.close();
-                return;
-            }
-            Block currentHead = blocks.get(blocks.size() - 1);
-            RetryHistoryEntry chosen = retryHistory.get(retryIndex);
-            if (currentHead.role() == Role.ASSISTANT && chosen instanceof TextRetryHistoryEntry textEntry)
-            {
-                if (!textEntry.text.equals(currentHead.text()))
-                {
-                    Block updated = new Block(currentHead.id(), currentHead.storyId(), Role.ASSISTANT, textEntry.text,
-                            Timestamps.now(), currentHead.position());
-                    try
-                    {
-                        blockRepository.replaceHead(updated);
-                        blocks.set(blocks.size() - 1, updated);
-                        renderStoryBlocks(true);
-                    }
-                    catch (SQLException e)
-                    {
-                        showError("Failed to apply retry selection", e);
-                    }
-                }
-            }
-            else if (currentHead.role() == Role.IMAGE && chosen instanceof ImageRetryHistoryEntry imageEntry)
-            {
+                Block updated = new Block(currentHead.id(), currentHead.storyId(), Role.ASSISTANT, textEntry.text,
+                        Timestamps.now(), currentHead.position());
                 try
                 {
-                    replaceImageBlockFromRetryHistory(currentHead, imageEntry);
+                    blockRepository.replaceHead(updated);
+                    blocks.set(blocks.size() - 1, updated);
+                    renderStoryBlocks(true);
                 }
                 catch (SQLException e)
                 {
                     showError("Failed to apply retry selection", e);
                 }
             }
-            dialog.close();
-        });
-
-        dialog.showAndWait();
+        }
+        else if (currentHead.role() == Role.IMAGE && chosen instanceof ImageRetryHistoryEntry imageEntry)
+        {
+            try
+            {
+                replaceImageBlockFromRetryHistory(currentHead, imageEntry);
+            }
+            catch (SQLException e)
+            {
+                showError("Failed to apply retry selection", e);
+            }
+        }
     }
 
     private void seedImageRetryHistoryIfNeeded(Block imageHead)
