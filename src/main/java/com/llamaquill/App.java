@@ -15,6 +15,7 @@ import com.llamaquill.db.AppAutoCardsRepository;
 import com.llamaquill.db.StoryAutoCardsRepository;
 import com.llamaquill.db.ModelAutoCardsRepository;
 import com.llamaquill.generation.GenerationCoordinator;
+import com.llamaquill.generation.TurnInputPane;
 import com.llamaquill.image.ImageGenerationCoordinator;
 import com.llamaquill.image.SeeDialog;
 import com.llamaquill.image.StoryImageDialogs;
@@ -210,10 +211,7 @@ public class App extends Application
 
     private boolean updatingAutoCardsControls;
 
-    private TextArea turnInputArea;
-    private VBox turnInputBox;
-    private Button submitTurnButton;
-    private Button cancelTurnButton;
+    private TurnInputPane turnInputPane;
 
     private final List<RetryHistoryEntry> retryHistory = new ArrayList<>();
     private int retryIndex = -1;
@@ -519,29 +517,14 @@ public class App extends Application
         storyViewport.setClip(viewportClip);
         centerPane.setCenter(storyViewport);
 
-        turnInputArea = new TextArea();
-        turnInputArea.setWrapText(true);
-        turnInputArea.setPrefRowCount(4);
-
-        submitTurnButton = new Button("Submit");
-        submitTurnButton.setOnAction(event -> submitTurn());
-
-        cancelTurnButton = new Button("Cancel");
-        cancelTurnButton.setOnAction(event -> showTurnInput(false));
-
-        var turnButtons = new HBox(8, submitTurnButton, cancelTurnButton);
-        turnButtons.setAlignment(Pos.CENTER_RIGHT);
-
-        turnInputBox = new VBox(6, new Label("Your turn"), turnInputArea, turnButtons);
-        turnInputBox.setPadding(new Insets(10, 10, 0, 10));
-        showTurnInput(false);
+        turnInputPane = new TurnInputPane(this::submitTurn, () -> showTurnInput(false));
 
         storyActionRow = new HBox(8, takeTurnButton, continueButton, seeButton, retryButton, retryHistoryButton, deleteButton);
         storyActionRow.getStyleClass().add("action-row");
         storyActionRow.setAlignment(Pos.CENTER_LEFT);
         storyActionRow.setPadding(new Insets(10));
 
-        var bottomBox = new VBox(8, turnInputBox, storyActionRow);
+        var bottomBox = new VBox(8, turnInputPane.root(), storyActionRow);
         centerPane.setBottom(bottomBox);
 
         return centerPane;
@@ -549,12 +532,7 @@ public class App extends Application
 
     private void showTurnInput(boolean show)
     {
-        turnInputBox.setVisible(show);
-        turnInputBox.setManaged(show);
-        if (show)
-        {
-            turnInputArea.requestFocus();
-        }
+        turnInputPane.setVisible(show);
     }
 
     private VBox buildRightSidebar()
@@ -2580,14 +2558,14 @@ public class App extends Application
             showInfo("Select a story first.");
             return;
         }
-        String text = turnInputArea.getText().trim();
+        String text = turnInputPane.text().trim();
         if (text.isEmpty())
         {
             showInfo("Turn text cannot be empty.");
             return;
         }
         showTurnInput(false);
-        turnInputArea.clear();
+        turnInputPane.clear();
         clearRetryHistory();
         runTurn(text);
     }
