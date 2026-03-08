@@ -41,7 +41,7 @@ public class PromptCompiler
         int minWindowChars = Math.max(0, settings.minStoryWindow()) * CHARS_PER_TOKEN;
 
         List<Block> promptBlocks = filterPromptBlocks(blocks);
-        List<Block> window = initializeStoryWindow(promptBlocks);
+        List<Block> window = new ArrayList<>(promptBlocks);
 
         StoryCardSelection selection = selectStoryCards(storyCards, window, settings.storyCardLookback());
         String originalPlotEssentials = safeText(story.plotEssentials());
@@ -117,11 +117,6 @@ public class PromptCompiler
                 return new PromptCompilation(prompt, estimatedTokens);
             }
         }
-    }
-
-    private static List<Block> initializeStoryWindow(List<Block> blocks)
-    {
-        return new ArrayList<>(blocks);
     }
 
     private static List<Block> filterPromptBlocks(List<Block> blocks)

@@ -1,8 +1,6 @@
 ﻿package com.llamaquill.serviceClients;
 
 import com.llamaquill.model.GenerationSettings;
-import org.json.JSONArray;
-import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -24,7 +22,6 @@ public class OllamaClient
     private final HttpClient client;
     private String host;
     private String model;
-    private Boolean tokenizeSupported;
     private volatile int lastPromptEvalCount = -1;
 
     public OllamaClient()
@@ -42,13 +39,11 @@ public class OllamaClient
     public void setHost(String host)
     {
         this.host = host;
-        this.tokenizeSupported = null;
     }
 
     public void setModel(String model)
     {
         this.model = model;
-        this.tokenizeSupported = null;
     }
 
     public String getModel()
@@ -78,75 +73,10 @@ public class OllamaClient
         return Json.extractStringArray(response.body(), "name");
     }
 
-    public int countTokens(String prompt)
-    {
-        if (Boolean.FALSE.equals(tokenizeSupported))
-        {
-            return -1;
-        }
-        try
-        {
-            JSONObject payload = new JSONObject();
-            payload.put("model", model);
-            payload.put("prompt", prompt == null ? "" : prompt);
-            payload.put("text", prompt == null ? "" : prompt);
-
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(host + "/api/tokenize"))
-                    .timeout(Duration.ofSeconds(20))
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(payload.toString(), StandardCharsets.UTF_8))
-                    .build();
-
-            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() == 404)
-            {
-                tokenizeSupported = Boolean.FALSE;
-                return -1;
-            }
-            if (response.statusCode() < 200 || response.statusCode() >= 300)
-            {
-                return -1;
-            }
-
-            JSONObject json = new JSONObject(response.body());
-            if (json.has("tokens"))
-            {
-                JSONArray tokens = json.optJSONArray("tokens");
-                if (tokens != null)
-                {
-                    tokenizeSupported = Boolean.TRUE;
-                    return Math.max(0, tokens.length());
-                }
-            }
-            if (json.has("token_ids"))
-            {
-                JSONArray tokenIds = json.optJSONArray("token_ids");
-                if (tokenIds != null)
-                {
-                    tokenizeSupported = Boolean.TRUE;
-                    return Math.max(0, tokenIds.length());
-                }
-            }
-            if (json.has("count"))
-            {
-                tokenizeSupported = Boolean.TRUE;
-                return Math.max(0, json.optInt("count", 0));
-            }
-            return -1;
-        }
-        catch (Exception e)
-        {
-            return -1;
-        }
-    }
-
     public String generate(String prompt, GenerationSettings settings) throws IOException, InterruptedException
     {
         lastPromptEvalCount = -1;
         String payload = buildPayload(prompt, settings);
-        //System.out.println("Ollama payload:");
-        //System.out.println(payload);
         HttpRequest request = HttpRequest.newBuilder().uri(URI.create(host + "/api/generate")).timeout(Duration.ofMinutes(2))
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8)).build();
@@ -186,7 +116,6 @@ public class OllamaClient
             System.out.println("Ollama final response:");
             System.out.println(doneLine);
         }
-        //System.out.println("Ollama response: \n" + sb);
         return sb.toString();
     }
 

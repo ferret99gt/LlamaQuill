@@ -3195,9 +3195,7 @@ public class App extends Application
 
         TextArea editor = new TextArea(block.text());
         editor.setWrapText(true);
-        // editor.setPrefRowCount(4);
         editor.setMinHeight(Region.USE_PREF_SIZE);
-        // editor.setPrefHeight(Region.USE_COMPUTED_SIZE);
         editor.setMaxHeight(Double.MAX_VALUE);
         editor.prefWidthProperty().bind(contentWidthBinding());
         editor.maxWidthProperty().bind(contentWidthBinding());
