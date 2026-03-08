@@ -13,6 +13,7 @@ import com.llamaquill.db.AppAutoCardsRepository;
 import com.llamaquill.db.StoryAutoCardsRepository;
 import com.llamaquill.db.ModelAutoCardsRepository;
 import com.llamaquill.generation.GenerationCoordinator;
+import com.llamaquill.image.ImageGenerationCoordinator;
 import com.llamaquill.model.Block;
 import com.llamaquill.model.AppSettings;
 import com.llamaquill.model.GenerationSettings;
@@ -89,10 +90,8 @@ import java.nio.file.FileSystem;
 import java.nio.file.FileSystemNotFoundException;
 import java.nio.file.FileSystems;
 import java.nio.file.Path;
-import java.nio.charset.StandardCharsets;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
@@ -125,7 +124,6 @@ public class App extends Application
     private StoryRepository storyRepository;
     private BlockRepository blockRepository;
     private StoryCardRepository cardRepository;
-    private ImageRepository imageRepository;
     private AppSettingsRepository appSettingsRepository;
     private ModelSettingsRepository modelSettingsRepository;
     private AppAutoCardsRepository appAutoCardsRepository;
@@ -133,6 +131,7 @@ public class App extends Application
     private ModelAutoCardsRepository modelAutoCardsRepository;
     private PromptCompiler promptCompiler;
     private GenerationCoordinator generationCoordinator;
+    private ImageGenerationCoordinator imageGenerationCoordinator;
     private AutoCardsService autoCardsService;
     private AIDungeonImports aiDungeonImports;
     private OllamaClient ollamaClient;
@@ -243,7 +242,6 @@ public class App extends Application
     private DoubleBinding storyContentWidthBinding;
     private DoubleBinding storyRowContentWidthBinding;
     private PauseTransition storyViewportRefreshDebounce;
-    private final Map<String, String> comfyWorkflowTemplateCache = new HashMap<>();
     private List<String> comfyWorkflowNames = new ArrayList<>();
 
     private static final int ASSISTANT_FLOW_CHUNK_CHAR_LIMIT = 6000;
@@ -257,7 +255,6 @@ public class App extends Application
     private static final int CHARS_PER_TOKEN_ESTIMATE = 4;
 
     private final Map<String, AutoCardsRunState> autoCardsRunState = new HashMap<>();
-    private final Map<String, StoryImage> storyImageCache = new HashMap<>();
     private final Map<String, Double> tokenScaleByModel = new HashMap<>();
 
     private static final String DEFAULT_SEE_REQUEST = "Generate an image prompt for the most recent scene in the story.";
@@ -316,20 +313,6 @@ public class App extends Application
         }
     }
 
-    private static final class PendingSeeImage
-    {
-        private final byte[] bytes;
-        private final String mimeType;
-        private final String workflowJson;
-
-        private PendingSeeImage(byte[] bytes, String mimeType, String workflowJson)
-        {
-            this.bytes = bytes;
-            this.mimeType = mimeType;
-            this.workflowJson = workflowJson;
-        }
-    }
-
     @Override
     public void start(Stage stage)
     {
@@ -341,7 +324,7 @@ public class App extends Application
             storyRepository = new StoryRepository(connection);
             blockRepository = new BlockRepository(connection);
             cardRepository = new StoryCardRepository(connection);
-            imageRepository = new ImageRepository(connection);
+            ImageRepository imageRepository = new ImageRepository(connection);
             appSettingsRepository = new AppSettingsRepository(connection);
             modelSettingsRepository = new ModelSettingsRepository(connection);
             appAutoCardsRepository = new AppAutoCardsRepository(connection);
@@ -354,6 +337,8 @@ public class App extends Application
             generationCoordinator = new GenerationCoordinator(blockRepository, storyRepository, cardRepository, promptCompiler,
                     ollamaClient);
             autoCardsService = new AutoCardsService(ollamaClient, promptCompiler);
+            imageGenerationCoordinator = new ImageGenerationCoordinator(imageRepository, blockRepository, storyRepository,
+                    cardRepository, autoCardsService, comfyUiClient);
             appSettings = loadOrCreateAppSettings();
             appAutoCardsSettings = loadOrCreateAppAutoCardsSettings();
             refreshComfyWorkflowNames();
@@ -1253,7 +1238,6 @@ public class App extends Application
             return;
         }
         appSettings = SettingsCoordinator.withComfyWorkflow(appSettings, normalized);
-        comfyWorkflowTemplateCache.clear();
         persistAppSettings();
     }
 
@@ -2719,13 +2703,13 @@ public class App extends Application
             hiddenCancel.setManaged(false);
         }
 
-        final List<PendingSeeImage>[] pendingImagesRef = new List[] { new ArrayList<>() };
+        final List<ImageGenerationCoordinator.PendingImage>[] pendingImagesRef = new List[] { new ArrayList<>() };
         final int[] selectedIndexRef = new int[] { -1 };
 
         Runnable refreshImageSelectionUi = () ->
         {
             thumbnails.getChildren().clear();
-            List<PendingSeeImage> pendingImages = pendingImagesRef[0];
+            List<ImageGenerationCoordinator.PendingImage> pendingImages = pendingImagesRef[0];
             if (pendingImages == null || pendingImages.isEmpty())
             {
                 imagesPlaceholder.setVisible(true);
@@ -2741,8 +2725,8 @@ public class App extends Application
             ToggleGroup group = new ToggleGroup();
             for (int i = 0; i < pendingImages.size(); i++)
             {
-                PendingSeeImage pending = pendingImages.get(i);
-                Image img = new Image(new ByteArrayInputStream(pending.bytes));
+                ImageGenerationCoordinator.PendingImage pending = pendingImages.get(i);
+                Image img = new Image(new ByteArrayInputStream(pending.bytes()));
                 ImageView thumbView = new ImageView(img);
                 thumbView.setPreserveRatio(true);
                 thumbView.setSmooth(true);
@@ -2775,8 +2759,8 @@ public class App extends Application
                 }
                 int index = (int) newToggle.getUserData();
                 selectedIndexRef[0] = index;
-                PendingSeeImage pending = pendingImagesRef[0].get(index);
-                selectedPreview.setImage(new Image(new ByteArrayInputStream(pending.bytes)));
+                ImageGenerationCoordinator.PendingImage pending = pendingImagesRef[0].get(index);
+                selectedPreview.setImage(new Image(new ByteArrayInputStream(pending.bytes())));
                 selectedPreview.setVisible(true);
                 selectedPreview.setManaged(true);
                 insertImageButton.setDisable(false);
@@ -2785,8 +2769,8 @@ public class App extends Application
             if (selectedIndexRef[0] < 0 && !pendingImages.isEmpty())
             {
                 selectedIndexRef[0] = 0;
-                PendingSeeImage first = pendingImages.getFirst();
-                selectedPreview.setImage(new Image(new ByteArrayInputStream(first.bytes)));
+                ImageGenerationCoordinator.PendingImage first = pendingImages.getFirst();
+                selectedPreview.setImage(new Image(new ByteArrayInputStream(first.bytes())));
                 selectedPreview.setVisible(true);
                 selectedPreview.setManaged(true);
                 insertImageButton.setDisable(false);
@@ -2816,7 +2800,6 @@ public class App extends Application
                 request = DEFAULT_SEE_REQUEST;
             }
 
-            final String storyId = activeStory.id();
             final Story story = activeStory;
             final String requestFinal = request;
             regeneratePromptButton.setDisable(true);
@@ -2831,34 +2814,12 @@ public class App extends Application
                 @Override
                 protected String call() throws Exception
                 {
-                    List<Block> currentBlocks = blockRepository.listForStory(storyId);
-                    List<StoryCard> currentCards = cardRepository.listForStory(storyId);
-
-                    String contextMode = AutoCards.normalizeContextMode(appAutoCardsSettings.contextMode());
-                    String excerpt = "";
-                    if (!AutoCards.CONTEXT_MODE_FULL_STORY.equals(contextMode))
-                    {
-                        excerpt = buildAutoCardsExcerpt(currentBlocks, appAutoCardsSettings.candidateWindow());
-                    }
-
-                    String fullStoryPromptPrefix = "";
-                    if (AutoCards.CONTEXT_MODE_FULL_STORY.equals(contextMode))
-                    {
-                        fullStoryPromptPrefix = autoCardsService.buildFullStoryPrompt(
-                                story,
-                                currentBlocks,
-                                currentCards,
-                                appSettings,
-                                activeModelSettings,
-                                modelAutoCardsSettings);
-                    }
-
-                    return autoCardsService.generateImagePromptFromUserPrompt(
+                    return imageGenerationCoordinator.generateImagePrompt(
+                            story,
                             requestFinal,
-                            excerpt,
-                            fullStoryPromptPrefix,
                             appSettings,
                             activeModelSettings,
+                            appAutoCardsSettings,
                             modelAutoCardsSettings);
                 }
             };
@@ -2914,8 +2875,7 @@ public class App extends Application
                 @Override
                 protected ComfyUiClient.GenerationResult call() throws Exception
                 {
-                    return comfyUiClient.generateImages(loadComfyWorkflowTemplateJson(), promptText,
-                            appSettings.comfyWidth(), appSettings.comfyHeight(), appSettings.comfyBatchSize());
+                    return imageGenerationCoordinator.generateImages(appSettings, promptText);
                 }
             };
 
@@ -2928,10 +2888,10 @@ public class App extends Application
                     statusLabel.setText("ComfyUI returned no images.");
                     return;
                 }
-                List<PendingSeeImage> pending = new ArrayList<>();
+                List<ImageGenerationCoordinator.PendingImage> pending = new ArrayList<>();
                 for (ComfyUiClient.GeneratedImage image : result.images())
                 {
-                    pending.add(new PendingSeeImage(image.bytes(), image.mimeType(), result.workflowJson()));
+                    pending.add(new ImageGenerationCoordinator.PendingImage(image.bytes(), image.mimeType(), result.workflowJson()));
                 }
                 pendingImagesRef[0] = pending;
                 selectedIndexRef[0] = pending.isEmpty() ? -1 : 0;
@@ -2971,7 +2931,7 @@ public class App extends Application
                 showInfo("Select an image first.");
                 return;
             }
-            PendingSeeImage pending = pendingImagesRef[0].get(selectedIndex);
+            ImageGenerationCoordinator.PendingImage pending = pendingImagesRef[0].get(selectedIndex);
             String promptText = promptArea.getText() == null ? "" : promptArea.getText().trim();
             if (promptText.isBlank())
             {
@@ -2980,7 +2940,25 @@ public class App extends Application
             }
             try
             {
-                insertOrReplaceImageBlock(pending, promptText, replaceImageBlock);
+                ImageGenerationCoordinator.ImageMutationResult result = imageGenerationCoordinator.insertOrReplaceImage(
+                        activeStory, pending, promptText, replaceImageBlock);
+                activeStory = result.updatedStory();
+                blocks = blockRepository.listForStory(activeStory.id());
+                renderStoryBlocks(true);
+                if (!result.replaced())
+                {
+                    clearRetryHistory();
+                }
+                else
+                {
+                    StoryImage storyImage = result.storyImage();
+                    retryHistory.add(new ImageRetryHistoryEntry(storyImage.prompt(), storyImage.imageBytes(), storyImage.mimeType(),
+                            storyImage.workflowJson()));
+                    retryIndex = retryHistory.size() - 1;
+                    updateRetryCountLabel();
+                }
+                refreshStoryList(activeStory.id());
+                statusLabel.setText(replaceImageBlock == null ? "Inserted image" : "Replaced image");
                 dialog.close();
             }
             catch (Exception ex)
@@ -3004,94 +2982,6 @@ public class App extends Application
 
         dialog.showAndWait();
         setStoryDependentControlsEnabled(activeStory != null);
-    }
-
-    private String loadComfyWorkflowTemplateJson() throws IOException
-    {
-        String workflowName = appSettings.comfyWorkflow() == null ? "" : appSettings.comfyWorkflow().trim();
-        if (workflowName.isBlank())
-        {
-            workflowName = AppSettings.DEFAULT_COMFY_WORKFLOW;
-        }
-        String cached = comfyWorkflowTemplateCache.get(workflowName);
-        if (cached != null && !cached.isBlank())
-        {
-            return cached;
-        }
-        String resource = "/comfyui/" + workflowName + ".json";
-        try (InputStream in = App.class.getResourceAsStream(resource))
-        {
-            if (in == null)
-            {
-                throw new IOException("Missing workflow resource: " + resource);
-            }
-            String template = new String(in.readAllBytes(), StandardCharsets.UTF_8);
-            comfyWorkflowTemplateCache.put(workflowName, template);
-            return template;
-        }
-    }
-
-    private void insertOrReplaceImageBlock(PendingSeeImage pending, String promptText, Block replaceImageBlock)
-            throws SQLException
-    {
-        if (activeStory == null)
-        {
-            return;
-        }
-        Image decoded = new Image(new ByteArrayInputStream(pending.bytes));
-        int width = (int) Math.round(decoded.getWidth());
-        int height = (int) Math.round(decoded.getHeight());
-        StoryImage storyImage = new StoryImage(
-                Ids.newId(),
-                activeStory.id(),
-                promptText,
-                pending.mimeType == null || pending.mimeType.isBlank() ? "image/png" : pending.mimeType,
-                Math.max(0, width),
-                Math.max(0, height),
-                pending.workflowJson == null ? "" : pending.workflowJson,
-                pending.bytes,
-                Timestamps.now());
-        imageRepository.insert(storyImage);
-        storyImageCache.put(storyImage.id(), storyImage);
-
-        boolean replacingImage = replaceImageBlock != null && replaceImageBlock.role() == Role.IMAGE;
-        if (replacingImage)
-        {
-            seedImageRetryHistoryIfNeeded(replaceImageBlock);
-            String oldImageId = replaceImageBlock.text();
-            Block updated = new Block(replaceImageBlock.id(), replaceImageBlock.storyId(), Role.IMAGE, storyImage.id(),
-                    Timestamps.now(), replaceImageBlock.position());
-            blockRepository.replaceHead(updated);
-            if (oldImageId != null && !oldImageId.isBlank())
-            {
-                imageRepository.deleteById(oldImageId);
-                storyImageCache.remove(oldImageId);
-            }
-            retryHistory.add(new ImageRetryHistoryEntry(storyImage.prompt(), storyImage.imageBytes(), storyImage.mimeType(),
-                    storyImage.workflowJson()));
-            retryIndex = retryHistory.size() - 1;
-            updateRetryCountLabel();
-        }
-        else
-        {
-            int position = blockRepository.nextPosition(activeStory.id());
-            Block imageBlock = new Block(Ids.newId(), activeStory.id(), Role.IMAGE, storyImage.id(), Timestamps.now(), position);
-            blockRepository.insert(imageBlock);
-        }
-
-        String now = Timestamps.now();
-        activeStory = new Story(activeStory.id(), activeStory.title(), activeStory.systemPrompt(),
-                activeStory.plotEssentials(), activeStory.authorNote(), activeStory.createdAt(), now);
-        storyRepository.update(activeStory);
-
-        blocks = blockRepository.listForStory(activeStory.id());
-        renderStoryBlocks(true);
-        if (!replacingImage)
-        {
-            clearRetryHistory();
-        }
-        refreshStoryList(activeStory.id());
-        statusLabel.setText(replaceImageBlock == null ? "Inserted image" : "Replaced image");
     }
 
     private void deleteCard(StoryCard card)
@@ -3551,36 +3441,9 @@ public class App extends Application
         {
             return;
         }
-        Image decoded = new Image(new ByteArrayInputStream(imageEntry.bytes));
-        int width = (int) Math.round(decoded.getWidth());
-        int height = (int) Math.round(decoded.getHeight());
-        StoryImage storyImage = new StoryImage(
-                Ids.newId(),
-                activeStory.id(),
-                imageEntry.prompt,
-                imageEntry.mimeType,
-                Math.max(0, width),
-                Math.max(0, height),
-                imageEntry.workflowJson,
-                imageEntry.bytes,
-                Timestamps.now());
-        imageRepository.insert(storyImage);
-        storyImageCache.put(storyImage.id(), storyImage);
-
-        String oldImageId = headBlock.text();
-        Block updated = new Block(headBlock.id(), headBlock.storyId(), Role.IMAGE, storyImage.id(), Timestamps.now(),
-                headBlock.position());
-        blockRepository.replaceHead(updated);
-        if (oldImageId != null && !oldImageId.isBlank())
-        {
-            imageRepository.deleteById(oldImageId);
-            storyImageCache.remove(oldImageId);
-        }
-
-        String now = Timestamps.now();
-        activeStory = new Story(activeStory.id(), activeStory.title(), activeStory.systemPrompt(),
-                activeStory.plotEssentials(), activeStory.authorNote(), activeStory.createdAt(), now);
-        storyRepository.update(activeStory);
+        ImageGenerationCoordinator.ImageMutationResult result = imageGenerationCoordinator.replaceImageFromRetryHistory(
+                activeStory, headBlock, imageEntry.prompt, imageEntry.bytes, imageEntry.mimeType, imageEntry.workflowJson);
+        activeStory = result.updatedStory();
         blocks = blockRepository.listForStory(activeStory.id());
         renderStoryBlocks(true);
         refreshStoryList(activeStory.id());
@@ -4731,23 +4594,9 @@ public class App extends Application
 
     private StoryImage loadStoryImage(String imageId)
     {
-        if (imageId == null || imageId.isBlank())
-        {
-            return null;
-        }
-        StoryImage cached = storyImageCache.get(imageId);
-        if (cached != null)
-        {
-            return cached;
-        }
         try
         {
-            Optional<StoryImage> loaded = imageRepository.findById(imageId);
-            if (loaded.isPresent())
-            {
-                storyImageCache.put(imageId, loaded.get());
-                return loaded.get();
-            }
+            return imageGenerationCoordinator.loadStoryImage(imageId);
         }
         catch (SQLException e)
         {
@@ -4864,13 +4713,7 @@ public class App extends Application
         {
             return;
         }
-        String imageId = block.text();
-        if (imageId == null || imageId.isBlank())
-        {
-            return;
-        }
-        imageRepository.deleteById(imageId);
-        storyImageCache.remove(imageId);
+        imageGenerationCoordinator.deleteImageById(block.text());
     }
 
     private void beginInlineEdit(Label label, TextArea editor, Region row)
