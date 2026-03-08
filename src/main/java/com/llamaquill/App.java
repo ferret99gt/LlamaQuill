@@ -2142,7 +2142,7 @@ public class App extends Application
         }
         try
         {
-            Block head = blocks.get(blocks.size() - 1);
+            Block head = blocks.getLast();
             blockRepository.deleteHead(activeStory.id());
             deleteLinkedImageIfPresent(head);
             blocks = blockRepository.listForStory(activeStory.id());
@@ -2208,7 +2208,7 @@ public class App extends Application
         {
             return;
         }
-        Block head = blocks.get(blocks.size() - 1);
+        Block head = blocks.getLast();
         if (head.role() == Role.IMAGE)
         {
             seedImageRetryHistoryIfNeeded(head);
@@ -2276,7 +2276,7 @@ public class App extends Application
             retryIndex = retryHistory.size() - 1;
         }
 
-        Block head = blocks.isEmpty() ? null : blocks.get(blocks.size() - 1);
+        Block head = blocks.isEmpty() ? null : blocks.getLast();
         boolean imageMode = head != null && head.role() == Role.IMAGE;
 
         List<RetryHistoryDialog.Entry> entries = new ArrayList<>(retryHistory.size());
@@ -2303,7 +2303,7 @@ public class App extends Application
             return;
         }
 
-        Block currentHead = blocks.get(blocks.size() - 1);
+        Block currentHead = blocks.getLast();
         RetryHistoryEntry chosen = retryHistory.get(retryIndex);
         if (currentHead.role() == Role.ASSISTANT && chosen instanceof TextRetryHistoryEntry textEntry)
         {

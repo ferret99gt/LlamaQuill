@@ -800,7 +800,7 @@ public final class AutoCards
                 if (!incompleteTitle.isEmpty())
                 {
                     if (2 < incompleteTitle.size()
-                            && !(isMinorWord(incompleteTitle.get(incompleteTitle.size() - 1))
+                            && !(isMinorWord(incompleteTitle.getLast())
                                     && isMinorWord(incompleteTitle.get(incompleteTitle.size() - 2))))
                     {
                         pushIncompleteTitle(titles, incompleteTitle);
@@ -904,9 +904,9 @@ public final class AutoCards
 
     private static void pushIncompleteTitle(List<String> titles, List<String> incompleteTitle)
     {
-        while (1 < incompleteTitle.size() && isMinorWord(incompleteTitle.get(incompleteTitle.size() - 1)))
+        while (1 < incompleteTitle.size() && isMinorWord(incompleteTitle.getLast()))
         {
-            incompleteTitle.remove(incompleteTitle.size() - 1);
+            incompleteTitle.removeLast();
         }
         if (!incompleteTitle.isEmpty())
         {

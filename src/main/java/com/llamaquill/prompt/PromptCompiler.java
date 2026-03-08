@@ -89,13 +89,13 @@ public class PromptCompiler
             }
             else if (!selection.triggered.isEmpty())
             {
-                StoryCard removed = selection.triggered.remove(selection.triggered.size() - 1);
+                StoryCard removed = selection.triggered.removeLast();
                 droppedForSpace.add(new DroppedStoryCard(removed, "triggered"));
                 trimmed = true;
             }
             else if (!selection.pinned.isEmpty())
             {
-                StoryCard removed = selection.pinned.remove(selection.pinned.size() - 1);
+                StoryCard removed = selection.pinned.removeLast();
                 droppedForSpace.add(new DroppedStoryCard(removed, "pinned"));
                 trimmed = true;
             }
@@ -151,7 +151,7 @@ public class PromptCompiler
         List<Block> trimmed = new ArrayList<>(window);
         if (trimmed.size() > 1 && windowSizeChars(trimmed) > minWindowChars)
         {
-            trimmed.remove(0);
+            trimmed.removeFirst();
         }
         return trimmed;
     }

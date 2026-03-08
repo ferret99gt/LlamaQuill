@@ -75,7 +75,7 @@ public final class GenerationCoordinator
         Objects.requireNonNull(settings, "settings");
 
         List<Block> promptBlocks = new ArrayList<>(blocks);
-        promptBlocks.remove(promptBlocks.size() - 1);
+        promptBlocks.removeLast();
         List<StoryCard> currentCards = storyCardRepository.listForStory(story.id());
 
         PromptCompilation compilation = promptCompiler.compile(story, promptBlocks, currentCards, settings);
