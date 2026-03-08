@@ -1,6 +1,8 @@
 ﻿package com.llamaquill;
 
 import com.llamaquill.autocards.AutoCards;
+import com.llamaquill.autocards.AutoCardsCoordinator;
+import com.llamaquill.autocards.AutoCardsDialogs;
 import com.llamaquill.autocards.AutoCardsService;
 import com.llamaquill.db.ImageRepository;
 import com.llamaquill.db.BlockRepository;
@@ -14,6 +16,7 @@ import com.llamaquill.db.StoryAutoCardsRepository;
 import com.llamaquill.db.ModelAutoCardsRepository;
 import com.llamaquill.generation.GenerationCoordinator;
 import com.llamaquill.image.ImageGenerationCoordinator;
+import com.llamaquill.image.StoryImageDialogs;
 import com.llamaquill.model.Block;
 import com.llamaquill.model.AppSettings;
 import com.llamaquill.model.GenerationSettings;
@@ -104,6 +107,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Map;
 import java.util.HashMap;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.CompletableFuture;
@@ -133,6 +137,7 @@ public class App extends Application
     private GenerationCoordinator generationCoordinator;
     private ImageGenerationCoordinator imageGenerationCoordinator;
     private AutoCardsService autoCardsService;
+    private AutoCardsCoordinator autoCardsCoordinator;
     private AIDungeonImports aiDungeonImports;
     private OllamaClient ollamaClient;
     private ComfyUiClient comfyUiClient;
@@ -254,34 +259,9 @@ public class App extends Application
     private static final double TOKEN_SCALE_ALPHA = 0.2;
     private static final int CHARS_PER_TOKEN_ESTIMATE = 4;
 
-    private final Map<String, AutoCardsRunState> autoCardsRunState = new HashMap<>();
     private final Map<String, Double> tokenScaleByModel = new HashMap<>();
 
     private static final String DEFAULT_SEE_REQUEST = "Generate an image prompt for the most recent scene in the story.";
-
-    private static final class AutoCardsRunState
-    {
-        private final int assistantCount;
-
-        private AutoCardsRunState(int assistantCount)
-        {
-            this.assistantCount = assistantCount;
-        }
-    }
-
-    private static final class AutoCardsResult
-    {
-        private final int created;
-        private final int updated;
-        private final boolean ran;
-
-        private AutoCardsResult(int created, int updated, boolean ran)
-        {
-            this.created = created;
-            this.updated = updated;
-            this.ran = ran;
-        }
-    }
 
     private sealed interface RetryHistoryEntry permits TextRetryHistoryEntry, ImageRetryHistoryEntry
     {
@@ -337,6 +317,7 @@ public class App extends Application
             generationCoordinator = new GenerationCoordinator(blockRepository, storyRepository, cardRepository, promptCompiler,
                     ollamaClient);
             autoCardsService = new AutoCardsService(ollamaClient, promptCompiler);
+            autoCardsCoordinator = new AutoCardsCoordinator(blockRepository, cardRepository, autoCardsService);
             imageGenerationCoordinator = new ImageGenerationCoordinator(imageRepository, blockRepository, storyRepository,
                     cardRepository, autoCardsService, comfyUiClient);
             appSettings = loadOrCreateAppSettings();
@@ -1443,13 +1424,34 @@ public class App extends Application
     {
         try
         {
-            return runAutoCardsIfNeeded(currentBlocks, currentCards, false).ran;
+            return runAutoCardsIfNeeded(currentBlocks, currentCards, false).ran();
         }
         catch (Exception e)
         {
             logAutoCardsError("Auto Cards failed to run", e);
             return false;
         }
+    }
+
+    private <T> void submitTask(Callable<T> work, Consumer<T> onSuccess, Consumer<Throwable> onFailure)
+    {
+        Task<T> task = new Task<>()
+        {
+            @Override
+            protected T call() throws Exception
+            {
+                return work.call();
+            }
+        };
+
+        task.setOnSucceeded(event -> onSuccess.accept(task.getValue()));
+        task.setOnFailed(event -> onFailure.accept(task.getException()));
+        executor.submit(task);
+    }
+
+    private static String taskErrorMessage(Throwable error)
+    {
+        return error == null ? "Unknown" : error.getMessage();
     }
 
     private void setStoryActionButtonsBusy(boolean busy)
@@ -1801,290 +1803,54 @@ public class App extends Application
 
         statusLabel.setText("Auto Cards...");
         autoCardsRunButton.setDisable(true);
-
-        Task<AutoCardsResult> task = new Task<>()
-        {
-            @Override
-            protected AutoCardsResult call() throws Exception
-            {
-                List<Block> currentBlocks = blockRepository.listForStory(activeStory.id());
-                List<StoryCard> currentCards = cardRepository.listForStory(activeStory.id());
-                return runAutoCardsIfNeeded(currentBlocks, currentCards, true);
-            }
-        };
-
-        task.setOnSucceeded(event ->
-        {
-            AutoCardsResult result = task.getValue();
-            refreshCardList(activeStory.id());
-            if (result != null && result.ran)
-            {
-                statusLabel.setText("Auto Cards updated (" + result.created + " new, " + result.updated + " updated)");
-            }
-            else
-            {
-                statusLabel.setText("Auto Cards: no changes");
-            }
-            updateAutoCardsRunButtonState();
-        });
-
-        task.setOnFailed(event ->
-        {
-            Throwable error = task.getException();
-            statusLabel.setText("Auto Cards error: " + (error == null ? "Unknown" : error.getMessage()));
-            updateAutoCardsRunButtonState();
-        });
-
-        executor.submit(task);
+        submitTask(() ->
+                {
+                    List<Block> currentBlocks = blockRepository.listForStory(activeStory.id());
+                    List<StoryCard> currentCards = cardRepository.listForStory(activeStory.id());
+                    return runAutoCardsIfNeeded(currentBlocks, currentCards, true);
+                },
+                result ->
+                {
+                    refreshCardList(activeStory.id());
+                    if (result != null && result.ran())
+                    {
+                        statusLabel.setText("Auto Cards updated (" + result.created() + " new, " + result.updated() + " updated)");
+                    }
+                    else
+                    {
+                        statusLabel.setText("Auto Cards: no changes");
+                    }
+                    updateAutoCardsRunButtonState();
+                },
+                error ->
+                {
+                    statusLabel.setText("Auto Cards error: " + taskErrorMessage(error));
+                    updateAutoCardsRunButtonState();
+                });
     }
 
-    private AutoCardsResult runAutoCardsIfNeeded(List<Block> currentBlocks, List<StoryCard> currentCards, boolean manual)
+    private AutoCardsCoordinator.RunResult runAutoCardsIfNeeded(List<Block> currentBlocks, List<StoryCard> currentCards, boolean manual)
             throws IOException, InterruptedException, SQLException
     {
         if (appAutoCardsSettings == null || storyAutoCardsSettings == null || modelAutoCardsSettings == null)
         {
-            return new AutoCardsResult(0, 0, false);
+            return new AutoCardsCoordinator.RunResult(0, 0, false);
         }
-        if (!manual && !storyAutoCardsSettings.enabled())
-        {
-            return new AutoCardsResult(0, 0, false);
-        }
-        if (currentBlocks == null || currentBlocks.isEmpty())
-        {
-            return new AutoCardsResult(0, 0, false);
-        }
-        if (!storyAutoCardsSettings.updateExisting() && !storyAutoCardsSettings.createNew())
-        {
-            return new AutoCardsResult(0, 0, false);
-        }
-        if (!manual && !passesAutoCardsCooldown(currentBlocks))
-        {
-            return new AutoCardsResult(0, 0, false);
-        }
-
-        String excerpt = buildAutoCardsExcerpt(currentBlocks, appAutoCardsSettings.candidateWindow());
-        if (excerpt.isBlank())
-        {
-            return new AutoCardsResult(0, 0, true);
-        }
-        String fullStoryPromptPrefix = "";
-        if (AutoCards.CONTEXT_MODE_FULL_STORY.equals(
-                AutoCards.normalizeContextMode(appAutoCardsSettings.contextMode())))
-        {
-            fullStoryPromptPrefix = autoCardsService.buildFullStoryPrompt(
-                    activeStory,
-                    currentBlocks,
-                    currentCards,
-                    appSettings,
-                    activeModelSettings,
-                    modelAutoCardsSettings);
-        }
-
-        List<AutoCards.Candidate> candidates = extractAutoCardCandidates(excerpt, currentCards,
-                appAutoCardsSettings.maxCardsPerRun());
-        if (candidates.isEmpty())
-        {
-            updateAutoCardsRunState(currentBlocks);
-            return new AutoCardsResult(0, 0, true);
-        }
-
-        Map<String, StoryCard> byTitle = new HashMap<>();
-        for (StoryCard card : currentCards)
-        {
-            if (card.title() != null)
-            {
-                byTitle.put(card.title().trim().toLowerCase(), card);
-            }
-        }
-
-        int created = 0;
-        int updated = 0;
-        int limit = appAutoCardsSettings.cardLengthLimit();
-        boolean summarize = appAutoCardsSettings.summarizeInsteadOfTrim();
-
-        boolean preview = storyAutoCardsSettings.previewFirst();
-        for (AutoCards.Candidate candidate : candidates)
-        {
-            if (candidate.title().isBlank())
-            {
-                continue;
-            }
-            String key = candidate.title().trim().toLowerCase();
-            StoryCard existing = byTitle.get(key);
-            if (existing != null)
-            {
-                if (!storyAutoCardsSettings.updateExisting())
-                {
-                    continue;
-                }
-                String updatedContent = autoCardsService.generateCardUpdate(
-                        existing,
-                        excerpt,
-                        fullStoryPromptPrefix,
-                        appAutoCardsSettings.useBulletedLists(),
-                        appSettings,
-                        activeModelSettings,
-                        modelAutoCardsSettings);
-                if (updatedContent.isBlank())
-                {
-                    continue;
-                }
-                AutoCardsService.LengthEnforcementResult lengthResult = autoCardsService.enforceCardLengthDetailed(
-                        updatedContent,
-                        summarize,
-                        limit,
-                        existing.title(),
-                        existing.triggers(),
-                        excerpt,
-                        fullStoryPromptPrefix,
-                        appAutoCardsSettings.useBulletedLists(),
-                        appSettings,
-                        activeModelSettings,
-                        modelAutoCardsSettings);
-                updatedContent = lengthResult.content();
-                if (preview)
-                {
-                    String proposed = updatedContent;
-                    boolean summarizedForPreview = lengthResult.summarized();
-                    String approved = runOnUiThreadAndWait(
-                            () -> showAutoCardUpdateDialog(existing, proposed, summarizedForPreview));
-                    if (approved == null)
-                    {
-                        continue;
-                    }
-                    updatedContent = approved;
-                }
-                StoryCard updatedCard = new StoryCard(existing.id(), existing.storyId(), existing.title(),
-                        existing.triggers(), updatedContent, existing.pinned());
-                cardRepository.update(updatedCard);
-                updated++;
-            }
-            else
-            {
-                if (!storyAutoCardsSettings.createNew())
-                {
-                    continue;
-                }
-                String content = autoCardsService.generateCardCreate(
-                        candidate,
-                        excerpt,
-                        fullStoryPromptPrefix,
-                        appAutoCardsSettings.useBulletedLists(),
-                        appSettings,
-                        activeModelSettings,
-                        modelAutoCardsSettings);
-                if (content.isBlank())
-                {
-                    continue;
-                }
-                content = autoCardsService.enforceCardLength(
-                        content,
-                        summarize,
-                        limit,
-                        candidate.title(),
-                        candidate.triggers(),
-                        excerpt,
-                        fullStoryPromptPrefix,
-                        appAutoCardsSettings.useBulletedLists(),
-                        appSettings,
-                        activeModelSettings,
-                        modelAutoCardsSettings);
-                StoryCard createdCard = new StoryCard(Ids.newId(), activeStory.id(), candidate.title(),
-                        candidate.triggers(), content, storyAutoCardsSettings.pinNew());
-                if (preview)
-                {
-                    StoryCard draft = createdCard;
-                    StoryCard approved = runOnUiThreadAndWait(() -> showAutoCardCreateDialog(draft));
-                    if (approved == null)
-                    {
-                        continue;
-                    }
-                    createdCard = approved;
-                }
-                cardRepository.insert(createdCard);
-                created++;
-            }
-        }
-
-        updateAutoCardsRunState(currentBlocks);
-        return new AutoCardsResult(created, updated, true);
-    }
-
-    private boolean passesAutoCardsCooldown(List<Block> currentBlocks)
-    {
-        int assistantCount = countAssistantBlocks(currentBlocks);
-        AutoCardsRunState state = autoCardsRunState.get(activeStory.id());
-        if (state == null)
-        {
-            return true;
-        }
-        int diff = assistantCount - state.assistantCount;
-        if (diff < appAutoCardsSettings.cooldownTurns())
-        {
-            return false;
-        }
-        return true;
-    }
-
-    private void updateAutoCardsRunState(List<Block> currentBlocks)
-    {
-        int assistantCount = countAssistantBlocks(currentBlocks);
-        autoCardsRunState.put(activeStory.id(), new AutoCardsRunState(assistantCount));
-    }
-
-    private int countAssistantBlocks(List<Block> currentBlocks)
-    {
-        int count = 0;
-        for (Block block : currentBlocks)
-        {
-            if (block.role() == Role.ASSISTANT)
-            {
-                count++;
-            }
-        }
-        return count;
-    }
-
-    private String buildAutoCardsExcerpt(List<Block> currentBlocks, int window)
-    {
-        int start = Math.max(0, currentBlocks.size() - Math.max(1, window));
-        StringBuilder sb = new StringBuilder();
-        for (int i = start; i < currentBlocks.size(); i++)
-        {
-            Block block = currentBlocks.get(i);
-            if (block.role() != Role.USER && block.role() != Role.ASSISTANT)
-            {
-                continue;
-            }
-            sb.append(block.role() == Role.USER ? "User: " : "Story: ");
-            sb.append(block.text().trim());
-            sb.append("\n\n");
-        }
-        return sb.toString().trim();
-    }
-
-    private List<AutoCards.Candidate> extractAutoCardCandidates(String excerpt, List<StoryCard> currentCards, int maxCount)
-            throws IOException, InterruptedException
-    {
-        String mode = AutoCards.normalizeCandidateSelectionMode(appAutoCardsSettings.candidateSelectionMode());
-        if (AutoCards.CANDIDATE_SELECTION_MODE_ASK_MODEL.equals(mode))
-        {
-            return extractAutoCardCandidatesByModel(excerpt, currentCards, maxCount);
-        }
-        return AutoCards.extractCandidatesByHeuristics(excerpt, currentCards, maxCount);
-    }
-
-    private List<AutoCards.Candidate> extractAutoCardCandidatesByModel(String excerpt, List<StoryCard> currentCards,
-            int maxCount)
-            throws IOException, InterruptedException
-    {
-        return autoCardsService.extractCandidatesByModel(
-                excerpt,
+        AutoCardsCoordinator.PreviewCallbacks previewCallbacks = new AutoCardsCoordinator.PreviewCallbacks(
+                draft -> runOnUiThreadAndWait(() -> AutoCardsDialogs.showCreateDialog(primaryStage, activeStory.id(), draft)),
+                (existing, proposed, summarized) -> runOnUiThreadAndWait(
+                        () -> AutoCardsDialogs.showUpdateDialog(primaryStage, existing, proposed, summarized)));
+        return autoCardsCoordinator.runIfNeeded(
+                activeStory,
+                currentBlocks,
                 currentCards,
-                maxCount,
+                manual,
                 appSettings,
+                storyAutoCardsSettings,
+                appAutoCardsSettings,
                 activeModelSettings,
-                modelAutoCardsSettings);
+                modelAutoCardsSettings,
+                previewCallbacks);
     }
 
     private void refreshStoryList(String selectedId)
@@ -2505,101 +2271,44 @@ public class App extends Application
                 return;
             }
 
-            final String storyId = activeStory.id();
             final Story story = activeStory;
             generateButton.setDisable(true);
             createButton.setDisable(true);
             createAndCloseButton.setDisable(true);
             statusLabel.setText("Generating story card...");
-
-            Task<AutoCards.GeneratedCard> task = new Task<>()
-            {
-                @Override
-                protected AutoCards.GeneratedCard call() throws Exception
-                {
-                    List<Block> currentBlocks = blockRepository.listForStory(storyId);
-                    List<StoryCard> currentCards = cardRepository.listForStory(storyId);
-                    String contextMode = AutoCards.normalizeContextMode(appAutoCardsSettings.contextMode());
-                    String excerpt = "";
-                    if (!AutoCards.CONTEXT_MODE_FULL_STORY.equals(contextMode))
+            submitTask(() ->
                     {
-                        excerpt = buildAutoCardsExcerpt(currentBlocks, appAutoCardsSettings.candidateWindow());
-                    }
-                    String fullStoryPromptPrefix = "";
-                    if (AutoCards.CONTEXT_MODE_FULL_STORY.equals(contextMode))
-                    {
-                        fullStoryPromptPrefix = autoCardsService.buildFullStoryPrompt(
+                        return autoCardsCoordinator.generateCardDraftFromPrompt(
                                 story,
-                                currentBlocks,
-                                currentCards,
+                                request,
                                 appSettings,
+                                appAutoCardsSettings,
                                 activeModelSettings,
                                 modelAutoCardsSettings);
-                    }
-
-                    AutoCards.GeneratedCard generated = autoCardsService.generateCardFromUserPrompt(
-                            request,
-                            excerpt,
-                            fullStoryPromptPrefix,
-                            appAutoCardsSettings.useBulletedLists(),
-                            appSettings,
-                            activeModelSettings,
-                            modelAutoCardsSettings);
-                    if (generated == null)
+                    },
+                    generated ->
                     {
-                        return null;
-                    }
-                    String enforced = autoCardsService.enforceCardLength(
-                            generated.content(),
-                            appAutoCardsSettings.summarizeInsteadOfTrim(),
-                            appAutoCardsSettings.cardLengthLimit(),
-                            generated.title(),
-                            generated.triggers(),
-                            excerpt,
-                            fullStoryPromptPrefix,
-                            appAutoCardsSettings.useBulletedLists(),
-                            appSettings,
-                            activeModelSettings,
-                            modelAutoCardsSettings);
-                    return new AutoCards.GeneratedCard(generated.title(), generated.triggers(), enforced);
-                }
-            };
-
-            task.setOnSucceeded(e ->
-            {
-                generateButton.setDisable(false);
-                createButton.setDisable(false);
-                createAndCloseButton.setDisable(false);
-                AutoCards.GeneratedCard generated = task.getValue();
-                if (generated == null)
-                {
-                    statusLabel.setText("Generate card: no result");
-                    return;
-                }
-                titleField.setText(generated.title());
-                triggersField.setText(generated.triggers());
-                contentArea.setText(generated.content());
-                statusLabel.setText("Generated story card draft");
-            });
-
-            task.setOnFailed(e ->
-            {
-                generateButton.setDisable(false);
-                createButton.setDisable(false);
-                createAndCloseButton.setDisable(false);
-                Throwable error = task.getException();
-                statusLabel.setText("Generate card failed");
-                if (error instanceof Exception exception)
-                {
-                    showError("Failed to generate story card", exception);
-                }
-                else if (error != null)
-                {
-                    showError("Failed to generate story card", new RuntimeException(error));
-                }
-            });
-
-            executor.submit(task);
+                        generateButton.setDisable(false);
+                        createButton.setDisable(false);
+                        createAndCloseButton.setDisable(false);
+                        if (generated == null)
+                        {
+                            statusLabel.setText("Generate card: no result");
+                            return;
+                        }
+                        titleField.setText(generated.title());
+                        triggersField.setText(generated.triggers());
+                        contentArea.setText(generated.content());
+                        statusLabel.setText("Generated story card draft");
+                    },
+                    error ->
+                    {
+                        generateButton.setDisable(false);
+                        createButton.setDisable(false);
+                        createAndCloseButton.setDisable(false);
+                        statusLabel.setText("Generate card failed");
+                        showError("Failed to generate story card", error);
+                    });
         });
 
         dialog.showAndWait();
@@ -2808,51 +2517,30 @@ public class App extends Application
             cancelButton.setDisable(true);
             setStoryActionButtonsBusy(true);
             statusLabel.setText("Generating image prompt...");
-
-            Task<String> task = new Task<>()
-            {
-                @Override
-                protected String call() throws Exception
-                {
-                    return imageGenerationCoordinator.generateImagePrompt(
+            submitTask(() -> imageGenerationCoordinator.generateImagePrompt(
                             story,
                             requestFinal,
                             appSettings,
                             activeModelSettings,
                             appAutoCardsSettings,
-                            modelAutoCardsSettings);
-                }
-            };
-
-            task.setOnSucceeded(e ->
-            {
-                restoreSeeButtons.run();
-                String generated = task.getValue();
-                if (generated == null || generated.isBlank())
-                {
-                    statusLabel.setText("Image prompt generation returned empty.");
-                    return;
-                }
-                promptArea.setText(generated);
-                statusLabel.setText("Generated image prompt");
-            });
-
-            task.setOnFailed(e ->
-            {
-                restoreSeeButtons.run();
-                Throwable error = task.getException();
-                statusLabel.setText("Image prompt generation failed");
-                if (error instanceof Exception exception)
-                {
-                    showError("Failed to generate image prompt", exception);
-                }
-                else if (error != null)
-                {
-                    showError("Failed to generate image prompt", new RuntimeException(error));
-                }
-            });
-
-            executor.submit(task);
+                            modelAutoCardsSettings),
+                    generated ->
+                    {
+                        restoreSeeButtons.run();
+                        if (generated == null || generated.isBlank())
+                        {
+                            statusLabel.setText("Image prompt generation returned empty.");
+                            return;
+                        }
+                        promptArea.setText(generated);
+                        statusLabel.setText("Generated image prompt");
+                    },
+                    error ->
+                    {
+                        restoreSeeButtons.run();
+                        statusLabel.setText("Image prompt generation failed");
+                        showError("Failed to generate image prompt", error);
+                    });
         });
 
         createImagesButton.setOnAction(event ->
@@ -2869,58 +2557,37 @@ public class App extends Application
             cancelButton.setDisable(true);
             setStoryActionButtonsBusy(true);
             statusLabel.setText("Generating images...");
-
-            Task<ComfyUiClient.GenerationResult> task = new Task<>()
-            {
-                @Override
-                protected ComfyUiClient.GenerationResult call() throws Exception
-                {
-                    return imageGenerationCoordinator.generateImages(appSettings, promptText);
-                }
-            };
-
-            task.setOnSucceeded(e ->
-            {
-                restoreSeeButtons.run();
-                ComfyUiClient.GenerationResult result = task.getValue();
-                if (result == null || result.images() == null || result.images().isEmpty())
-                {
-                    statusLabel.setText("ComfyUI returned no images.");
-                    return;
-                }
-                List<ImageGenerationCoordinator.PendingImage> pending = new ArrayList<>();
-                for (ComfyUiClient.GeneratedImage image : result.images())
-                {
-                    pending.add(new ImageGenerationCoordinator.PendingImage(image.bytes(), image.mimeType(), result.workflowJson()));
-                }
-                pendingImagesRef[0] = pending;
-                selectedIndexRef[0] = pending.isEmpty() ? -1 : 0;
-                refreshImageSelectionUi.run();
-                createImagesButton.setText("Regenerate Images");
-                statusLabel.setText("Generated " + pending.size() + " image(s)");
-            });
-
-            task.setOnFailed(e ->
-            {
-                restoreSeeButtons.run();
-                Throwable error = task.getException();
-                statusLabel.setText("Image generation failed");
-                System.out.println("ComfyUI image generation failed:");
-                if (error != null)
-                {
-                    error.printStackTrace(System.out);
-                }
-                if (error instanceof Exception exception)
-                {
-                    showError("Failed to generate images", exception);
-                }
-                else if (error != null)
-                {
-                    showError("Failed to generate images", new RuntimeException(error));
-                }
-            });
-
-            executor.submit(task);
+            submitTask(() -> imageGenerationCoordinator.generateImages(appSettings, promptText),
+                    result ->
+                    {
+                        restoreSeeButtons.run();
+                        if (result == null || result.images() == null || result.images().isEmpty())
+                        {
+                            statusLabel.setText("ComfyUI returned no images.");
+                            return;
+                        }
+                        List<ImageGenerationCoordinator.PendingImage> pending = new ArrayList<>();
+                        for (ComfyUiClient.GeneratedImage image : result.images())
+                        {
+                            pending.add(new ImageGenerationCoordinator.PendingImage(image.bytes(), image.mimeType(), result.workflowJson()));
+                        }
+                        pendingImagesRef[0] = pending;
+                        selectedIndexRef[0] = pending.isEmpty() ? -1 : 0;
+                        refreshImageSelectionUi.run();
+                        createImagesButton.setText("Regenerate Images");
+                        statusLabel.setText("Generated " + pending.size() + " image(s)");
+                    },
+                    error ->
+                    {
+                        restoreSeeButtons.run();
+                        statusLabel.setText("Image generation failed");
+                        System.out.println("ComfyUI image generation failed:");
+                        if (error != null)
+                        {
+                            error.printStackTrace(System.out);
+                        }
+                        showError("Failed to generate images", error);
+                    });
         });
 
         insertImageButton.setOnAction(event ->
@@ -3217,56 +2884,45 @@ public class App extends Application
 
         setStoryActionButtonsBusy(true);
         statusLabel.setText("Generating...");
-
-        Task<Block> task = new Task<>()
-        {
-            @Override
-            protected Block call() throws Exception
-            {
-                if (retryHistory.isEmpty())
+        submitTask(() ->
                 {
-                    retryHistory.add(new TextRetryHistoryEntry(head.text()));
-                    retryIndex = 0;
-                }
+                    if (retryHistory.isEmpty())
+                    {
+                        retryHistory.add(new TextRetryHistoryEntry(head.text()));
+                        retryIndex = 0;
+                    }
 
-                settings = buildGenerationSettings();
-                GenerationCoordinator.RetryResult result = generationCoordinator.retryAssistantHead(activeStory, blocks, head, settings);
-                observePromptCalibration(result.estimatedPromptTokens());
-                if (result.updatedBlock() == null)
+                    settings = buildGenerationSettings();
+                    GenerationCoordinator.RetryResult result = generationCoordinator.retryAssistantHead(activeStory, blocks, head, settings);
+                    observePromptCalibration(result.estimatedPromptTokens());
+                    if (result.updatedBlock() == null)
+                    {
+                        return null;
+                    }
+                    Block updated = result.updatedBlock();
+                    retryHistory.add(new TextRetryHistoryEntry(updated.text()));
+                    retryIndex = retryHistory.size() - 1;
+                    return updated;
+                },
+                updated ->
                 {
-                    return null;
-                }
-                Block updated = result.updatedBlock();
-                retryHistory.add(new TextRetryHistoryEntry(updated.text()));
-                retryIndex = retryHistory.size() - 1;
-                return updated;
-            }
-        };
-
-        task.setOnSucceeded(event ->
-        {
-            Block updated = task.getValue();
-            if (updated == null)
-            {
-                statusLabel.setText("Last generation was empty.");
-                restoreStoryActionButtonsState();
-                return;
-            }
-            blocks.set(blocks.size() - 1, updated);
-            renderStoryBlocks(true);
-            statusLabel.setText("Ready");
-            updateRetryCountLabel();
-            restoreStoryActionButtonsState();
-        });
-
-        task.setOnFailed(event ->
-        {
-            Throwable error = task.getException();
-            restoreStoryActionButtonsState();
-            statusLabel.setText("Error: " + (error == null ? "Unknown" : error.getMessage()));
-        });
-
-        executor.submit(task);
+                    if (updated == null)
+                    {
+                        statusLabel.setText("Last generation was empty.");
+                        restoreStoryActionButtonsState();
+                        return;
+                    }
+                    blocks.set(blocks.size() - 1, updated);
+                    renderStoryBlocks(true);
+                    statusLabel.setText("Ready");
+                    updateRetryCountLabel();
+                    restoreStoryActionButtonsState();
+                },
+                error ->
+                {
+                    restoreStoryActionButtonsState();
+                    statusLabel.setText("Error: " + taskErrorMessage(error));
+                });
     }
 
     private void showRetryDialog()
@@ -3529,132 +3185,6 @@ public class App extends Application
         dialog.showAndWait();
     }
 
-    private StoryCard showAutoCardCreateDialog(StoryCard draft)
-    {
-        if (draft == null || activeStory == null)
-        {
-            return null;
-        }
-
-        Dialog<StoryCard> dialog = new Dialog<>();
-        dialog.setTitle("Auto Card Preview");
-        dialog.setHeaderText("Create Story Card");
-        dialog.initOwner(primaryStage);
-
-        TextField titleField = new TextField(draft.title());
-        TextField triggersField = new TextField(draft.triggers());
-        TextArea contentArea = new TextArea(draft.content());
-        contentArea.setWrapText(true);
-        contentArea.setPrefRowCount(8);
-        CheckBox pinnedBox = new CheckBox("Pinned");
-        pinnedBox.setSelected(draft.pinned());
-
-        VBox content = new VBox(8,
-                new Label("Title"), titleField,
-                new Label("Triggers"), triggersField,
-                new Label("Content"), contentArea,
-                pinnedBox);
-        content.setPadding(new Insets(10));
-
-        ButtonType createType = new ButtonType("Create", ButtonBar.ButtonData.OK_DONE);
-        ButtonType cancelType = new ButtonType("Cancel", ButtonBar.ButtonData.CANCEL_CLOSE);
-        dialog.getDialogPane().getButtonTypes().addAll(createType, cancelType);
-        dialog.getDialogPane().setContent(content);
-
-        Node createButton = dialog.getDialogPane().lookupButton(createType);
-        createButton.addEventFilter(ActionEvent.ACTION, event ->
-        {
-            if (titleField.getText().trim().isEmpty())
-            {
-                showInfo("Card title cannot be empty.");
-                event.consume();
-                return;
-            }
-            if (contentArea.getText().trim().isEmpty())
-            {
-                showInfo("Card content cannot be empty.");
-                event.consume();
-            }
-        });
-
-        dialog.setResultConverter(buttonType ->
-        {
-            if (buttonType != createType)
-            {
-                return null;
-            }
-            String title = titleField.getText().trim();
-            String triggers = triggersField.getText().trim();
-            String contentText = contentArea.getText().trim();
-            return new StoryCard(draft.id(), activeStory.id(), title, triggers, contentText, pinnedBox.isSelected());
-        });
-
-        return dialog.showAndWait().orElse(null);
-    }
-
-    private String showAutoCardUpdateDialog(StoryCard existing, String proposedContent, boolean summarized)
-    {
-        if (existing == null)
-        {
-            return null;
-        }
-
-        Dialog<String> dialog = new Dialog<>();
-        dialog.setTitle("Auto Card Preview");
-        dialog.setHeaderText(summarized ? "Summarize Story Card" : "Update Story Card");
-        dialog.initOwner(primaryStage);
-
-        Label titleLabel = new Label(existing.title());
-        titleLabel.setStyle("-fx-font-weight: bold;");
-
-        TextArea oldArea = new TextArea(existing.content());
-        oldArea.setEditable(false);
-        oldArea.setWrapText(true);
-        oldArea.setPrefRowCount(10);
-
-        TextArea newArea = new TextArea(proposedContent);
-        newArea.setWrapText(true);
-        newArea.setPrefRowCount(10);
-
-        VBox oldBox = new VBox(6, new Label("Existing"), oldArea);
-        VBox newBox = new VBox(6, new Label("Proposed"), newArea);
-        oldBox.setPrefWidth(300);
-        newBox.setPrefWidth(300);
-
-        HBox panes = new HBox(10, oldBox, newBox);
-        HBox.setHgrow(oldBox, Priority.ALWAYS);
-        HBox.setHgrow(newBox, Priority.ALWAYS);
-
-        VBox content = new VBox(8, titleLabel, panes);
-        content.setPadding(new Insets(10));
-
-        ButtonType updateType = new ButtonType("Update", ButtonBar.ButtonData.OK_DONE);
-        ButtonType cancelType = new ButtonType("Cancel", ButtonBar.ButtonData.CANCEL_CLOSE);
-        dialog.getDialogPane().getButtonTypes().addAll(updateType, cancelType);
-        dialog.getDialogPane().setContent(content);
-
-        Node updateButton = dialog.getDialogPane().lookupButton(updateType);
-        updateButton.addEventFilter(ActionEvent.ACTION, event ->
-        {
-            if (newArea.getText().trim().isEmpty())
-            {
-                showInfo("Updated content cannot be empty.");
-                event.consume();
-            }
-        });
-
-        dialog.setResultConverter(buttonType ->
-        {
-            if (buttonType != updateType)
-            {
-                return null;
-            }
-            return newArea.getText().trim();
-        });
-
-        return dialog.showAndWait().orElse(null);
-    }
-
     private <T> T runOnUiThreadAndWait(java.util.concurrent.Callable<T> action)
     {
         if (Platform.isFxApplicationThread())
@@ -3764,96 +3294,75 @@ public class App extends Application
         clearRetryHistory();
         setStoryActionButtonsBusy(true);
         statusLabel.setText("Generating...");
-
-        Task<Block> task = new Task<>()
-        {
-            @Override
-            protected Block call() throws Exception
-            {
-                settings = buildGenerationSettings();
-                GenerationCoordinator.ContinueResult result = generationCoordinator.continueStory(activeStory, settings,
-                        App.this::runAutoCardsForGeneration);
-                observePromptCalibration(result.estimatedPromptTokens());
-                activeStory = result.updatedStory();
-                return result.block();
-            }
-        };
-
-        task.setOnSucceeded(event ->
-        {
-            Block block = task.getValue();
-            if (block == null)
-            {
-                restoreStoryActionButtonsState();
-                statusLabel.setText("Last generation was empty.");
-                return;
-            }
-            blocks.add(block);
-            renderStoryBlocks(true);
-            restoreStoryActionButtonsState();
-            statusLabel.setText("Ready");
-            refreshStoryList(activeStory.id());
-            refreshCardList(activeStory.id());
-        });
-
-        task.setOnFailed(event ->
-        {
-            Throwable error = task.getException();
-            restoreStoryActionButtonsState();
-            statusLabel.setText("Error: " + (error == null ? "Unknown" : error.getMessage()));
-        });
-
-        executor.submit(task);
+        submitTask(() ->
+                {
+                    settings = buildGenerationSettings();
+                    GenerationCoordinator.ContinueResult result = generationCoordinator.continueStory(activeStory, settings,
+                            App.this::runAutoCardsForGeneration);
+                    observePromptCalibration(result.estimatedPromptTokens());
+                    activeStory = result.updatedStory();
+                    return result.block();
+                },
+                block ->
+                {
+                    if (block == null)
+                    {
+                        restoreStoryActionButtonsState();
+                        statusLabel.setText("Last generation was empty.");
+                        return;
+                    }
+                    blocks.add(block);
+                    renderStoryBlocks(true);
+                    restoreStoryActionButtonsState();
+                    statusLabel.setText("Ready");
+                    refreshStoryList(activeStory.id());
+                    refreshCardList(activeStory.id());
+                },
+                error ->
+                {
+                    restoreStoryActionButtonsState();
+                    statusLabel.setText("Error: " + taskErrorMessage(error));
+                });
     }
 
     private void runTurn(String userText)
     {
         setStoryActionButtonsBusy(true);
         statusLabel.setText("Generating...");
-
-        Task<Boolean> task = new Task<>()
-        {
-            @Override
-            protected Boolean call() throws Exception
-            {
-                settings = buildGenerationSettings();
-                GenerationCoordinator.TurnResult result = generationCoordinator.takeTurn(activeStory, userText, settings,
-                        App.this::runAutoCardsForGeneration);
-                observePromptCalibration(result.estimatedPromptTokens());
-                activeStory = result.updatedStory();
-                return result.generated();
-            }
-        };
-
-        task.setOnSucceeded(event ->
-        {
-            try
-            {
-                boolean generated = Boolean.TRUE.equals(task.getValue());
-                blocks = blockRepository.listForStory(activeStory.id());
-                renderStoryBlocks(true);
-                statusLabel.setText(generated ? "Ready" : "Last generation was empty.");
-                refreshStoryList(activeStory.id());
-                refreshCardList(activeStory.id());
-            }
-            catch (SQLException e)
-            {
-                showError("Failed to reload story", e);
-            }
-            finally
-            {
-                restoreStoryActionButtonsState();
-            }
-        });
-
-        task.setOnFailed(event ->
-        {
-            Throwable error = task.getException();
-            restoreStoryActionButtonsState();
-            statusLabel.setText("Error: " + (error == null ? "Unknown" : error.getMessage()));
-        });
-
-        executor.submit(task);
+        submitTask(() ->
+                {
+                    settings = buildGenerationSettings();
+                    GenerationCoordinator.TurnResult result = generationCoordinator.takeTurn(activeStory, userText, settings,
+                            App.this::runAutoCardsForGeneration);
+                    observePromptCalibration(result.estimatedPromptTokens());
+                    activeStory = result.updatedStory();
+                    return result.generated();
+                },
+                generated ->
+                {
+                    try
+                    {
+                        boolean created = Boolean.TRUE.equals(generated);
+                        blocks = blockRepository.listForStory(activeStory.id());
+                        renderStoryBlocks(true);
+                        statusLabel.setText(created ? "Ready" : "Last generation was empty.");
+                        refreshStoryList(activeStory.id());
+                        refreshCardList(activeStory.id());
+                    }
+                    catch (SQLException e)
+                    {
+                        showError("Failed to reload story", e);
+                    }
+                    finally
+                    {
+                        restoreStoryActionButtonsState();
+                    }
+                },
+                error ->
+                {
+                    restoreStoryActionButtonsState();
+                    statusLabel.setText("Error: " + taskErrorMessage(error));
+                });
     }
 
     private Slider buildIntSlider(int min, int max, int value, int step)
@@ -4607,59 +4116,12 @@ public class App extends Application
 
     private void showImageBlockDialog(Block block, StoryImage storyImage, Image image)
     {
-        Dialog<Void> dialog = new Dialog<>();
-        dialog.setTitle("Story Image");
-        dialog.setHeaderText("Image block");
-        dialog.initOwner(primaryStage);
-        dialog.setResizable(true);
-
-        ImageView large = new ImageView(image);
-        large.setPreserveRatio(true);
-        large.setSmooth(true);
-        large.setFitWidth(860);
-        large.setFitHeight(520);
-
-        TextArea promptArea = new TextArea(storyImage.prompt());
-        promptArea.setWrapText(true);
-        promptArea.setEditable(false);
-        promptArea.setPrefRowCount(5);
-
-        VBox content = new VBox(10, large, new Label("Prompt"), promptArea);
-        content.setPadding(new Insets(10));
-        content.setMaxWidth(980);
-        ScrollPane contentScroll = new ScrollPane(content);
-        contentScroll.setFitToWidth(true);
-        contentScroll.setFitToHeight(false);
-        contentScroll.setPannable(true);
-        contentScroll.setPrefViewportWidth(980);
-        contentScroll.setPrefViewportHeight(660);
-        dialog.getDialogPane().setContent(contentScroll);
-        dialog.getDialogPane().setPrefWidth(1040);
-        dialog.getDialogPane().setPrefHeight(720);
-
-        ButtonType saveType = new ButtonType("Save", ButtonBar.ButtonData.LEFT);
-        ButtonType deleteType = new ButtonType("Delete", ButtonBar.ButtonData.LEFT);
-        ButtonType closeType = new ButtonType("Close", ButtonBar.ButtonData.CANCEL_CLOSE);
-        dialog.getDialogPane().getButtonTypes().addAll(saveType, deleteType, closeType);
-
-        Button saveButton = (Button) dialog.getDialogPane().lookupButton(saveType);
-        saveButton.addEventFilter(ActionEvent.ACTION, event ->
-        {
-            event.consume();
-            saveStoryImageToFile(storyImage);
-        });
-
-        Button deleteButtonLocal = (Button) dialog.getDialogPane().lookupButton(deleteType);
-        deleteButtonLocal.addEventFilter(ActionEvent.ACTION, event ->
-        {
-            event.consume();
-            if (deleteBlockAndLinkedImage(block, false))
-            {
-                dialog.close();
-            }
-        });
-
-        dialog.showAndWait();
+        StoryImageDialogs.showImageBlockDialog(
+                primaryStage,
+                storyImage,
+                image,
+                () -> saveStoryImageToFile(storyImage),
+                () -> deleteBlockAndLinkedImage(block, false));
     }
 
     private void saveStoryImageToFile(StoryImage storyImage)
@@ -5079,6 +4541,19 @@ public class App extends Application
         alert.setHeaderText(message);
         alert.setContentText(e.getMessage());
         alert.showAndWait();
+    }
+
+    private void showError(String message, Throwable error)
+    {
+        if (error instanceof Exception exception)
+        {
+            showError(message, exception);
+            return;
+        }
+        if (error != null)
+        {
+            showError(message, new RuntimeException(error));
+        }
     }
 
     private void showInfo(String message)
