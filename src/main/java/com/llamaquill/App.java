@@ -30,11 +30,14 @@ import com.llamaquill.model.AppAutoCardsSettings;
 import com.llamaquill.model.StoryAutoCardsSettings;
 import com.llamaquill.model.ModelAutoCardsSettings;
 import com.llamaquill.imports.AIDungeonImports;
+import com.llamaquill.imports.ImportDialogs;
 import com.llamaquill.prompt.PromptCompiler;
 import com.llamaquill.serviceClients.ComfyUiClient;
 import com.llamaquill.serviceClients.OllamaClient;
 import com.llamaquill.retry.RetryHistoryDialog;
 import com.llamaquill.settings.SettingsCoordinator;
+import com.llamaquill.stories.StoryDialogs;
+import com.llamaquill.storycards.StoryCardDialogs;
 import com.llamaquill.util.Ids;
 import com.llamaquill.util.Timestamps;
 import javafx.application.Application;
@@ -45,7 +48,6 @@ import javafx.beans.binding.DoubleBinding;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.concurrent.Task;
-import javafx.event.ActionEvent;
 import javafx.geometry.Insets;
 import javafx.geometry.Orientation;
 import javafx.geometry.Pos;
@@ -53,10 +55,8 @@ import javafx.scene.Node;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
-import javafx.scene.control.ButtonBar;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.CheckBox;
-import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
@@ -69,7 +69,6 @@ import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
-import javafx.scene.control.TextInputDialog;
 import javafx.scene.control.Spinner;
 import javafx.scene.control.SpinnerValueFactory;
 import javafx.stage.FileChooser;
@@ -1895,18 +1894,8 @@ public class App extends Application
 
     private void showNewStoryDialog()
     {
-        TextInputDialog dialog = new TextInputDialog("New Story");
-        dialog.setTitle("New Story");
-        dialog.setHeaderText("Enter a story name");
-        dialog.initOwner(primaryStage);
-        dialog.showAndWait().ifPresent(name ->
+        StoryDialogs.showNewStoryDialog(primaryStage, this::showInfo, trimmed ->
         {
-            String trimmed = name.trim();
-            if (trimmed.isEmpty())
-            {
-                showInfo("Story name cannot be empty.");
-                return;
-            }
             try
             {
                 String now = Timestamps.now();
@@ -1924,136 +1913,28 @@ public class App extends Application
 
     private void showImportAdventureDialog()
     {
-        Dialog<Void> dialog = new Dialog<>();
-        dialog.setTitle("Import Adventure");
-        dialog.setHeaderText("Import AI Dungeon adventure backup");
-        dialog.initOwner(primaryStage);
-
-        TextField fileField = new TextField();
-        fileField.setEditable(false);
-        fileField.setPromptText("Select a ZIP file");
-
-        Button browseButton = new Button("Choose File");
-        FileChooser chooser = new FileChooser();
-        chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("ZIP Files", "*.zip"));
-        browseButton.setOnAction(event ->
-        {
-            java.io.File selected = chooser.showOpenDialog(primaryStage);
-            if (selected != null)
-            {
-                fileField.setText(selected.getAbsolutePath());
-            }
-        });
-
-        HBox fileRow = new HBox(8, fileField, browseButton);
-        HBox.setHgrow(fileField, Priority.ALWAYS);
-
-        Button importButton = new Button("Import");
-        importButton.setDisable(true);
-        Button cancelButton = new Button("Cancel");
-
-        fileField.textProperty().addListener((obs, oldValue, newValue) ->
-        {
-            importButton.setDisable(newValue == null || newValue.isBlank());
-        });
-
-        importButton.setOnAction(event ->
-        {
-            try
-            {
-                Story imported = aiDungeonImports.importAdventure(Path.of(fileField.getText()));
-                refreshStoryList(imported.id());
-                loadStory(imported, true);
-                dialog.close();
-                showInfo("Imported adventure \"" + imported.title() + "\".");
-            }
-            catch (Exception e)
-            {
-                showError("Failed to import adventure", e);
-            }
-        });
-
-        cancelButton.setOnAction(event -> dialog.close());
-
-        HBox buttons = new HBox(8, importButton, cancelButton);
-        buttons.setAlignment(Pos.CENTER_RIGHT);
-
-        VBox content = new VBox(12, fileRow, buttons);
-        content.setPadding(new Insets(12));
-
-        dialog.getDialogPane().setContent(content);
-        dialog.getDialogPane().getButtonTypes().add(ButtonType.CANCEL);
-        Node cancelNode = dialog.getDialogPane().lookupButton(ButtonType.CANCEL);
-        if (cancelNode != null)
-        {
-            cancelNode.setVisible(false);
-            cancelNode.setManaged(false);
-        }
-        dialog.showAndWait();
+        ImportDialogs.showAdventureImportDialog(
+                primaryStage,
+                this::showInfo,
+                this::showError,
+                aiDungeonImports::importAdventure,
+                imported ->
+                {
+                    refreshStoryList(imported.id());
+                    loadStory(imported, true);
+                });
     }
 
     private void showStoryDialog(Story story)
     {
-        Dialog<Void> dialog = new Dialog<>();
-        dialog.setTitle("Story");
-        dialog.setHeaderText("Story settings");
-        dialog.initOwner(primaryStage);
-
-        TextField titleField = new TextField(story.title());
-        titleField.setPrefWidth(320);
-
-        VBox content = new VBox(8, new Label("Title"), titleField);
-        content.setPadding(new Insets(10));
-
-        ButtonType playType = new ButtonType("Play", ButtonBar.ButtonData.OK_DONE);
-        ButtonType updateType = new ButtonType("Update", ButtonBar.ButtonData.APPLY);
-        ButtonType deleteType = new ButtonType("Delete", ButtonBar.ButtonData.LEFT);
-        ButtonType cancelType = new ButtonType("Cancel", ButtonBar.ButtonData.CANCEL_CLOSE);
-        dialog.getDialogPane().getButtonTypes().addAll(playType, updateType, deleteType, cancelType);
-        dialog.getDialogPane().setContent(content);
-
-        Button playButton = (Button) dialog.getDialogPane().lookupButton(playType);
-        playButton.addEventFilter(ActionEvent.ACTION, event ->
-        {
-            event.consume();
-            String name = titleField.getText().trim();
-            if (name.isEmpty())
-            {
-                showInfo("Story name cannot be empty.");
-                return;
-            }
-            Story updated = updateStoryTitleIfNeeded(story, name);
-            dialog.close();
-            playStory(updated);
-        });
-
-        Button updateButton = (Button) dialog.getDialogPane().lookupButton(updateType);
-        updateButton.addEventFilter(ActionEvent.ACTION, event ->
-        {
-            event.consume();
-            String name = titleField.getText().trim();
-            if (name.isEmpty())
-            {
-                showInfo("Story name cannot be empty.");
-                return;
-            }
-            Story updated = updateStoryTitleIfNeeded(story, name);
-            refreshStoryList(updated.id());
-            dialog.close();
-        });
-
-        Button deleteButton = (Button) dialog.getDialogPane().lookupButton(deleteType);
-        deleteButton.addEventFilter(ActionEvent.ACTION, event ->
-        {
-            event.consume();
-            if (confirmDelete(story.title()))
-            {
-                deleteStory(story);
-                dialog.close();
-            }
-        });
-
-        dialog.showAndWait();
+        StoryDialogs.showStoryDialog(
+                primaryStage,
+                story,
+                this::showInfo,
+                name -> playStory(updateStoryTitleIfNeeded(story, name)),
+                name -> refreshStoryList(updateStoryTitleIfNeeded(story, name).id()),
+                () -> confirmDelete(story.title()),
+                () -> deleteStory(story));
     }
 
     private void showCardDialog(StoryCard card)
@@ -2063,99 +1944,33 @@ public class App extends Application
             showInfo("Select a story first.");
             return;
         }
-
-        boolean isNew = card == null;
-        Dialog<Void> dialog = new Dialog<>();
-        dialog.setTitle(isNew ? "New Story Card" : "Edit Story Card");
-        dialog.setHeaderText(isNew ? "Create a story card" : "Edit story card");
-        dialog.initOwner(primaryStage);
-
-        TextField titleField = new TextField(isNew ? "" : card.title());
-        TextArea contentArea = new TextArea(isNew ? "" : card.content());
-        contentArea.setWrapText(true);
-        contentArea.setPrefRowCount(6);
-        TextField triggersField = new TextField(isNew ? "" : card.triggers());
-        CheckBox pinnedBox = new CheckBox("Pinned");
-        pinnedBox.setSelected(!isNew && card.pinned());
-
-        VBox content = new VBox(8, new Label("Title"), titleField, new Label("Content"), contentArea,
-                new Label("Triggers (comma separated)"), triggersField, pinnedBox);
-        content.setPadding(new Insets(10));
-
-        ButtonType saveType = new ButtonType(isNew ? "Create" : "Update", ButtonBar.ButtonData.OK_DONE);
-        ButtonType deleteType = new ButtonType("Delete", ButtonBar.ButtonData.LEFT);
-        ButtonType cancelType = new ButtonType("Cancel", ButtonBar.ButtonData.CANCEL_CLOSE);
-
-        if (isNew)
-        {
-            dialog.getDialogPane().getButtonTypes().addAll(saveType, cancelType);
-        }
-        else
-        {
-            dialog.getDialogPane().getButtonTypes().addAll(saveType, deleteType, cancelType);
-        }
-        dialog.getDialogPane().setContent(content);
-
-        Button saveButton = (Button) dialog.getDialogPane().lookupButton(saveType);
-        saveButton.addEventFilter(ActionEvent.ACTION, event ->
-        {
-            event.consume();
-            String title = titleField.getText().trim();
-            if (title.isEmpty())
-            {
-                showInfo("Card title cannot be empty.");
-                return;
-            }
-            String contentText = contentArea.getText().trim();
-            String triggers = triggersField.getText().trim();
-
-            if (isNew)
-            {
-                StoryCard newCard = new StoryCard(Ids.newId(), activeStory.id(), title, triggers, contentText,
-                        pinnedBox.isSelected());
-                try
+        StoryCardDialogs.showCardDialog(
+                primaryStage,
+                activeStory.id(),
+                card,
+                this::showInfo,
+                this::showError,
+                savedCard ->
                 {
-                    cardRepository.insert(newCard);
+                    if (card == null)
+                    {
+                        cardRepository.insert(savedCard);
+                    }
+                    else
+                    {
+                        cardRepository.update(savedCard);
+                    }
                     refreshCardList(activeStory.id());
-                    dialog.close();
-                }
-                catch (SQLException e)
+                },
+                () ->
                 {
-                    showError("Failed to create story card", e);
-                }
-            }
-            else
-            {
-                StoryCard updated = new StoryCard(card.id(), card.storyId(), title, triggers, contentText,
-                        pinnedBox.isSelected());
-                try
-                {
-                    cardRepository.update(updated);
-                    refreshCardList(activeStory.id());
-                    dialog.close();
-                }
-                catch (SQLException e)
-                {
-                    showError("Failed to update story card", e);
-                }
-            }
-        });
-
-        if (!isNew)
-        {
-            Button deleteButton = (Button) dialog.getDialogPane().lookupButton(deleteType);
-            deleteButton.addEventFilter(ActionEvent.ACTION, event ->
-            {
-                event.consume();
-                if (confirmDeleteCard(card.title()))
-                {
-                    deleteCard(card);
-                    dialog.close();
-                }
-            });
-        }
-
-        dialog.showAndWait();
+                    if (card != null && confirmDeleteCard(card.title()))
+                    {
+                        deleteCard(card);
+                        return true;
+                    }
+                    return false;
+                });
     }
 
     private void showGenerateCardDialog()
@@ -2170,147 +1985,28 @@ public class App extends Application
             showInfo("Auto Cards settings are not loaded yet.");
             return;
         }
-
-        Dialog<Void> dialog = new Dialog<>();
-        dialog.setTitle("Generate Story Card");
-        dialog.setHeaderText("Generate a new card from a prompt");
-        dialog.initOwner(primaryStage);
-
-        TextField titleField = new TextField();
-        TextArea contentArea = new TextArea();
-        contentArea.setWrapText(true);
-        contentArea.setPrefRowCount(6);
-        TextField triggersField = new TextField();
-        CheckBox pinnedBox = new CheckBox("Pinned");
-        TextArea promptArea = new TextArea();
-        promptArea.setWrapText(true);
-        promptArea.setPrefRowCount(4);
-        promptArea.setPromptText("Example: Generate a new character that is a male warrior.");
-
-        VBox content = new VBox(8,
-                new Label("Prompt"), promptArea,
-                new Label("Title"), titleField,
-                new Label("Content"), contentArea,
-                new Label("Triggers (comma separated)"), triggersField,
-                pinnedBox);
-        content.setPadding(new Insets(10));
-
-        Button generateButton = new Button("Generate");
-        Button createButton = new Button("Create");
-        Button createAndCloseButton = new Button("Create and Close");
-        Button cancelButton = new Button("Cancel");
-
-        Region spacer = new Region();
-        HBox.setHgrow(spacer, Priority.ALWAYS);
-        HBox rightActions = new HBox(8, createButton, createAndCloseButton, cancelButton);
-        rightActions.setAlignment(Pos.CENTER_RIGHT);
-        HBox actions = new HBox(8, generateButton, spacer, rightActions);
-        actions.setAlignment(Pos.CENTER_LEFT);
-        content.getChildren().add(actions);
-
-        dialog.getDialogPane().setContent(content);
-        dialog.getDialogPane().getButtonTypes().add(ButtonType.CANCEL);
-        Node cancelNode = dialog.getDialogPane().lookupButton(ButtonType.CANCEL);
-        if (cancelNode != null)
-        {
-            cancelNode.setVisible(false);
-            cancelNode.setManaged(false);
-        }
-
-        Runnable saveAndKeepOpen = () ->
-        {
-            String title = titleField.getText().trim();
-            if (title.isEmpty())
-            {
-                showInfo("Card title cannot be empty.");
-                return;
-            }
-            String contentText = contentArea.getText().trim();
-            if (contentText.isEmpty())
-            {
-                showInfo("Card content cannot be empty.");
-                return;
-            }
-            String triggers = triggersField.getText().trim();
-
-            StoryCard newCard = new StoryCard(Ids.newId(), activeStory.id(), title, triggers, contentText,
-                    pinnedBox.isSelected());
-            try
-            {
-                cardRepository.insert(newCard);
-                refreshCardList(activeStory.id());
-                titleField.clear();
-                triggersField.clear();
-                contentArea.clear();
-            }
-            catch (SQLException e)
-            {
-                showError("Failed to create story card", e);
-            }
-        };
-
-        createButton.setOnAction(event -> saveAndKeepOpen.run());
-        createAndCloseButton.setOnAction(event ->
-        {
-            int before = cardItems.size();
-            saveAndKeepOpen.run();
-            if (cardItems.size() > before)
-            {
-                dialog.close();
-            }
-        });
-        cancelButton.setOnAction(event -> dialog.close());
-
-        generateButton.setOnAction(event ->
-        {
-            String request = promptArea.getText().trim();
-            if (request.isEmpty())
-            {
-                showInfo("Prompt cannot be empty.");
-                return;
-            }
-
-            final Story story = activeStory;
-            generateButton.setDisable(true);
-            createButton.setDisable(true);
-            createAndCloseButton.setDisable(true);
-            statusLabel.setText("Generating story card...");
-            submitTask(() ->
-                    {
-                        return autoCardsCoordinator.generateCardDraftFromPrompt(
+        Story story = activeStory;
+        StoryCardDialogs.showGenerateDialog(
+                primaryStage,
+                activeStory.id(),
+                this::showInfo,
+                this::showError,
+                text -> statusLabel.setText(text),
+                (request, onSuccess, onFailure) -> submitTask(
+                        () -> autoCardsCoordinator.generateCardDraftFromPrompt(
                                 story,
                                 request,
                                 appSettings,
                                 appAutoCardsSettings,
                                 activeModelSettings,
-                                modelAutoCardsSettings);
-                    },
-                    generated ->
-                    {
-                        generateButton.setDisable(false);
-                        createButton.setDisable(false);
-                        createAndCloseButton.setDisable(false);
-                        if (generated == null)
-                        {
-                            statusLabel.setText("Generate card: no result");
-                            return;
-                        }
-                        titleField.setText(generated.title());
-                        triggersField.setText(generated.triggers());
-                        contentArea.setText(generated.content());
-                        statusLabel.setText("Generated story card draft");
-                    },
-                    error ->
-                    {
-                        generateButton.setDisable(false);
-                        createButton.setDisable(false);
-                        createAndCloseButton.setDisable(false);
-                        statusLabel.setText("Generate card failed");
-                        showError("Failed to generate story card", error);
-                    });
-        });
-
-        dialog.showAndWait();
+                                modelAutoCardsSettings),
+                        onSuccess,
+                        onFailure),
+                savedCard ->
+                {
+                    cardRepository.insert(savedCard);
+                    refreshCardList(activeStory.id());
+                });
     }
 
     private void showSeeDialog()
@@ -2789,75 +2485,13 @@ public class App extends Application
             return;
         }
 
-        Dialog<Void> dialog = new Dialog<>();
-        dialog.setTitle("Import Story Cards");
-        dialog.setHeaderText("Import AI Dungeon story cards");
-        dialog.initOwner(primaryStage);
-
-        TextField fileField = new TextField();
-        fileField.setEditable(false);
-        fileField.setPromptText("Select a JSON file");
-
-        Button browseButton = new Button("Choose File");
-        FileChooser chooser = new FileChooser();
-        chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("JSON Files", "*.json"));
-        browseButton.setOnAction(event ->
-        {
-            java.io.File selected = chooser.showOpenDialog(primaryStage);
-            if (selected != null)
-            {
-                fileField.setText(selected.getAbsolutePath());
-            }
-        });
-
-        HBox fileRow = new HBox(8, fileField, browseButton);
-        HBox.setHgrow(fileField, Priority.ALWAYS);
-
-        CheckBox replaceBox = new CheckBox("Replace existing cards");
-        replaceBox.setSelected(false);
-
-        Button importButton = new Button("Import");
-        importButton.setDisable(true);
-        Button cancelButton = new Button("Cancel");
-
-        fileField.textProperty().addListener((obs, oldValue, newValue) ->
-        {
-            importButton.setDisable(newValue == null || newValue.isBlank());
-        });
-
-        importButton.setOnAction(event ->
-        {
-            try
-            {
-                int imported = aiDungeonImports.importStoryCards(Path.of(fileField.getText()), activeStory.id(),
-                        replaceBox.isSelected());
-                refreshCardList(activeStory.id());
-                dialog.close();
-                showInfo("Imported " + imported + " cards.");
-            }
-            catch (Exception e)
-            {
-                showError("Failed to import cards", e);
-            }
-        });
-
-        cancelButton.setOnAction(event -> dialog.close());
-
-        HBox buttons = new HBox(8, importButton, cancelButton);
-        buttons.setAlignment(Pos.CENTER_RIGHT);
-
-        VBox content = new VBox(12, fileRow, replaceBox, buttons);
-        content.setPadding(new Insets(12));
-
-        dialog.getDialogPane().setContent(content);
-        dialog.getDialogPane().getButtonTypes().add(ButtonType.CANCEL);
-        Node cancelNode = dialog.getDialogPane().lookupButton(ButtonType.CANCEL);
-        if (cancelNode != null)
-        {
-            cancelNode.setVisible(false);
-            cancelNode.setManaged(false);
-        }
-        dialog.showAndWait();
+        String storyId = activeStory.id();
+        ImportDialogs.showStoryCardsImportDialog(
+                primaryStage,
+                this::showInfo,
+                this::showError,
+                (path, replaceExisting) -> aiDungeonImports.importStoryCards(path, storyId, replaceExisting),
+                imported -> refreshCardList(storyId));
     }
 
     private <T> T runOnUiThreadAndWait(java.util.concurrent.Callable<T> action)
