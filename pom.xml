@@ -1,4 +1,4 @@
-﻿<project xmlns="http://maven.apache.org/POM/4.0.0"
+<project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
@@ -13,30 +13,41 @@
     <maven.compiler.release>25</maven.compiler.release>
 
     <javafx.version>25.0.1</javafx.version>
+    <javafx.platform>win</javafx.platform>
     <javafx.maven.plugin.version>0.0.8</javafx.maven.plugin.version>
 
     <junit.jupiter.version>5.10.3</junit.jupiter.version>
+    <jpackage.plugin.version>1.7.3</jpackage.plugin.version>
 
-    <!-- App identity -->
     <app.name>LlamaQuill</app.name>
     <app.vendor>com.llamaquill</app.vendor>
-
-    <!-- Your module + main class (matches your existing javafx plugin mainClass) -->
     <app.module>com.llamaquill</app.module>
     <app.mainClass>com.llamaquill.App</app.mainClass>
+    <app.description>LlamaQuill desktop app</app.description>
 
-    <!-- Where we stage jars for jpackage -->
     <staging.dir>${project.build.directory}/mods</staging.dir>
-
-    <!-- jpackage plugin version -->
-    <jpackage.plugin.version>1.7.3</jpackage.plugin.version>
+    <dist.dir>${project.build.directory}/dist</dist.dir>
+    <release.package.type>APP_IMAGE</release.package.type>
   </properties>
 
   <dependencies>
     <dependency>
       <groupId>org.openjfx</groupId>
+      <artifactId>javafx-base</artifactId>
+      <version>${javafx.version}</version>
+      <classifier>${javafx.platform}</classifier>
+    </dependency>
+    <dependency>
+      <groupId>org.openjfx</groupId>
       <artifactId>javafx-controls</artifactId>
       <version>${javafx.version}</version>
+      <classifier>${javafx.platform}</classifier>
+    </dependency>
+    <dependency>
+      <groupId>org.openjfx</groupId>
+      <artifactId>javafx-graphics</artifactId>
+      <version>${javafx.version}</version>
+      <classifier>${javafx.platform}</classifier>
     </dependency>
 
     <dependency>
@@ -61,7 +72,6 @@
 
   <build>
     <plugins>
-      <!-- Java compilation -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-compiler-plugin</artifactId>
@@ -71,7 +81,6 @@
         </configuration>
       </plugin>
 
-      <!-- Dev run -->
       <plugin>
         <groupId>org.openjfx</groupId>
         <artifactId>javafx-maven-plugin</artifactId>
@@ -81,69 +90,114 @@
         </configuration>
       </plugin>
 
-      <!-- Tests -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.2.5</version>
       </plugin>
-
-      <!-- Stage your app jar into target/mods -->
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-jar-plugin</artifactId>
-        <version>3.4.2</version>
-        <configuration>
-          <outputDirectory>${staging.dir}</outputDirectory>
-        </configuration>
-      </plugin>
-
-      <!-- Stage runtime dependencies into target/mods -->
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-dependency-plugin</artifactId>
-        <version>3.7.1</version>
-        <executions>
-          <execution>
-            <id>copy-runtime-dependencies</id>
-            <phase>package</phase>
-            <goals>
-              <goal>copy-dependencies</goal>
-            </goals>
-            <configuration>
-              <includeScope>runtime</includeScope>
-              <outputDirectory>${staging.dir}</outputDirectory>
-            </configuration>
-          </execution>
-        </executions>
-      </plugin>
-
-      <!-- Package using jpackage -->
-      <plugin>
-        <groupId>org.panteleyev</groupId>
-        <artifactId>jpackage-maven-plugin</artifactId>
-        <version>${jpackage.plugin.version}</version>
-        <configuration>
-          <name>${app.name}</name>
-          <vendor>${app.vendor}</vendor>
-          <appVersion>${project.version}</appVersion>
-
-          <!-- Use full JDK as runtime image for maximum compatibility first -->
-          <runtimeImage>${java.home}</runtimeImage>
-
-          <!-- Modular entry point -->
-          <module>${app.module}/${app.mainClass}</module>
-
-          <!-- Where the plugin should look for your jar + deps -->
-          <modulePaths>
-            <modulePath>${staging.dir}</modulePath>
-          </modulePaths>
-
-          <destination>${project.build.directory}/dist</destination>
-          <removeDestination>true</removeDestination>
-          <type>APP_IMAGE</type>
-        </configuration>
-      </plugin>
     </plugins>
   </build>
+
+  <profiles>
+    <profile>
+      <id>release</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-jar-plugin</artifactId>
+            <version>3.4.2</version>
+            <configuration>
+              <outputDirectory>${staging.dir}</outputDirectory>
+            </configuration>
+          </plugin>
+
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-dependency-plugin</artifactId>
+            <version>3.7.1</version>
+            <executions>
+              <execution>
+                <id>copy-runtime-dependencies</id>
+                <phase>package</phase>
+                <goals>
+                  <goal>copy-dependencies</goal>
+                </goals>
+                <configuration>
+                  <includeScope>runtime</includeScope>
+                  <outputDirectory>${staging.dir}</outputDirectory>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-antrun-plugin</artifactId>
+            <version>3.1.0</version>
+            <executions>
+              <execution>
+                <id>clean-jpackage-output</id>
+                <phase>prepare-package</phase>
+                <goals>
+                  <goal>run</goal>
+                </goals>
+                <configuration>
+                  <target>
+                    <mkdir dir="${dist.dir}"/>
+                    <attrib readonly="false" failonerror="false">
+                      <fileset dir="${dist.dir}" includes="**/*"/>
+                    </attrib>
+                    <delete dir="${dist.dir}" includeemptydirs="true" failonerror="false" quiet="true"/>
+                  </target>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
+            <groupId>org.panteleyev</groupId>
+            <artifactId>jpackage-maven-plugin</artifactId>
+            <version>${jpackage.plugin.version}</version>
+            <executions>
+              <execution>
+                <id>package-release-image</id>
+                <phase>package</phase>
+                <goals>
+                  <goal>jpackage</goal>
+                </goals>
+              </execution>
+            </executions>
+            <configuration>
+              <name>${app.name}</name>
+              <vendor>${app.vendor}</vendor>
+              <description>${app.description}</description>
+              <appVersion>${project.version}</appVersion>
+              <input>${staging.dir}</input>
+              <mainJar>${project.build.finalName}.jar</mainJar>
+              <mainClass>${app.mainClass}</mainClass>
+              <modulePaths>
+                <modulePath>${staging.dir}</modulePath>
+              </modulePaths>
+              <addModules>
+                <module>javafx.base</module>
+                <module>javafx.controls</module>
+                <module>javafx.graphics</module>
+                <module>java.net.http</module>
+                <module>java.sql</module>
+                <module>jdk.crypto.ec</module>
+              </addModules>
+              <destination>${dist.dir}</destination>
+              <removeDestination>true</removeDestination>
+              <type>${release.package.type}</type>
+              <jLinkOptions>
+                <option>--strip-debug</option>
+                <option>--no-header-files</option>
+                <option>--no-man-pages</option>
+              </jLinkOptions>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 </project>
