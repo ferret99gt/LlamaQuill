@@ -1,4 +1,4 @@
-﻿package com.llamaquill;
+package com.llamaquill;
 
 import com.llamaquill.autocards.AutoCards;
 import com.llamaquill.autocards.AutoCardsCoordinator;
@@ -15,6 +15,8 @@ import com.llamaquill.db.AppAutoCardsRepository;
 import com.llamaquill.db.StoryAutoCardsRepository;
 import com.llamaquill.db.ModelAutoCardsRepository;
 import com.llamaquill.generation.GenerationCoordinator;
+import com.llamaquill.generation.PromptDialog;
+import com.llamaquill.generation.StoryPromptCoordinator;
 import com.llamaquill.image.ImageGenerationCoordinator;
 import com.llamaquill.image.SeeDialog;
 import com.llamaquill.model.Block;
@@ -119,6 +121,7 @@ public class App extends Application
     private ModelAutoCardsRepository modelAutoCardsRepository;
     private PromptCompiler promptCompiler;
     private GenerationCoordinator generationCoordinator;
+    private StoryPromptCoordinator storyPromptCoordinator;
     private ImageGenerationCoordinator imageGenerationCoordinator;
     private AutoCardsService autoCardsService;
     private AutoCardsCoordinator autoCardsCoordinator;
@@ -148,6 +151,7 @@ public class App extends Application
     private Button deleteButton;
     private Button retryHistoryButton;
     private Button seeButton;
+    private Button promptButton;
 
     private Button newStoryButton;
     private Button importAdventureButton;
@@ -228,6 +232,7 @@ public class App extends Application
     private final Map<String, Double> tokenScaleByModel = new HashMap<>();
 
     private static final String DEFAULT_SEE_REQUEST = "Generate an image prompt for the most recent scene in the story.";
+    private static final String DEFAULT_ONE_SHOT_SYSTEM_PROMPT = "You respond to the user's prompt using the existing story context.";
 
     private sealed interface RetryHistoryEntry permits TextRetryHistoryEntry, ImageRetryHistoryEntry
     {
@@ -284,6 +289,7 @@ public class App extends Application
                     ollamaClient);
             autoCardsService = new AutoCardsService(ollamaClient, promptCompiler);
             autoCardsCoordinator = new AutoCardsCoordinator(blockRepository, cardRepository, autoCardsService);
+            storyPromptCoordinator = new StoryPromptCoordinator(blockRepository, cardRepository, autoCardsService);
             imageGenerationCoordinator = new ImageGenerationCoordinator(imageRepository, blockRepository, storyRepository,
                     cardRepository, autoCardsService, comfyUiClient);
             appSettings = loadOrCreateAppSettings();
@@ -327,6 +333,9 @@ public class App extends Application
         seeButton = new Button("See");
         seeButton.setOnAction(event -> showSeeDialog());
 
+        promptButton = new Button("Prompt");
+        promptButton.setOnAction(event -> showPromptDialog());
+
         storyPaneController = new StoryPaneController(
                 primaryStage,
                 this::submitTurn,
@@ -347,7 +356,7 @@ public class App extends Application
         root.getStyleClass().add("app-root");
         root.setLeft(buildStorySidebar());
         root.setCenter(storyPaneController.buildCenterPane(
-                takeTurnButton, continueButton, seeButton, retryButton, retryHistoryButton, deleteButton));
+                takeTurnButton, continueButton, seeButton, retryButton, retryHistoryButton, deleteButton, promptButton));
         root.setRight(buildRightSidebar());
         root.setBottom(statusBar);
 
@@ -714,9 +723,9 @@ public class App extends Application
             }
         });
 
-        autoCardsMaxTokensCreate = buildSpinner(32, 1024, 256);
-        autoCardsMaxTokensUpdate = buildSpinner(32, 1024, 192);
-        autoCardsMaxTokensSummarize = buildSpinner(32, 1024, 192);
+        autoCardsMaxTokensCreate = buildSpinner(32, 2048, 256);
+        autoCardsMaxTokensUpdate = buildSpinner(32, 2048, 192);
+        autoCardsMaxTokensSummarize = buildSpinner(32, 2048, 192);
         autoCardsMaxTokensCreate.valueProperty().addListener((obs, oldValue, newValue) ->
                 updateModelAutoCardsTokens());
         autoCardsMaxTokensUpdate.valueProperty().addListener((obs, oldValue, newValue) ->
@@ -1899,6 +1908,41 @@ public class App extends Application
                 });
     }
 
+    private void showPromptDialog()
+    {
+        if (activeStory == null)
+        {
+            showInfo("Select a story first.");
+            return;
+        }
+        if (appAutoCardsSettings == null || modelAutoCardsSettings == null)
+        {
+            showInfo("Auto Cards settings are not loaded yet.");
+            return;
+        }
+
+        Story story = activeStory;
+        PromptDialog.show(
+                primaryStage,
+                DEFAULT_ONE_SHOT_SYSTEM_PROMPT,
+                this::showInfo,
+                this::showError,
+                text -> statusLabel.setText(text),
+                () -> setStoryActionButtonsBusy(true),
+                this::restoreStoryActionButtonsState,
+                (systemPrompt, userPrompt, onSuccess, onFailure) -> submitTask(
+                        () -> storyPromptCoordinator.generateResponse(
+                                story,
+                                systemPrompt,
+                                userPrompt,
+                                appSettings,
+                                appAutoCardsSettings,
+                                activeModelSettings,
+                                modelAutoCardsSettings),
+                        onSuccess,
+                        onFailure));
+    }
+
     private void showSeeDialog()
     {
         showSeeDialog(null, null);
@@ -2448,6 +2492,7 @@ public class App extends Application
         deleteButton.setDisable(!enabled);
         retryHistoryButton.setDisable(!enabled || retryHistory.size() < 2);
         seeButton.setDisable(!enabled);
+        promptButton.setDisable(!enabled);
         systemPromptArea.setDisable(!enabled);
         plotEssentialsArea.setDisable(!enabled);
         authorNoteArea.setDisable(!enabled);

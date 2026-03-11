@@ -228,6 +228,15 @@ public class AutoCardsService
         return normalizeOutput(ollamaClient.generate(prompt, autoSettings));
     }
 
+    public String generateOneShotResponse(String systemPrompt, String userPrompt, String excerpt,
+            String fullStoryPromptPrefix, AppSettings appSettings, ModelSettings modelSettings)
+            throws IOException, InterruptedException
+    {
+        String prompt = buildOneShotPrompt(systemPrompt, userPrompt, excerpt, fullStoryPromptPrefix);
+        GenerationSettings oneShotSettings = buildUnboundedGenerationSettings(appSettings, modelSettings);
+        return normalizePromptResponse(ollamaClient.generate(prompt, oneShotSettings));
+    }
+
     public String enforceCardLength(String content, boolean summarize, int limit, String title, String triggers,
             String excerpt, String fullStoryPromptPrefix, boolean useBulletedLists, AppSettings appSettings,
             ModelSettings modelSettings,
@@ -289,6 +298,66 @@ public class AutoCardsService
                 modelSettings.topK(), modelSettings.topP(), modelSettings.minP(), modelSettings.presencePenalty(),
                 modelSettings.frequencyPenalty(), modelSettings.repetitionPenalty(), appSettings.minStoryWindow(),
                 appSettings.storyCardLookback(), appSettings.anPlacement());
+    }
+
+    private static GenerationSettings buildUnboundedGenerationSettings(AppSettings appSettings, ModelSettings modelSettings)
+    {
+        return new GenerationSettings(appSettings.contextLimit(), -1, modelSettings.temperature(),
+                modelSettings.topK(), modelSettings.topP(), modelSettings.minP(), modelSettings.presencePenalty(),
+                modelSettings.frequencyPenalty(), modelSettings.repetitionPenalty(), appSettings.minStoryWindow(),
+                appSettings.storyCardLookback(), appSettings.anPlacement());
+    }
+
+    private static String buildOneShotPrompt(String systemPrompt, String userPrompt, String excerpt,
+            String fullStoryPromptPrefix)
+    {
+        StringBuilder prompt = new StringBuilder();
+        if (fullStoryPromptPrefix != null && !fullStoryPromptPrefix.isBlank())
+        {
+            String trimmedPrefix = fullStoryPromptPrefix.trim();
+            prompt.append(trimmedPrefix);
+            if (!trimmedPrefix.endsWith("<|im_end|>"))
+            {
+                prompt.append("<|im_end|>");
+            }
+            prompt.append('\n');
+        }
+
+        appendChatMessage(prompt, "system", systemPrompt, true);
+        appendChatMessage(prompt, "user", excerpt == null || excerpt.isBlank() ? "" : "# Story excerpt:\n" + excerpt, true);
+        appendChatMessage(prompt, "user", userPrompt, true);
+        if (prompt.length() > 0)
+        {
+            prompt.append('\n');
+        }
+        prompt.append("<|im_start|>assistant\n");
+        return prompt.toString();
+    }
+
+    private static void appendChatMessage(StringBuilder prompt, String role, String content, boolean close)
+    {
+        if (content == null || content.isBlank())
+        {
+            return;
+        }
+        if (prompt.length() > 0 && prompt.charAt(prompt.length() - 1) != '\n')
+        {
+            prompt.append('\n');
+        }
+        prompt.append("<|im_start|>").append(role).append('\n').append(content);
+        if (close)
+        {
+            prompt.append("<|im_end|>");
+        }
+    }
+
+    private static String normalizePromptResponse(String output)
+    {
+        if (output == null)
+        {
+            return "";
+        }
+        return output.replace("\r\n", "\n").trim();
     }
 
     private static String normalizeOutput(String output)

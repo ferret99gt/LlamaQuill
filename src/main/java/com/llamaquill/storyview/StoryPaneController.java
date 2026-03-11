@@ -101,7 +101,7 @@ public final class StoryPaneController
     }
 
     public BorderPane buildCenterPane(Button takeTurnButton, Button continueButton, Button seeButton, Button retryButton,
-            Button retryHistoryButton, Button deleteButton)
+            Button retryHistoryButton, Button deleteButton, Button promptButton)
     {
         BorderPane centerPane = new BorderPane();
         centerPane.getStyleClass().add("center-pane");
@@ -113,7 +113,10 @@ public final class StoryPaneController
         storyViewport.setClip(viewportClip);
         centerPane.setCenter(storyViewport);
 
-        storyActionRow = new HBox(8, takeTurnButton, continueButton, seeButton, retryButton, retryHistoryButton, deleteButton);
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+        storyActionRow = new HBox(8, takeTurnButton, continueButton, seeButton, retryButton, retryHistoryButton, deleteButton,
+                spacer, promptButton);
         storyActionRow.getStyleClass().add("action-row");
         storyActionRow.setAlignment(Pos.CENTER_LEFT);
         storyActionRow.setPadding(new Insets(10));
