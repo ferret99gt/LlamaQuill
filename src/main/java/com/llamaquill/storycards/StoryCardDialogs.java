@@ -153,7 +153,7 @@ public final class StoryCardDialogs
         TextArea promptArea = new TextArea();
         promptArea.setWrapText(true);
         promptArea.setPrefRowCount(4);
-        promptArea.setPromptText("Example: Generate a new character that is a male warrior.");
+        promptArea.setPromptText("Example: Generate a new character who is a wandering mercenary.");
 
         VBox content = new VBox(8,
                 new Label("Prompt"), promptArea,

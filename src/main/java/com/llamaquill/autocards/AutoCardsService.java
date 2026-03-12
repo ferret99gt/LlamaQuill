@@ -210,7 +210,7 @@ public class AutoCardsService
                     .append("\n\n");
         }
         String userPrompt = """
-                Your job is to generate a prompt for an image generator that describes the most recent scene in the story. The prompt must describe each of the important subjects (gender, age, hair, eyes, clothing or naked), what they are doing (eating, walking, holding hands, using a weapon, etc), and where they are doing it (describe the room and theme, such as "a opulent castle bedroom during the morning").
+                Your job is to generate a prompt for an image generator that describes the most recent scene in the story. The prompt must describe each of the important subjects (gender, age, hair, eyes, build, clothing, and other visible details), what they are doing (eating, walking, talking, holding an object, using a weapon, etc), and where they are doing it (describe the room and theme, such as "an opulent castle bedroom during the morning").
                 """;
         user.append(userPrompt);
         if(!trimmedRequest.isBlank())
