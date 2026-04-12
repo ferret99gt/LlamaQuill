@@ -71,11 +71,11 @@ public final class AutoCardsCoordinator
             return new RunResult(0, 0, true);
         }
 
-        String fullStoryPromptPrefix = "";
+        AutoCardsService.PromptContext fullStoryContext = AutoCardsService.PromptContext.empty();
         if (AutoCards.CONTEXT_MODE_FULL_STORY.equals(
                 AutoCards.normalizeContextMode(appAutoCardsSettings.contextMode())))
         {
-            fullStoryPromptPrefix = autoCardsService.buildFullStoryPrompt(
+            fullStoryContext = autoCardsService.buildFullStoryContext(
                     story,
                     currentBlocks,
                     currentCards,
@@ -132,7 +132,7 @@ public final class AutoCardsCoordinator
                 String updatedContent = autoCardsService.generateCardUpdate(
                         existing,
                         excerpt,
-                        fullStoryPromptPrefix,
+                        fullStoryContext,
                         appAutoCardsSettings.useBulletedLists(),
                         appSettings,
                         modelSettings,
@@ -149,7 +149,7 @@ public final class AutoCardsCoordinator
                         existing.title(),
                         existing.triggers(),
                         excerpt,
-                        fullStoryPromptPrefix,
+                        fullStoryContext,
                         appAutoCardsSettings.useBulletedLists(),
                         appSettings,
                         modelSettings,
@@ -182,7 +182,7 @@ public final class AutoCardsCoordinator
             String content = autoCardsService.generateCardCreate(
                     candidate,
                     excerpt,
-                    fullStoryPromptPrefix,
+                    fullStoryContext,
                     appAutoCardsSettings.useBulletedLists(),
                     appSettings,
                     modelSettings,
@@ -199,7 +199,7 @@ public final class AutoCardsCoordinator
                     candidate.title(),
                     candidate.triggers(),
                     excerpt,
-                    fullStoryPromptPrefix,
+                    fullStoryContext,
                     appAutoCardsSettings.useBulletedLists(),
                     appSettings,
                     modelSettings,
@@ -246,10 +246,10 @@ public final class AutoCardsCoordinator
             excerpt = buildExcerpt(currentBlocks, appAutoCardsSettings.candidateWindow());
         }
 
-        String fullStoryPromptPrefix = "";
+        AutoCardsService.PromptContext fullStoryContext = AutoCardsService.PromptContext.empty();
         if (AutoCards.CONTEXT_MODE_FULL_STORY.equals(contextMode))
         {
-            fullStoryPromptPrefix = autoCardsService.buildFullStoryPrompt(
+            fullStoryContext = autoCardsService.buildFullStoryContext(
                     story,
                     currentBlocks,
                     currentCards,
@@ -261,7 +261,7 @@ public final class AutoCardsCoordinator
         AutoCards.GeneratedCard generated = autoCardsService.generateCardFromUserPrompt(
                 request,
                 excerpt,
-                fullStoryPromptPrefix,
+                fullStoryContext,
                 appAutoCardsSettings.useBulletedLists(),
                 appSettings,
                 modelSettings,
@@ -278,7 +278,7 @@ public final class AutoCardsCoordinator
                 generated.title(),
                 generated.triggers(),
                 excerpt,
-                fullStoryPromptPrefix,
+                fullStoryContext,
                 appAutoCardsSettings.useBulletedLists(),
                 appSettings,
                 modelSettings,

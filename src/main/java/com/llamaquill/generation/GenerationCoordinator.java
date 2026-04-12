@@ -4,6 +4,7 @@ import com.llamaquill.db.BlockRepository;
 import com.llamaquill.db.StoryCardRepository;
 import com.llamaquill.db.StoryRepository;
 import com.llamaquill.model.Block;
+import com.llamaquill.model.ChatMessage;
 import com.llamaquill.model.GenerationSettings;
 import com.llamaquill.model.Role;
 import com.llamaquill.model.Story;
@@ -38,7 +39,8 @@ public final class GenerationCoordinator
         this.ollamaClient = Objects.requireNonNull(ollamaClient, "ollamaClient");
     }
 
-    public ContinueResult continueStory(Story story, GenerationSettings settings, AutoCardsRunner autoCardsRunner)
+    public ContinueResult continueStory(Story story, GenerationSettings settings, boolean useOllamaTemplates,
+            AutoCardsRunner autoCardsRunner)
             throws Exception
     {
         Objects.requireNonNull(story, "story");
@@ -52,7 +54,7 @@ public final class GenerationCoordinator
         }
 
         PromptCompilation compilation = promptCompiler.compile(story, currentBlocks, currentCards, settings);
-        String cleaned = generateContinuationWithFallback(compilation.prompt(), settings);
+        String cleaned = generateContinuationWithFallback(compilation, settings, useOllamaTemplates);
         if (cleaned.isBlank())
         {
             return new ContinueResult(story, null, compilation.estimatedTokens());
@@ -66,7 +68,8 @@ public final class GenerationCoordinator
         return new ContinueResult(updatedStory, block, compilation.estimatedTokens());
     }
 
-    public RetryResult retryAssistantHead(Story story, List<Block> blocks, Block head, GenerationSettings settings)
+    public RetryResult retryAssistantHead(Story story, List<Block> blocks, Block head, GenerationSettings settings,
+            boolean useOllamaTemplates)
             throws IOException, InterruptedException, SQLException
     {
         Objects.requireNonNull(story, "story");
@@ -79,7 +82,7 @@ public final class GenerationCoordinator
         List<StoryCard> currentCards = storyCardRepository.listForStory(story.id());
 
         PromptCompilation compilation = promptCompiler.compile(story, promptBlocks, currentCards, settings);
-        String cleaned = generateContinuationWithFallback(compilation.prompt(), settings);
+        String cleaned = generateContinuationWithFallback(compilation, settings, useOllamaTemplates);
         if (cleaned.isBlank())
         {
             return new RetryResult(null, compilation.estimatedTokens());
@@ -90,7 +93,8 @@ public final class GenerationCoordinator
         return new RetryResult(updated, compilation.estimatedTokens());
     }
 
-    public TurnResult takeTurn(Story story, String userText, GenerationSettings settings, AutoCardsRunner autoCardsRunner)
+    public TurnResult takeTurn(Story story, String userText, GenerationSettings settings, boolean useOllamaTemplates,
+            AutoCardsRunner autoCardsRunner)
             throws Exception
     {
         Objects.requireNonNull(story, "story");
@@ -114,7 +118,7 @@ public final class GenerationCoordinator
         currentCards = storyCardRepository.listForStory(story.id());
 
         PromptCompilation compilation = promptCompiler.compile(story, currentBlocks, currentCards, settings);
-        String response = ollamaClient.generate(compilation.prompt(), settings);
+        String response = generateResponse(compilation, settings, useOllamaTemplates);
         String cleaned = normalizeOutput(response);
         if (cleaned.isBlank())
         {
@@ -138,31 +142,70 @@ public final class GenerationCoordinator
         return updatedStory;
     }
 
-    private String generateContinuationWithFallback(String prompt, GenerationSettings settings)
+    private String generateContinuationWithFallback(PromptCompilation compilation, GenerationSettings settings,
+            boolean useOllamaTemplates)
             throws IOException, InterruptedException
     {
-        String cleaned = normalizeOutput(ollamaClient.generate(prompt, settings));
+        String cleaned = normalizeOutput(generateResponse(compilation, settings, useOllamaTemplates));
         if (!cleaned.isBlank())
         {
             return cleaned;
         }
 
-        String withSpace = prompt + " ";
-        cleaned = normalizeOutput(ollamaClient.generate(withSpace, settings));
+        cleaned = normalizeOutput(generateResponseWithAssistantSuffix(compilation, settings, useOllamaTemplates, " "));
         if (!cleaned.isBlank())
         {
             System.out.println("Continuation fallback succeeded with trailing space.");
             return " " + cleaned;
         }
 
-        String withNewline = prompt + "\n";
-        cleaned = normalizeOutput(ollamaClient.generate(withNewline, settings));
+        cleaned = normalizeOutput(generateResponseWithAssistantSuffix(compilation, settings, useOllamaTemplates, "\n"));
         if (!cleaned.isBlank())
         {
             System.out.println("Continuation fallback succeeded with trailing newline.");
             return "\n" + cleaned;
         }
         return cleaned;
+    }
+
+    private String generateResponse(PromptCompilation compilation, GenerationSettings settings, boolean useOllamaTemplates)
+            throws IOException, InterruptedException
+    {
+        if (useOllamaTemplates)
+        {
+            return ollamaClient.chat(compilation.messages(), settings);
+        }
+        return ollamaClient.generate(compilation.prompt(), settings);
+    }
+
+    private String generateResponseWithAssistantSuffix(PromptCompilation compilation, GenerationSettings settings,
+            boolean useOllamaTemplates, String suffix) throws IOException, InterruptedException
+    {
+        if (!useOllamaTemplates)
+        {
+            return ollamaClient.generate(compilation.prompt() + suffix, settings);
+        }
+        return ollamaClient.chat(withAssistantSuffix(compilation.messages(), suffix), settings);
+    }
+
+    private static List<ChatMessage> withAssistantSuffix(List<ChatMessage> messages, String suffix)
+    {
+        List<ChatMessage> updated = new ArrayList<>(messages);
+        if (updated.isEmpty())
+        {
+            updated.add(new ChatMessage("assistant", suffix));
+            return updated;
+        }
+
+        ChatMessage last = updated.getLast();
+        if ("assistant".equals(last.role()))
+        {
+            updated.set(updated.size() - 1, new ChatMessage(last.role(), last.content() + suffix));
+            return updated;
+        }
+
+        updated.add(new ChatMessage("assistant", suffix));
+        return updated;
     }
 
     private static String normalizeOutput(String output)

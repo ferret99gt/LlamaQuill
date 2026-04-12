@@ -1,5 +1,6 @@
 package com.llamaquill.autocards;
 
+import com.llamaquill.model.ChatMessage;
 import com.llamaquill.model.StoryCard;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -484,6 +485,24 @@ public final class AutoCards
         return buildChatPrompt(parts.system(), parts.user(), parts.assistant());
     }
 
+    public static List<ChatMessage> buildChatMessages(String system, String user)
+    {
+        return buildChatMessages(new PromptParts(system, user, ""));
+    }
+
+    public static List<ChatMessage> buildChatMessages(PromptParts parts)
+    {
+        if (parts == null)
+        {
+            return List.of();
+        }
+        List<ChatMessage> messages = new ArrayList<>(3);
+        appendChatMessage(messages, "system", parts.system());
+        appendChatMessage(messages, "user", parts.user());
+        appendChatMessage(messages, "assistant", parts.assistant());
+        return List.copyOf(messages);
+    }
+
     private static String buildChatPrompt(String system, String user, String assistant)
     {
         String systemText = system == null ? "" : system.trim();
@@ -508,6 +527,16 @@ public final class AutoCards
             prompt.append(assistantText);
         }
         return prompt.toString();
+    }
+
+    private static void appendChatMessage(List<ChatMessage> messages, String role, String content)
+    {
+        String normalized = content == null ? "" : content.trim();
+        if (normalized.isBlank())
+        {
+            return;
+        }
+        messages.add(new ChatMessage(role, normalized));
     }
 
     public static PromptParts buildPromptParts(String template, String title, String triggers, String content,

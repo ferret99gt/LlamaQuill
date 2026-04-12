@@ -73,10 +73,10 @@ public final class ImageGenerationCoordinator
             excerpt = buildAutoCardsExcerpt(currentBlocks, appAutoCardsSettings.candidateWindow());
         }
 
-        String fullStoryPromptPrefix = "";
+        AutoCardsService.PromptContext fullStoryContext = AutoCardsService.PromptContext.empty();
         if (AutoCards.CONTEXT_MODE_FULL_STORY.equals(contextMode))
         {
-            fullStoryPromptPrefix = autoCardsService.buildFullStoryPrompt(
+            fullStoryContext = autoCardsService.buildFullStoryContext(
                     story,
                     currentBlocks,
                     currentCards,
@@ -88,7 +88,7 @@ public final class ImageGenerationCoordinator
         return autoCardsService.generateImagePromptFromUserPrompt(
                 request,
                 excerpt,
-                fullStoryPromptPrefix,
+                fullStoryContext,
                 appSettings,
                 modelSettings,
                 modelAutoCardsSettings);

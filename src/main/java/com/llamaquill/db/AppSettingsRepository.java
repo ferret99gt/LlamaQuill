@@ -24,6 +24,7 @@ public class AppSettingsRepository
         try (PreparedStatement stmt = connection.prepareStatement("""
                 SELECT ollama_url, selected_model, context_limit, response_length,
                        min_story_window, story_card_lookback, an_placement, comfyui_url,
+                       use_ollama_templates,
                        comfy_workflow, comfy_width, comfy_height, comfy_batch_size
                 FROM app_settings
                 WHERE id = ?
@@ -40,6 +41,7 @@ public class AppSettingsRepository
                         rs.getString("ollama_url"),
                         rs.getString("comfyui_url"),
                         rs.getString("selected_model"),
+                        rs.getInt("use_ollama_templates") != 0,
                         rs.getInt("context_limit"),
                         rs.getInt("response_length"),
                         rs.getInt("min_story_window"),
@@ -59,12 +61,13 @@ public class AppSettingsRepository
                 INSERT INTO app_settings (
                     id, ollama_url, selected_model, context_limit, response_length,
                     min_story_window, story_card_lookback, an_placement, comfyui_url,
-                    comfy_workflow, comfy_width, comfy_height, comfy_batch_size
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    use_ollama_templates, comfy_workflow, comfy_width, comfy_height, comfy_batch_size
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     ollama_url = excluded.ollama_url,
                     comfyui_url = excluded.comfyui_url,
                     selected_model = excluded.selected_model,
+                    use_ollama_templates = excluded.use_ollama_templates,
                     context_limit = excluded.context_limit,
                     response_length = excluded.response_length,
                     min_story_window = excluded.min_story_window,
@@ -85,10 +88,11 @@ public class AppSettingsRepository
             stmt.setInt(7, settings.storyCardLookback());
             stmt.setInt(8, settings.anPlacement());
             stmt.setString(9, settings.comfyUiUrl());
-            stmt.setString(10, settings.comfyWorkflow());
-            stmt.setInt(11, settings.comfyWidth());
-            stmt.setInt(12, settings.comfyHeight());
-            stmt.setInt(13, settings.comfyBatchSize());
+            stmt.setInt(10, settings.useOllamaTemplates() ? 1 : 0);
+            stmt.setString(11, settings.comfyWorkflow());
+            stmt.setInt(12, settings.comfyWidth());
+            stmt.setInt(13, settings.comfyHeight());
+            stmt.setInt(14, settings.comfyBatchSize());
             stmt.executeUpdate();
         }
     }

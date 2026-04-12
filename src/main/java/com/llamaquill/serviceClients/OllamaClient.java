@@ -1,5 +1,6 @@
 ﻿package com.llamaquill.serviceClients;
 
+import com.llamaquill.model.ChatMessage;
 import com.llamaquill.model.GenerationSettings;
 
 import java.io.BufferedReader;
@@ -75,9 +76,18 @@ public class OllamaClient
 
     public String generate(String prompt, GenerationSettings settings) throws IOException, InterruptedException
     {
+        return executeStreaming("/api/generate", buildGeneratePayload(prompt, settings), "response");
+    }
+
+    public String chat(List<ChatMessage> messages, GenerationSettings settings) throws IOException, InterruptedException
+    {
+        return executeStreaming("/api/chat", buildChatPayload(messages, settings), "content");
+    }
+
+    private String executeStreaming(String path, String payload, String fieldName) throws IOException, InterruptedException
+    {
         lastPromptEvalCount = -1;
-        String payload = buildPayload(prompt, settings);
-        HttpRequest request = HttpRequest.newBuilder().uri(URI.create(host + "/api/generate")).timeout(Duration.ofMinutes(2))
+        HttpRequest request = HttpRequest.newBuilder().uri(URI.create(host + path)).timeout(Duration.ofMinutes(2))
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8)).build();
 
@@ -94,7 +104,7 @@ public class OllamaClient
             String line;
             while ((line = reader.readLine()) != null)
             {
-                String chunk = Json.extractStringField(line, "response");
+                String chunk = Json.extractStringField(line, fieldName);
                 if (chunk != null)
                 {
                     sb.append(chunk);
@@ -119,7 +129,7 @@ public class OllamaClient
         return sb.toString();
     }
 
-    private String buildPayload(String prompt, GenerationSettings settings)
+    private String buildGeneratePayload(String prompt, GenerationSettings settings)
     {
         StringBuilder sb = new StringBuilder();
         sb.append('{');
@@ -127,6 +137,43 @@ public class OllamaClient
         sb.append(",\"prompt\":\"").append(Json.escape(prompt)).append("\"");
         sb.append(",\"raw\":true");
         sb.append(",\"stream\":true");
+        appendOptions(sb, settings);
+        sb.append('}');
+        return sb.toString();
+    }
+
+    private String buildChatPayload(List<ChatMessage> messages, GenerationSettings settings)
+    {
+        StringBuilder sb = new StringBuilder();
+        sb.append('{');
+        sb.append("\"model\":\"").append(Json.escape(model)).append("\"");
+        sb.append(",\"messages\":[");
+        boolean first = true;
+        for (ChatMessage message : messages == null ? List.<ChatMessage>of() : messages)
+        {
+            if (message == null || message.role().isBlank() || message.content().isBlank())
+            {
+                continue;
+            }
+            if (!first)
+            {
+                sb.append(',');
+            }
+            first = false;
+            sb.append('{');
+            sb.append("\"role\":\"").append(Json.escape(message.role())).append("\"");
+            sb.append(",\"content\":\"").append(Json.escape(message.content())).append("\"");
+            sb.append('}');
+        }
+        sb.append(']');
+        sb.append(",\"stream\":true");
+        appendOptions(sb, settings);
+        sb.append('}');
+        return sb.toString();
+    }
+
+    private void appendOptions(StringBuilder sb, GenerationSettings settings)
+    {
         sb.append(",\"options\":{");
         sb.append("\"num_ctx\":").append(settings.contextLimit());
         sb.append(",\"temperature\":").append(settings.temperature());
@@ -138,8 +185,6 @@ public class OllamaClient
         sb.append(",\"repeat_penalty\":").append(settings.repetitionPenalty());
         sb.append(",\"num_predict\":").append(settings.responseLength());
         sb.append('}');
-        sb.append('}');
-        return sb.toString();
     }
 
     private static final class Json

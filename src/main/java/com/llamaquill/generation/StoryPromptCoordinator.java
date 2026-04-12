@@ -50,10 +50,10 @@ public final class StoryPromptCoordinator
             excerpt = buildExcerpt(currentBlocks, appAutoCardsSettings.candidateWindow());
         }
 
-        String fullStoryPromptPrefix = "";
+        AutoCardsService.PromptContext fullStoryContext = AutoCardsService.PromptContext.empty();
         if (AutoCards.CONTEXT_MODE_FULL_STORY.equals(contextMode))
         {
-            fullStoryPromptPrefix = autoCardsService.buildFullStoryPrompt(
+            fullStoryContext = autoCardsService.buildFullStoryContext(
                     story,
                     currentBlocks,
                     currentCards,
@@ -66,7 +66,7 @@ public final class StoryPromptCoordinator
                 systemPrompt,
                 userPrompt,
                 excerpt,
-                fullStoryPromptPrefix,
+                fullStoryContext,
                 appSettings,
                 modelSettings);
     }

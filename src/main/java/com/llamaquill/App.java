@@ -214,6 +214,7 @@ public class App extends Application
     private Spinner<Integer> storyCardLookbackSpinner;
     private Spinner<Integer> anPlacementSpinner;
     private TextField ollamaUrlField;
+    private CheckBox useOllamaTemplatesBox;
     private TextField comfyUiUrlField;
     private ComboBox<String> comfyWorkflowSelect;
     private Spinner<Integer> comfyWidthSpinner;
@@ -613,6 +614,10 @@ public class App extends Application
             }
         });
 
+        useOllamaTemplatesBox = new CheckBox("Use Ollama templates");
+        useOllamaTemplatesBox.setSelected(appSettings.useOllamaTemplates());
+        useOllamaTemplatesBox.setOnAction(event -> updateUseOllamaTemplates(useOllamaTemplatesBox.isSelected()));
+
         comfyUiUrlField = new TextField(appSettings.comfyUiUrl());
         comfyUiUrlField.setPromptText("ComfyUI URL");
         comfyUiUrlField.focusedProperty().addListener((obs, oldValue, newValue) ->
@@ -747,6 +752,7 @@ public class App extends Application
         anPlacementSpinner = buildSpinner(1, 10, appSettings.anPlacement());
 
         content.getChildren().addAll(textFieldRow("Ollama URL", ollamaUrlField),
+                useOllamaTemplatesBox,
                 textFieldRow("ComfyUI URL", comfyUiUrlField),
                 comboRow("ComfyUI Workflow", comfyWorkflowSelect),
                 spinnerRow("Image Width", comfyWidthSpinner, this::updateComfyWidth),
@@ -1070,6 +1076,16 @@ public class App extends Application
         {
             ollamaUrlField.setText(appSettings.ollamaUrl());
         }
+    }
+
+    private void updateUseOllamaTemplates(boolean value)
+    {
+        if (value == appSettings.useOllamaTemplates())
+        {
+            return;
+        }
+        appSettings = SettingsCoordinator.withUseOllamaTemplates(appSettings, value);
+        persistAppSettings();
     }
 
     private void updateComfyUiUrl(String url)
@@ -2277,7 +2293,8 @@ public class App extends Application
                     }
 
                     settings = buildGenerationSettings();
-                    GenerationCoordinator.RetryResult result = generationCoordinator.retryAssistantHead(activeStory, blocks, head, settings);
+                    GenerationCoordinator.RetryResult result = generationCoordinator.retryAssistantHead(activeStory, blocks, head,
+                            settings, appSettings.useOllamaTemplates());
                     observePromptCalibration(result.estimatedPromptTokens());
                     if (result.updatedBlock() == null)
                     {
@@ -2545,6 +2562,7 @@ public class App extends Application
                 {
                     settings = buildGenerationSettings();
                     GenerationCoordinator.ContinueResult result = generationCoordinator.continueStory(activeStory, settings,
+                            appSettings.useOllamaTemplates(),
                             App.this::runAutoCardsForGeneration);
                     observePromptCalibration(result.estimatedPromptTokens());
                     activeStory = result.updatedStory();
@@ -2580,6 +2598,7 @@ public class App extends Application
                 {
                     settings = buildGenerationSettings();
                     GenerationCoordinator.TurnResult result = generationCoordinator.takeTurn(activeStory, userText, settings,
+                            appSettings.useOllamaTemplates(),
                             App.this::runAutoCardsForGeneration);
                     observePromptCalibration(result.estimatedPromptTokens());
                     activeStory = result.updatedStory();

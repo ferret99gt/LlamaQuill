@@ -2,6 +2,7 @@ package com.llamaquill.autocards;
 
 import com.llamaquill.model.AppSettings;
 import com.llamaquill.model.Block;
+import com.llamaquill.model.ChatMessage;
 import com.llamaquill.model.GenerationSettings;
 import com.llamaquill.model.ModelAutoCardsSettings;
 import com.llamaquill.model.ModelSettings;
@@ -23,6 +24,24 @@ public class AutoCardsService
     {
     }
 
+    public record PromptContext(String rawPrompt, List<ChatMessage> messages)
+    {
+        public PromptContext
+        {
+            rawPrompt = rawPrompt == null ? "" : rawPrompt;
+            messages = messages == null ? List.of() : List.copyOf(messages);
+        }
+
+        public static PromptContext empty()
+        {
+            return new PromptContext("", List.of());
+        }
+    }
+
+    private record ModelRequest(String rawPrompt, List<ChatMessage> messages)
+    {
+    }
+
     private final OllamaClient ollamaClient;
     private final PromptCompiler promptCompiler;
 
@@ -32,14 +51,14 @@ public class AutoCardsService
         this.promptCompiler = promptCompiler;
     }
 
-    public String buildFullStoryPrompt(Story story, List<Block> blocks, List<StoryCard> storyCards,
+    public PromptContext buildFullStoryContext(Story story, List<Block> blocks, List<StoryCard> storyCards,
             AppSettings appSettings, ModelSettings modelSettings, ModelAutoCardsSettings modelAutoCardsSettings)
     {
         int tokenCap = Math.max(modelAutoCardsSettings.maxTokensCreate(),
                 Math.max(modelAutoCardsSettings.maxTokensUpdate(), modelAutoCardsSettings.maxTokensSummarize()));
         GenerationSettings contextSettings = buildGenerationSettings(appSettings, modelSettings, tokenCap);
         PromptCompilation compiled = promptCompiler.compile(story, blocks, storyCards, contextSettings);
-        return compiled.prompt();
+        return new PromptContext(compiled.prompt(), compiled.messages());
     }
 
     public List<AutoCards.Candidate> extractCandidatesByModel(String excerpt, List<StoryCard> currentCards, int maxCount,
@@ -67,14 +86,15 @@ public class AutoCardsService
                 + " story card candidates that should either be added as new story cards to track, or are existing story cards that need updates for new details. Story cards are meant to detail one singular character, location or critical object that are important to the story. They should not attempt act as a summarization of the story, combine topics (Character + Event), or as 'memories'. Do not suggest a story card candidate for the main character/player. If no candidates need added or removed, return empty. Return JSON array of objects with "
                 + "\"title\" and \"triggers\" (comma separated keywords). No extra text.";
 
-        String prompt = AutoCards.buildChatPrompt(system, user);
         int tokenCap = Math.max(128, modelAutoCardsSettings.maxTokensCreate());
         GenerationSettings autoSettings = buildGenerationSettings(appSettings, modelSettings, tokenCap);
-        String response = ollamaClient.generate(prompt, autoSettings);
+        ModelRequest request = new ModelRequest(AutoCards.buildChatPrompt(system, user),
+                AutoCards.buildChatMessages(system, user));
+        String response = generateModelResponse(request, appSettings, autoSettings);
         return AutoCards.parseCandidatesFromModelResponse(response, maxCount);
     }
 
-    public String generateCardCreate(AutoCards.Candidate candidate, String excerpt, String fullStoryPromptPrefix,
+    public String generateCardCreate(AutoCards.Candidate candidate, String excerpt, PromptContext fullStoryContext,
             boolean useBulletedLists,
             AppSettings appSettings, ModelSettings modelSettings, ModelAutoCardsSettings modelAutoCardsSettings)
             throws IOException, InterruptedException
@@ -85,16 +105,16 @@ public class AutoCardsService
                 candidate.triggers(),
                 "",
                 excerpt);
-        String prompt = buildAutoCardPrompt(promptParts, fullStoryPromptPrefix);
+        ModelRequest request = buildAutoCardRequest(promptParts, fullStoryContext);
         GenerationSettings autoSettings = buildGenerationSettings(
                 appSettings,
                 modelSettings,
                 modelAutoCardsSettings.maxTokensCreate());
-        String generated = normalizeOutput(ollamaClient.generate(prompt, autoSettings));
+        String generated = normalizeOutput(generateModelResponse(request, appSettings, autoSettings));
         return formatAsBulletedList(generated, useBulletedLists);
     }
 
-    public String generateCardUpdate(StoryCard existing, String excerpt, String fullStoryPromptPrefix,
+    public String generateCardUpdate(StoryCard existing, String excerpt, PromptContext fullStoryContext,
             boolean useBulletedLists,
             AppSettings appSettings, ModelSettings modelSettings, ModelAutoCardsSettings modelAutoCardsSettings)
             throws IOException, InterruptedException
@@ -105,12 +125,12 @@ public class AutoCardsService
                 existing.triggers(),
                 existing.content(),
                 excerpt);
-        String prompt = buildAutoCardPrompt(promptParts, fullStoryPromptPrefix);
+        ModelRequest request = buildAutoCardRequest(promptParts, fullStoryContext);
         GenerationSettings autoSettings = buildGenerationSettings(
                 appSettings,
                 modelSettings,
                 modelAutoCardsSettings.maxTokensUpdate());
-        String continuation = normalizeOutput(ollamaClient.generate(prompt, autoSettings));
+        String continuation = normalizeOutput(generateModelResponse(request, appSettings, autoSettings));
         continuation = formatAsBulletedList(continuation, useBulletedLists);
         if (continuation.isBlank())
         {
@@ -125,7 +145,7 @@ public class AutoCardsService
     }
 
     public String generateCardSummary(String title, String triggers, String content, String excerpt,
-            String fullStoryPromptPrefix, boolean useBulletedLists, AppSettings appSettings, ModelSettings modelSettings,
+            PromptContext fullStoryContext, boolean useBulletedLists, AppSettings appSettings, ModelSettings modelSettings,
             ModelAutoCardsSettings modelAutoCardsSettings)
             throws IOException, InterruptedException
     {
@@ -135,16 +155,16 @@ public class AutoCardsService
                 triggers,
                 content,
                 excerpt);
-        String prompt = buildAutoCardPrompt(promptParts, fullStoryPromptPrefix);
+        ModelRequest request = buildAutoCardRequest(promptParts, fullStoryContext);
         GenerationSettings autoSettings = buildGenerationSettings(
                 appSettings,
                 modelSettings,
                 modelAutoCardsSettings.maxTokensSummarize());
-        String generated = normalizeOutput(ollamaClient.generate(prompt, autoSettings));
+        String generated = normalizeOutput(generateModelResponse(request, appSettings, autoSettings));
         return formatAsBulletedList(generated, useBulletedLists);
     }
 
-    public AutoCards.GeneratedCard generateCardFromUserPrompt(String request, String excerpt, String fullStoryPromptPrefix,
+    public AutoCards.GeneratedCard generateCardFromUserPrompt(String request, String excerpt, PromptContext fullStoryContext,
             boolean useBulletedLists, AppSettings appSettings, ModelSettings modelSettings,
             ModelAutoCardsSettings modelAutoCardsSettings) throws IOException, InterruptedException
     {
@@ -170,13 +190,13 @@ public class AutoCardsService
 
         String system = "You create one grounded story card from the request and context. "
                 + "Return strict JSON only.";
-        String prompt = buildAutoCardPrompt(new AutoCards.PromptParts(system, user.toString(), ""),
-                fullStoryPromptPrefix);
+        ModelRequest requestModel = buildAutoCardRequest(new AutoCards.PromptParts(system, user.toString(), ""),
+                fullStoryContext);
         GenerationSettings autoSettings = buildGenerationSettings(
                 appSettings,
                 modelSettings,
                 modelAutoCardsSettings.maxTokensCreate());
-        String response = ollamaClient.generate(prompt, autoSettings);
+        String response = generateModelResponse(requestModel, appSettings, autoSettings);
         AutoCards.GeneratedCard parsed = AutoCards.parseGeneratedCardFromModelResponse(response);
         if (parsed == null)
         {
@@ -190,7 +210,7 @@ public class AutoCardsService
         return new AutoCards.GeneratedCard(parsed.title().trim(), parsed.triggers().trim(), content);
     }
 
-    public String generateImagePromptFromUserPrompt(String request, String excerpt, String fullStoryPromptPrefix,
+    public String generateImagePromptFromUserPrompt(String request, String excerpt, PromptContext fullStoryContext,
             AppSettings appSettings, ModelSettings modelSettings, ModelAutoCardsSettings modelAutoCardsSettings)
             throws IOException, InterruptedException
     {
@@ -219,37 +239,37 @@ public class AutoCardsService
                 .append(trimmedRequest);
         }
         String system = "You create image generation prompts for story scenes.";
-        String prompt = buildAutoCardPrompt(new AutoCards.PromptParts(system, user.toString(), ""),
-                fullStoryPromptPrefix);
+        ModelRequest requestModel = buildAutoCardRequest(new AutoCards.PromptParts(system, user.toString(), ""),
+                fullStoryContext);
         GenerationSettings autoSettings = buildGenerationSettings(
                 appSettings,
                 modelSettings,
                 modelAutoCardsSettings.maxTokensCreate());
-        return normalizeOutput(ollamaClient.generate(prompt, autoSettings));
+        return normalizeOutput(generateModelResponse(requestModel, appSettings, autoSettings));
     }
 
     public String generateOneShotResponse(String systemPrompt, String userPrompt, String excerpt,
-            String fullStoryPromptPrefix, AppSettings appSettings, ModelSettings modelSettings)
+            PromptContext fullStoryContext, AppSettings appSettings, ModelSettings modelSettings)
             throws IOException, InterruptedException
     {
-        String prompt = buildOneShotPrompt(systemPrompt, userPrompt, excerpt, fullStoryPromptPrefix);
+        ModelRequest request = buildOneShotRequest(systemPrompt, userPrompt, excerpt, fullStoryContext);
         GenerationSettings oneShotSettings = buildUnboundedGenerationSettings(appSettings, modelSettings);
-        return normalizePromptResponse(ollamaClient.generate(prompt, oneShotSettings));
+        return normalizePromptResponse(generateModelResponse(request, appSettings, oneShotSettings));
     }
 
     public String enforceCardLength(String content, boolean summarize, int limit, String title, String triggers,
-            String excerpt, String fullStoryPromptPrefix, boolean useBulletedLists, AppSettings appSettings,
+            String excerpt, PromptContext fullStoryContext, boolean useBulletedLists, AppSettings appSettings,
             ModelSettings modelSettings,
             ModelAutoCardsSettings modelAutoCardsSettings)
             throws IOException, InterruptedException
     {
-        return enforceCardLengthDetailed(content, summarize, limit, title, triggers, excerpt, fullStoryPromptPrefix,
+        return enforceCardLengthDetailed(content, summarize, limit, title, triggers, excerpt, fullStoryContext,
                 useBulletedLists,
                 appSettings, modelSettings, modelAutoCardsSettings).content();
     }
 
     public LengthEnforcementResult enforceCardLengthDetailed(String content, boolean summarize, int limit, String title,
-            String triggers, String excerpt, String fullStoryPromptPrefix, boolean useBulletedLists,
+            String triggers, String excerpt, PromptContext fullStoryContext, boolean useBulletedLists,
             AppSettings appSettings,
             ModelSettings modelSettings, ModelAutoCardsSettings modelAutoCardsSettings)
             throws IOException, InterruptedException
@@ -260,7 +280,7 @@ public class AutoCardsService
         }
         if (summarize)
         {
-            String summarized = generateCardSummary(title, triggers, content, excerpt, fullStoryPromptPrefix,
+            String summarized = generateCardSummary(title, triggers, content, excerpt, fullStoryContext,
                     useBulletedLists,
                     appSettings, modelSettings, modelAutoCardsSettings);
             if (!summarized.isBlank())
@@ -275,21 +295,33 @@ public class AutoCardsService
         return new LengthEnforcementResult(AutoCards.truncateContent(content, limit), false);
     }
 
-    private String buildAutoCardPrompt(AutoCards.PromptParts promptParts, String fullStoryPromptPrefix)
+    private String generateModelResponse(ModelRequest request, AppSettings appSettings, GenerationSettings settings)
+            throws IOException, InterruptedException
+    {
+        if (appSettings.useOllamaTemplates())
+        {
+            return ollamaClient.chat(request.messages(), settings);
+        }
+        return ollamaClient.generate(request.rawPrompt(), settings);
+    }
+
+    private ModelRequest buildAutoCardRequest(AutoCards.PromptParts promptParts, PromptContext fullStoryContext)
     {
         String autoCardPrompt = AutoCards.buildChatPrompt(promptParts);
-        if (fullStoryPromptPrefix == null || fullStoryPromptPrefix.isBlank())
+        List<ChatMessage> messages = new ArrayList<>(fullStoryContext == null ? List.of() : fullStoryContext.messages());
+        messages.addAll(AutoCards.buildChatMessages(promptParts));
+
+        String rawPrefix = fullStoryContext == null ? "" : fullStoryContext.rawPrompt();
+        if (rawPrefix == null || rawPrefix.isBlank())
         {
-            return autoCardPrompt;
+            return new ModelRequest(autoCardPrompt, messages);
         }
-        String trimmedPrefix = fullStoryPromptPrefix.trim();
-        StringBuilder combined = new StringBuilder(trimmedPrefix);
+        String trimmedPrefix = rawPrefix.trim();
         if (!trimmedPrefix.endsWith("<|im_end|>"))
         {
-            combined.append("<|im_end|>");
+            trimmedPrefix = trimmedPrefix + "<|im_end|>";
         }
-        combined.append('\n').append(autoCardPrompt);
-        return combined.toString();
+        return new ModelRequest(trimmedPrefix + '\n' + autoCardPrompt, messages);
     }
 
     private static GenerationSettings buildGenerationSettings(AppSettings appSettings, ModelSettings modelSettings, int maxTokens)
@@ -308,13 +340,13 @@ public class AutoCardsService
                 appSettings.storyCardLookback(), appSettings.anPlacement());
     }
 
-    private static String buildOneShotPrompt(String systemPrompt, String userPrompt, String excerpt,
-            String fullStoryPromptPrefix)
+    private static ModelRequest buildOneShotRequest(String systemPrompt, String userPrompt, String excerpt,
+            PromptContext fullStoryContext)
     {
         StringBuilder prompt = new StringBuilder();
-        if (fullStoryPromptPrefix != null && !fullStoryPromptPrefix.isBlank())
+        if (fullStoryContext != null && fullStoryContext.rawPrompt() != null && !fullStoryContext.rawPrompt().isBlank())
         {
-            String trimmedPrefix = fullStoryPromptPrefix.trim();
+            String trimmedPrefix = fullStoryContext.rawPrompt().trim();
             prompt.append(trimmedPrefix);
             if (!trimmedPrefix.endsWith("<|im_end|>"))
             {
@@ -331,7 +363,12 @@ public class AutoCardsService
             prompt.append('\n');
         }
         prompt.append("<|im_start|>assistant\n");
-        return prompt.toString();
+
+        List<ChatMessage> messages = new ArrayList<>(fullStoryContext == null ? List.of() : fullStoryContext.messages());
+        appendMessage(messages, "system", systemPrompt);
+        appendMessage(messages, "user", excerpt == null || excerpt.isBlank() ? "" : "# Story excerpt:\n" + excerpt);
+        appendMessage(messages, "user", userPrompt);
+        return new ModelRequest(prompt.toString(), messages);
     }
 
     private static void appendChatMessage(StringBuilder prompt, String role, String content, boolean close)
@@ -349,6 +386,16 @@ public class AutoCardsService
         {
             prompt.append("<|im_end|>");
         }
+    }
+
+    private static void appendMessage(List<ChatMessage> messages, String role, String content)
+    {
+        String normalized = content == null ? "" : content.trim();
+        if (normalized.isBlank())
+        {
+            return;
+        }
+        messages.add(new ChatMessage(role, normalized));
     }
 
     private static String normalizePromptResponse(String output)

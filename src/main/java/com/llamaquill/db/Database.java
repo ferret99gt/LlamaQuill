@@ -90,6 +90,7 @@ public final class Database
                         ollama_url TEXT NOT NULL,
                         comfyui_url TEXT NOT NULL DEFAULT 'http://localhost:8000',
                         selected_model TEXT NOT NULL,
+                        use_ollama_templates INTEGER NOT NULL DEFAULT 0 CHECK (use_ollama_templates IN (0,1)),
                         context_limit INTEGER NOT NULL,
                         response_length INTEGER NOT NULL,
                         min_story_window INTEGER NOT NULL,

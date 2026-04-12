@@ -1,6 +1,7 @@
 ﻿package com.llamaquill.prompt;
 
 import com.llamaquill.model.Block;
+import com.llamaquill.model.ChatMessage;
 import com.llamaquill.model.GenerationSettings;
 import com.llamaquill.model.Role;
 import com.llamaquill.model.Story;
@@ -69,14 +70,15 @@ public class PromptCompiler
                 messages.add(new Message(Role.USER, formatStoryCard(card)));
             }
             messages.addAll(groupMessages(windowWithNote));
-            String prompt = ChatMl.format(systemText, messages);
+            List<ChatMessage> promptMessages = buildPromptMessages(systemText, messages);
+            String prompt = ChatMl.format(promptMessages);
             int estimatedTokens = tokenEstimateCache.computeIfAbsent(prompt, this::estimateTokens);
 
             if (estimatedTokens <= tokenBudget)
             {
                 logCompilationReport(selection, droppedForSpace, plotEssentialsTrimmed, originalPlotEssentials,
                         plotEssentials, estimatedTokens, tokenBudget);
-                return new PromptCompilation(prompt, estimatedTokens);
+                return new PromptCompilation(prompt, promptMessages, estimatedTokens);
             }
 
             boolean trimmed = false;
@@ -114,7 +116,7 @@ public class PromptCompiler
             {
                 logCompilationReport(selection, droppedForSpace, plotEssentialsTrimmed, originalPlotEssentials,
                         plotEssentials, estimatedTokens, tokenBudget);
-                return new PromptCompilation(prompt, estimatedTokens);
+                return new PromptCompilation(prompt, promptMessages, estimatedTokens);
             }
         }
     }
@@ -517,25 +519,35 @@ public class PromptCompiler
     {
     }
 
+    private static List<ChatMessage> buildPromptMessages(String systemText, List<Message> messages)
+    {
+        List<ChatMessage> promptMessages = new ArrayList<>();
+        if (systemText != null && !systemText.isBlank())
+        {
+            promptMessages.add(new ChatMessage("system", systemText.trim()));
+        }
+        for (Message message : messages)
+        {
+            promptMessages.add(new ChatMessage(message.role().wire(), message.content()));
+        }
+        return promptMessages;
+    }
+
     private static final class ChatMl
     {
         private ChatMl()
         {
         }
 
-        static String format(String systemText, List<Message> messages)
+        static String format(List<ChatMessage> messages)
         {
             StringBuilder sb = new StringBuilder();
-            if (systemText != null && !systemText.isBlank())
-            {
-                appendMessage(sb, "system", systemText.trim(), true);
-            }
             for (int i = 0; i < messages.size(); i++)
             {
-                Message message = messages.get(i);
+                ChatMessage message = messages.get(i);
                 boolean isLast = i == messages.size() - 1;
-                boolean close = !(isLast && message.role() == Role.ASSISTANT);
-                appendMessage(sb, message.role().wire(), message.content(), close);
+                boolean close = !(isLast && "assistant".equals(message.role()));
+                appendMessage(sb, message.role(), message.content(), close);
             }
             return sb.toString();
         }
