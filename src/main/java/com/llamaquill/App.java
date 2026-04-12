@@ -753,11 +753,6 @@ public class App extends Application
 
         content.getChildren().addAll(textFieldRow("Ollama URL", ollamaUrlField),
                 useOllamaTemplatesBox,
-                textFieldRow("ComfyUI URL", comfyUiUrlField),
-                comboRow("ComfyUI Workflow", comfyWorkflowSelect),
-                spinnerRow("Image Width", comfyWidthSpinner, this::updateComfyWidth),
-                spinnerRow("Image Height", comfyHeightSpinner, this::updateComfyHeight),
-                spinnerRow("Image Batch Size", comfyBatchSizeSpinner, this::updateComfyBatchSize),
                 comboRow("Model", modelSelect),
                 sliderRow("Context Limit", contextLimitSlider, valueLabel(appSettings.contextLimit(), "tokens"),
                         value -> updateContextLimit(value.intValue())),
@@ -783,7 +778,7 @@ public class App extends Application
                         value -> updateMinStoryPercent(value.intValue())),
                 spinnerRow("Story Card Look Back", storyCardLookbackSpinner, this::updateStoryCardLookback),
                 spinnerRow("Author's Note Insertion Point", anPlacementSpinner, this::updateAnPlacement),
-                new Label("Auto Cards (Global)"),
+                underlinedLabel("Auto Cards (Global)"),
                 comboRow("Candidation Selection Mode", autoCardsCandidateSelectionMode),
                 comboRow("Context Mode", autoCardsContextMode),
                 spinnerRow("Cooldown (turns)", autoCardsCooldownSpinner, this::updateAppAutoCardsCooldown),
@@ -792,7 +787,7 @@ public class App extends Application
                 spinnerRow("Card length limit (chars)", autoCardsLengthLimitSpinner, this::updateAppAutoCardsLengthLimit),
                 autoCardsSummarizeBox,
                 autoCardsBulletedListsBox,
-                new Label("Auto Cards (Model)"),
+                underlinedLabel("Auto Cards (Model)"),
                 new Label("Create Prompt"),
                 autoCardsCreatePrompt,
                 new Label("Update Prompt"),
@@ -801,7 +796,14 @@ public class App extends Application
                 autoCardsSummarizePrompt,
                 spinnerRow("Max tokens (create)", autoCardsMaxTokensCreate, value -> updateModelAutoCardsTokens()),
                 spinnerRow("Max tokens (update)", autoCardsMaxTokensUpdate, value -> updateModelAutoCardsTokens()),
-                spinnerRow("Max tokens (summarize)", autoCardsMaxTokensSummarize, value -> updateModelAutoCardsTokens()));
+                spinnerRow("Max tokens (summarize)", autoCardsMaxTokensSummarize, value -> updateModelAutoCardsTokens()),
+                underlinedLabel("Image Generation"),
+                textFieldRow("ComfyUI URL", comfyUiUrlField),
+                comboRow("ComfyUI Workflow", comfyWorkflowSelect),
+                spinnerRow("Image Width", comfyWidthSpinner, this::updateComfyWidth),
+                spinnerRow("Image Height", comfyHeightSpinner, this::updateComfyHeight),
+                spinnerRow("Image Batch Size", comfyBatchSizeSpinner, this::updateComfyBatchSize)
+            );
 
         ScrollPane scrollPane = new ScrollPane(content);
         scrollPane.setFitToWidth(true);
@@ -2714,6 +2716,13 @@ public class App extends Application
     {
         Label label = new Label(formatValue(value, suffix, decimals));
         label.setUserData(decimals);
+        return label;
+    }
+
+    private static Label underlinedLabel(String text)
+    {
+        Label label = new Label(text);
+        label.setUnderline(true);
         return label;
     }
 
