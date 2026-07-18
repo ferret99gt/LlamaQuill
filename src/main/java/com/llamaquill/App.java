@@ -741,7 +741,7 @@ public class App extends Application
         contextLimitSlider = buildIntSlider(1024, 32768, appSettings.contextLimit(), 512);
         responseLengthSlider = buildIntSlider(1, 250, appSettings.responseLength(), 1);
         temperatureSlider = buildDoubleSlider(0.1, 2.0, activeModelSettings.temperature(), 0.1);
-        topKSlider = buildIntSlider(1, 999, activeModelSettings.topK(), 1);
+        topKSlider = buildIntSlider(0, 999, activeModelSettings.topK(), 1);
         topPSlider = buildDoubleSlider(0.1, 1.0, activeModelSettings.topP(), 0.01);
         minPSlider = buildDoubleSlider(0.01, 0.2, activeModelSettings.minP(), 0.001);
         presencePenaltySlider = buildDoubleSlider(-2.0, 2.0, activeModelSettings.presencePenalty(), 0.01);

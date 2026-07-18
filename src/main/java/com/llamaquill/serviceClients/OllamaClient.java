@@ -135,6 +135,7 @@ public class OllamaClient
         sb.append('{');
         sb.append("\"model\":\"").append(Json.escape(model)).append("\"");
         sb.append(",\"prompt\":\"").append(Json.escape(prompt)).append("\"");
+        sb.append(",\"think\":false");
         sb.append(",\"raw\":true");
         sb.append(",\"stream\":true");
         appendOptions(sb, settings);
@@ -166,6 +167,7 @@ public class OllamaClient
             sb.append('}');
         }
         sb.append(']');
+        sb.append(",\"think\":false");
         sb.append(",\"stream\":true");
         appendOptions(sb, settings);
         sb.append('}');
