@@ -6,6 +6,9 @@ import com.llamaquill.model.GenerationSettings;
 import com.llamaquill.model.Role;
 import com.llamaquill.model.Story;
 import com.llamaquill.model.StoryCard;
+import com.llamaquill.prompt.PromptContextReport.Component;
+import com.llamaquill.prompt.PromptContextReport.Entry;
+import com.llamaquill.prompt.PromptContextReport.Status;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -20,8 +23,9 @@ public class PromptCompiler
 {
     private static final int CHARS_PER_TOKEN = 4;
     private static final double TOKEN_ESTIMATE_MULTIPLIER = 1.0;
-    private static final int RESPONSE_SAFETY_BAND_MULTIPLIER = 2;
     private static final boolean PREFIX_USER_LINES = true;
+    private static final int BOUNDARY_SEARCH_LIMIT = 256;
+
     private ToIntFunction<String> tokenEstimator = PromptCompiler::estimateTokensHeuristic;
 
     public void setTokenEstimator(ToIntFunction<String> tokenEstimator)
@@ -29,92 +33,256 @@ public class PromptCompiler
         this.tokenEstimator = tokenEstimator == null ? PromptCompiler::estimateTokensHeuristic : tokenEstimator;
     }
 
-    public PromptCompilation compile(Story story, List<Block> blocks, List<StoryCard> storyCards, GenerationSettings settings)
+    public PromptCompilation compile(Story story, List<Block> blocks, List<StoryCard> storyCards,
+            GenerationSettings settings)
     {
         Objects.requireNonNull(story, "story");
         Objects.requireNonNull(blocks, "blocks");
         Objects.requireNonNull(storyCards, "storyCards");
         Objects.requireNonNull(settings, "settings");
 
-        int safetyBand = Math.max(0, settings.responseLength() * RESPONSE_SAFETY_BAND_MULTIPLIER);
-        int tokenBudget = Math.max(0, settings.contextLimit() - settings.responseLength() - safetyBand);
-        int minWindowChars = Math.max(0, settings.minStoryWindow()) * CHARS_PER_TOKEN;
+        PromptBudget budget = PromptBudget.from(settings);
+        List<Block> originalWindow = List.copyOf(filterPromptBlocks(blocks));
+        List<Block> window = new ArrayList<>(originalWindow);
 
-        List<Block> promptBlocks = filterPromptBlocks(blocks);
-        List<Block> window = new ArrayList<>(promptBlocks);
+        StoryCardSelection selectedCards = selectStoryCards(storyCards, originalWindow, settings.storyCardLookback());
+        List<StoryCard> originalPinned = List.copyOf(selectedCards.pinned());
+        List<StoryCard> originalTriggered = List.copyOf(selectedCards.triggered());
+        List<StoryCard> pinned = new ArrayList<>(originalPinned);
+        List<StoryCard> triggered = new ArrayList<>(originalTriggered);
 
-        StoryCardSelection selection = selectStoryCards(storyCards, window, settings.storyCardLookback());
-        String originalPlotEssentials = safeText(story.plotEssentials());
+        String originalSystem = normalizeContextText(story.systemPrompt());
+        String originalPlotEssentials = normalizeContextText(story.plotEssentials());
+        String originalAuthorNote = normalizeContextText(story.authorNote());
+        String systemText = originalSystem;
         String plotEssentials = originalPlotEssentials;
-        boolean plotEssentialsTrimmed = false;
-        List<DroppedStoryCard> droppedForSpace = new ArrayList<>();
+        String authorNote = originalAuthorNote;
+
+        int originalStoryTokens = estimateStoryTokens(originalWindow);
+        int protectedStoryFloor = Math.min(budget.protectedStoryTokens(), originalStoryTokens);
+
         while (true)
         {
-            List<Block> windowWithNote = insertAuthorNote(window, settings.anPlacement(), safeText(story.authorNote()));
-            String systemText = safeText(story.systemPrompt());
+            if (window.isEmpty() && !authorNote.isBlank())
+            {
+                authorNote = "";
+            }
+            CompiledState compiled = compileState(systemText, plotEssentials, authorNote, window, pinned, triggered,
+                    settings.anPlacement());
+            if (compiled.estimatedTokens() <= budget.inputLimit())
+            {
+                return finishCompilation(compiled, budget, story, originalSystem, systemText,
+                        originalPlotEssentials, plotEssentials, originalAuthorNote, authorNote,
+                        originalWindow, window, originalPinned, pinned, originalTriggered, triggered,
+                        selectedCards.triggerMatches());
+            }
 
-            List<Message> messages = new ArrayList<>();
+            int excessTokens = compiled.estimatedTokens() - budget.inputLimit();
+            int currentStoryTokens = estimateStoryTokens(window);
+
+            // Older adventure text above the protected story floor is the first
+            // context sacrificed. The newest story tail is retained.
+            if (currentStoryTokens > protectedStoryFloor)
+            {
+                int targetStoryTokens = Math.max(protectedStoryFloor, currentStoryTokens - excessTokens);
+                List<Block> shortened = retainNewestStoryAtLeast(window, targetStoryTokens);
+                if (!shortened.equals(window))
+                {
+                    window = shortened;
+                    continue;
+                }
+            }
+
+            // Pinned means always active, not mandatory. Triggered cards are more
+            // immediately relevant, so pinned cards leave the prompt first.
+            if (!pinned.isEmpty())
+            {
+                pinned.removeLast();
+                continue;
+            }
+            if (!triggered.isEmpty())
+            {
+                triggered.removeLast();
+                continue;
+            }
+
+            // Author's Note and Plot Essentials outrank story cards. Preserve the
+            // beginning of each when shortening at a sensible prose boundary.
+            if (!authorNote.isBlank())
+            {
+                authorNote = shortenFromEnd(authorNote, excessTokens);
+                continue;
+            }
             if (!plotEssentials.isBlank())
             {
-                messages.add(new Message(Role.USER, plotEssentials.trim()));
-            }
-            for (StoryCard card : selection.pinned)
-            {
-                messages.add(new Message(Role.USER, formatStoryCard(card)));
-            }
-            for (StoryCard card : selection.triggered)
-            {
-                messages.add(new Message(Role.USER, formatStoryCard(card)));
-            }
-            messages.addAll(groupMessages(windowWithNote));
-            List<ChatMessage> promptMessages = buildPromptMessages(systemText, messages);
-            int estimatedTokens = estimateTokens(promptMessages);
-
-            if (estimatedTokens <= tokenBudget)
-            {
-                logCompilationReport(selection, droppedForSpace, plotEssentialsTrimmed, originalPlotEssentials,
-                        plotEssentials, estimatedTokens, tokenBudget);
-                return new PromptCompilation(promptMessages, estimatedTokens);
+                plotEssentials = shortenFromEnd(plotEssentials, excessTokens);
+                continue;
             }
 
-            boolean trimmed = false;
-            // Start from the full promptable story and trim down to fit, preserving
-            // the most recent prose unless higher-priority context must be sacrificed.
-            if (window.size() > 1 && windowSizeChars(window) > minWindowChars)
+            // Pathological mandatory-context pressure: progressively reduce the
+            // protected story tail, then truncate the system message last.
+            if (currentStoryTokens > 0)
             {
-                window = trimStoryWindow(window, minWindowChars);
-                trimmed = true;
-            }
-            else if (!selection.triggered.isEmpty())
-            {
-                StoryCard removed = selection.triggered.removeLast();
-                droppedForSpace.add(new DroppedStoryCard(removed, "triggered"));
-                trimmed = true;
-            }
-            else if (!selection.pinned.isEmpty())
-            {
-                StoryCard removed = selection.pinned.removeLast();
-                droppedForSpace.add(new DroppedStoryCard(removed, "pinned"));
-                trimmed = true;
-            }
-            else if (!plotEssentials.isBlank())
-            {
-                int excessTokens = estimatedTokens - tokenBudget;
-                plotEssentials = trimFromStart(plotEssentials, excessTokens * CHARS_PER_TOKEN);
-                if (!plotEssentials.equals(originalPlotEssentials))
+                int targetStoryTokens = Math.max(0, currentStoryTokens - excessTokens);
+                List<Block> shortened = retainNewestStoryAtLeast(window, targetStoryTokens);
+                if (shortened.equals(window))
                 {
-                    plotEssentialsTrimmed = true;
+                    shortened = forceTrimOldestStory(window);
                 }
-                trimmed = true;
+                window = shortened;
+                continue;
+            }
+            if (!systemText.isBlank())
+            {
+                systemText = shortenFromEnd(systemText, excessTokens);
+                continue;
             }
 
-            if (!trimmed)
+            // A zero-sized or otherwise invalid external setting cannot leave an
+            // over-budget payload behind. Empty messages are the final safe state.
+            CompiledState empty = new CompiledState(List.of(), 0);
+            return finishCompilation(empty, budget, story, originalSystem, "",
+                    originalPlotEssentials, "", originalAuthorNote, "",
+                    originalWindow, List.of(), originalPinned, List.of(),
+                    originalTriggered, List.of(), selectedCards.triggerMatches());
+        }
+    }
+
+    private PromptCompilation finishCompilation(CompiledState compiled, PromptBudget budget, Story story,
+            String originalSystem, String systemText,
+            String originalPlotEssentials, String plotEssentials,
+            String originalAuthorNote, String authorNote,
+            List<Block> originalWindow, List<Block> window,
+            List<StoryCard> originalPinned, List<StoryCard> pinned,
+            List<StoryCard> originalTriggered, List<StoryCard> triggered,
+            Map<StoryCard, List<String>> triggerMatches)
+    {
+        PromptContextReport report = buildContextReport(budget, compiled.estimatedTokens(), story,
+                originalSystem, systemText, originalPlotEssentials, plotEssentials,
+                originalAuthorNote, authorNote, originalWindow, window,
+                originalPinned, pinned, originalTriggered, triggered, triggerMatches);
+        logCompilationReport(report);
+        return new PromptCompilation(compiled.messages(), compiled.estimatedTokens(), report);
+    }
+
+    private CompiledState compileState(String systemText, String plotEssentials, String authorNote,
+            List<Block> window, List<StoryCard> pinned, List<StoryCard> triggered, int authorNotePlacement)
+    {
+        List<Block> windowWithNote = insertAuthorNote(window, authorNotePlacement, authorNote);
+        List<Message> messages = new ArrayList<>();
+        if (!plotEssentials.isBlank())
+        {
+            messages.add(new Message(Role.USER, plotEssentials));
+        }
+        for (StoryCard card : pinned)
+        {
+            String text = formatStoryCard(card);
+            if (!text.isBlank())
             {
-                logCompilationReport(selection, droppedForSpace, plotEssentialsTrimmed, originalPlotEssentials,
-                        plotEssentials, estimatedTokens, tokenBudget);
-                return new PromptCompilation(promptMessages, estimatedTokens);
+                messages.add(new Message(Role.USER, text));
             }
         }
+        for (StoryCard card : triggered)
+        {
+            String text = formatStoryCard(card);
+            if (!text.isBlank())
+            {
+                messages.add(new Message(Role.USER, text));
+            }
+        }
+        messages.addAll(groupMessages(windowWithNote));
+
+        List<ChatMessage> promptMessages = buildPromptMessages(systemText, messages);
+        return new CompiledState(promptMessages, estimateTokens(promptMessages));
+    }
+
+    private PromptContextReport buildContextReport(PromptBudget budget, int estimatedInputTokens, Story story,
+            String originalSystem, String systemText,
+            String originalPlotEssentials, String plotEssentials,
+            String originalAuthorNote, String authorNote,
+            List<Block> originalWindow, List<Block> window,
+            List<StoryCard> originalPinned, List<StoryCard> pinned,
+            List<StoryCard> originalTriggered, List<StoryCard> triggered,
+            Map<StoryCard, List<String>> triggerMatches)
+    {
+        List<Entry> entries = new ArrayList<>();
+        addTextEntry(entries, Component.SYSTEM, story.id(), "System",
+                originalSystem, systemText, "system");
+
+        if (!originalWindow.isEmpty())
+        {
+            int originalTokens = estimateStoryTokens(originalWindow);
+            int includedTokens = estimateStoryTokens(window);
+            entries.add(new Entry(Component.STORY, story.id(), "Adventure",
+                    statusFor(originalWindow, window), originalTokens, includedTokens,
+                    originalWindow.size(), window.size(), List.of()));
+        }
+
+        addTextEntry(entries, Component.PLOT_ESSENTIALS, story.id(), "Plot Essentials",
+                originalPlotEssentials, plotEssentials, "user");
+
+        String includedAuthorNote = window.isEmpty() ? "" : authorNote;
+        addTextEntry(entries, Component.AUTHOR_NOTE, story.id(), "Author's Note",
+                originalAuthorNote, includedAuthorNote, null);
+
+        for (StoryCard card : originalTriggered)
+        {
+            boolean included = triggered.contains(card);
+            entries.add(cardEntry(Component.TRIGGERED_STORY_CARD, card, included,
+                    triggerMatches.getOrDefault(card, List.of())));
+        }
+        for (StoryCard card : originalPinned)
+        {
+            entries.add(cardEntry(Component.PINNED_STORY_CARD, card, pinned.contains(card), List.of()));
+        }
+
+        return new PromptContextReport(budget, estimatedInputTokens, entries);
+    }
+
+    private void addTextEntry(List<Entry> entries, Component component, String id, String label,
+            String originalText, String includedText, String standaloneRole)
+    {
+        if (originalText.isBlank())
+        {
+            return;
+        }
+        int originalTokens = standaloneRole == null
+                ? estimateTokens(originalText)
+                : estimateStandaloneMessage(standaloneRole, originalText);
+        int includedTokens = includedText.isBlank()
+                ? 0
+                : standaloneRole == null
+                        ? estimateTokens(includedText)
+                        : estimateStandaloneMessage(standaloneRole, includedText);
+        entries.add(new Entry(component, id, label, statusFor(originalText, includedText),
+                originalTokens, includedTokens, 1, includedText.isBlank() ? 0 : 1, List.of()));
+    }
+
+    private Entry cardEntry(Component component, StoryCard card, boolean included, List<String> matchedTriggers)
+    {
+        String text = formatStoryCard(card);
+        int originalTokens = text.isBlank() ? 0 : estimateStandaloneMessage("user", text);
+        return new Entry(component, safeText(card.id()), safeTitle(card),
+                included ? Status.INCLUDED : Status.DROPPED,
+                originalTokens, included ? originalTokens : 0, 1, included ? 1 : 0, matchedTriggers);
+    }
+
+    private static Status statusFor(String original, String included)
+    {
+        if (included.isBlank())
+        {
+            return Status.DROPPED;
+        }
+        return original.equals(included) ? Status.INCLUDED : Status.TRIMMED;
+    }
+
+    private static Status statusFor(List<Block> original, List<Block> included)
+    {
+        if (included.isEmpty())
+        {
+            return Status.DROPPED;
+        }
+        return original.equals(included) ? Status.INCLUDED : Status.TRIMMED;
     }
 
     private static List<Block> filterPromptBlocks(List<Block> blocks)
@@ -134,24 +302,270 @@ public class PromptCompiler
         return filtered;
     }
 
-    private static int windowSizeChars(List<Block> window)
+    private List<Block> retainNewestStoryAtLeast(List<Block> source, int targetTokens)
     {
-        int total = 0;
-        for (Block block : window)
+        if (source.isEmpty() || targetTokens <= 0)
         {
-            total += block.text().length();
+            return List.of();
         }
-        return total;
+        if (estimateStoryTokens(source) <= targetTokens)
+        {
+            return List.copyOf(source);
+        }
+
+        List<Block> retained = new ArrayList<>();
+        for (int index = source.size() - 1; index >= 0; index--)
+        {
+            retained.addFirst(source.get(index));
+            if (estimateStoryTokens(retained) >= targetTokens)
+            {
+                return minimizeEarliestBlock(retained, targetTokens);
+            }
+        }
+        return List.copyOf(source);
     }
 
-    private static List<Block> trimStoryWindow(List<Block> window, int minWindowChars)
+    private List<Block> minimizeEarliestBlock(List<Block> retained, int targetTokens)
     {
-        List<Block> trimmed = new ArrayList<>(window);
-        if (trimmed.size() > 1 && windowSizeChars(trimmed) > minWindowChars)
+        if (retained.isEmpty())
         {
-            trimmed.removeFirst();
+            return List.of();
         }
-        return trimmed;
+
+        Block first = retained.getFirst();
+        String text = safeText(first.text());
+        if (text.length() <= 1)
+        {
+            return List.copyOf(retained);
+        }
+
+        int low = 0;
+        int high = text.length() - 1;
+        int latestValidStart = 0;
+        while (low <= high)
+        {
+            int rawMiddle = (low + high) >>> 1;
+            int middle = safeStartIndex(text, rawMiddle);
+            List<Block> candidate = replaceFirstBlock(retained, text.substring(middle));
+            if (estimateStoryTokens(candidate) >= targetTokens)
+            {
+                latestValidStart = middle;
+                low = rawMiddle + 1;
+            }
+            else
+            {
+                high = rawMiddle - 1;
+            }
+        }
+
+        int preferredStart = preferredStartBoundary(text, latestValidStart);
+        List<Block> preferred = replaceFirstBlock(retained, text.substring(preferredStart));
+        if (preferredStart > 0 && estimateStoryTokens(preferred) >= targetTokens)
+        {
+            return preferred;
+        }
+        return replaceFirstBlock(retained, text.substring(latestValidStart));
+    }
+
+    private static List<Block> replaceFirstBlock(List<Block> blocks, String text)
+    {
+        List<Block> updated = new ArrayList<>(blocks);
+        Block first = updated.getFirst();
+        updated.set(0, new Block(first.id(), first.storyId(), first.role(), text, first.createdAt(), first.position()));
+        return updated;
+    }
+
+    private static List<Block> forceTrimOldestStory(List<Block> window)
+    {
+        if (window.isEmpty())
+        {
+            return List.of();
+        }
+
+        List<Block> shortened = new ArrayList<>(window);
+        Block first = shortened.getFirst();
+        String text = safeText(first.text());
+        if (text.length() <= 1)
+        {
+            shortened.removeFirst();
+            return shortened;
+        }
+
+        int start = Character.charCount(text.codePointAt(0));
+        String remaining = text.substring(start).stripLeading();
+        if (remaining.isEmpty())
+        {
+            shortened.removeFirst();
+        }
+        else
+        {
+            shortened.set(0, new Block(first.id(), first.storyId(), first.role(), remaining,
+                    first.createdAt(), first.position()));
+        }
+        return shortened;
+    }
+
+    private String shortenFromEnd(String text, int tokensToRemove)
+    {
+        if (text.isBlank())
+        {
+            return "";
+        }
+
+        int currentTokens = estimateTokens(text);
+        int targetTokens = Math.max(0, currentTokens - Math.max(1, tokensToRemove));
+        String shortened = retainPrefixAtMost(text, targetTokens);
+        if (!shortened.equals(text))
+        {
+            return shortened;
+        }
+
+        int end = text.offsetByCodePoints(text.length(), -1);
+        return text.substring(0, end).stripTrailing();
+    }
+
+    private String retainPrefixAtMost(String text, int targetTokens)
+    {
+        if (targetTokens <= 0 || text.isBlank())
+        {
+            return "";
+        }
+        if (estimateTokens(text) <= targetTokens)
+        {
+            return text;
+        }
+
+        int low = 0;
+        int high = text.length();
+        int longestValidEnd = 0;
+        while (low <= high)
+        {
+            int rawMiddle = (low + high) >>> 1;
+            int middle = safeEndIndex(text, rawMiddle);
+            String candidate = text.substring(0, middle).stripTrailing();
+            if (estimateTokens(candidate) <= targetTokens)
+            {
+                longestValidEnd = middle;
+                low = rawMiddle + 1;
+            }
+            else
+            {
+                high = rawMiddle - 1;
+            }
+        }
+
+        int preferredEnd = preferredEndBoundary(text, longestValidEnd);
+        return text.substring(0, preferredEnd).stripTrailing();
+    }
+
+    private static int preferredStartBoundary(String text, int latestStart)
+    {
+        int safeLatest = safeStartIndex(text, Math.max(0, Math.min(latestStart, text.length() - 1)));
+        int minimum = Math.max(1, safeLatest - BOUNDARY_SEARCH_LIMIT);
+
+        for (int index = safeLatest; index >= minimum; index--)
+        {
+            if (index >= 2 && text.charAt(index - 1) == '\n' && text.charAt(index - 2) == '\n')
+            {
+                return index;
+            }
+        }
+        for (int index = safeLatest; index >= minimum; index--)
+        {
+            if (index >= 1 && text.charAt(index - 1) == '\n')
+            {
+                return index;
+            }
+        }
+        for (int index = safeLatest; index >= minimum; index--)
+        {
+            if (isSentenceBoundary(text, index))
+            {
+                return index;
+            }
+        }
+        for (int index = safeLatest; index >= minimum; index--)
+        {
+            if (index > 0 && Character.isWhitespace(text.charAt(index - 1))
+                    && !Character.isWhitespace(text.charAt(index)))
+            {
+                return index;
+            }
+        }
+        return safeLatest;
+    }
+
+    private static int preferredEndBoundary(String text, int latestEnd)
+    {
+        int safeLatest = safeEndIndex(text, Math.max(0, Math.min(latestEnd, text.length())));
+        int minimum = Math.max(0, safeLatest - BOUNDARY_SEARCH_LIMIT);
+
+        for (int index = safeLatest; index > minimum; index--)
+        {
+            if (index >= 2 && text.charAt(index - 1) == '\n' && text.charAt(index - 2) == '\n')
+            {
+                return index;
+            }
+        }
+        for (int index = safeLatest; index > minimum; index--)
+        {
+            if (text.charAt(index - 1) == '\n')
+            {
+                return index;
+            }
+        }
+        for (int index = safeLatest; index > minimum; index--)
+        {
+            char previous = text.charAt(index - 1);
+            if (previous == '.' || previous == '!' || previous == '?')
+            {
+                return index;
+            }
+        }
+        for (int index = safeLatest; index > minimum; index--)
+        {
+            if (!Character.isWhitespace(text.charAt(index - 1))
+                    && (index == text.length() || Character.isWhitespace(text.charAt(index))))
+            {
+                return index;
+            }
+        }
+        return safeLatest;
+    }
+
+    private static boolean isSentenceBoundary(String text, int index)
+    {
+        if (index <= 0 || index >= text.length())
+        {
+            return false;
+        }
+        char previous = text.charAt(index - 1);
+        return (previous == '.' || previous == '!' || previous == '?')
+                && Character.isWhitespace(text.charAt(index));
+    }
+
+    private static int safeStartIndex(String text, int index)
+    {
+        int safe = Math.max(0, Math.min(index, Math.max(0, text.length() - 1)));
+        if (safe > 0 && safe < text.length()
+                && Character.isLowSurrogate(text.charAt(safe))
+                && Character.isHighSurrogate(text.charAt(safe - 1)))
+        {
+            safe--;
+        }
+        return safe;
+    }
+
+    private static int safeEndIndex(String text, int index)
+    {
+        int safe = Math.max(0, Math.min(index, text.length()));
+        if (safe > 0 && safe < text.length()
+                && Character.isHighSurrogate(text.charAt(safe - 1))
+                && Character.isLowSurrogate(text.charAt(safe)))
+        {
+            safe--;
+        }
+        return safe;
     }
 
     private static List<Block> insertAuthorNote(List<Block> window, int anPlacement, String authorNote)
@@ -170,9 +584,9 @@ public class PromptCompiler
             Block block = window.get(i);
             if (i == index)
             {
-                String updatedText = "Author's Note: " + authorNote + "\n\n" + block.text();
-                updated.add(
-                        new Block(block.id(), block.storyId(), block.role(), updatedText, block.createdAt(), block.position()));
+                String updatedText = "Author's Note: " + authorNote + "\n\n" + safeText(block.text());
+                updated.add(new Block(block.id(), block.storyId(), block.role(), updatedText,
+                        block.createdAt(), block.position()));
             }
             else
             {
@@ -192,6 +606,10 @@ public class PromptCompiler
 
         for (StoryCard card : storyCards)
         {
+            if (card == null)
+            {
+                continue;
+            }
             if (card.pinned())
             {
                 pinned.add(card);
@@ -248,7 +666,7 @@ public class PromptCompiler
         StringBuilder sb = new StringBuilder();
         for (int i = start; i < window.size(); i++)
         {
-            sb.append(window.get(i).text()).append('\n');
+            sb.append(safeText(window.get(i).text())).append('\n');
         }
         return sb.toString();
     }
@@ -259,12 +677,12 @@ public class PromptCompiler
         {
             return "";
         }
-        String content = safeText(card.content()).trim();
+        String content = normalizeContextText(card.content());
         if (!content.isBlank())
         {
             return content;
         }
-        return safeText(card.title()).trim();
+        return normalizeContextText(card.title());
     }
 
     private static List<Message> groupMessages(List<Block> window)
@@ -347,21 +765,16 @@ public class PromptCompiler
         return sb.toString();
     }
 
-    private static String trimFromStart(String text, int charsToTrim)
+    private int estimateStoryTokens(List<Block> window)
     {
-        if (text.isBlank())
-        {
-            return "";
-        }
-        if (charsToTrim <= 0)
-        {
-            return text;
-        }
-        if (charsToTrim >= text.length())
-        {
-            return "";
-        }
-        return text.substring(charsToTrim).stripLeading();
+        List<Message> messages = groupMessages(window);
+        List<ChatMessage> chatMessages = buildPromptMessages("", messages);
+        return estimateTokens(chatMessages);
+    }
+
+    private int estimateStandaloneMessage(String role, String text)
+    {
+        return estimateTokens(List.of(new ChatMessage(role, text)));
     }
 
     private int estimateTokens(String text)
@@ -377,7 +790,7 @@ public class PromptCompiler
         }
         catch (Exception ignored)
         {
-            // Fall back to heuristic below.
+            // Fall back to the stable heuristic below.
         }
         if (estimated > 0)
         {
@@ -408,76 +821,14 @@ public class PromptCompiler
         return Math.max(1, (int) Math.ceil(raw * TOKEN_ESTIMATE_MULTIPLIER));
     }
 
+    private static String normalizeContextText(String text)
+    {
+        return safeText(text).trim();
+    }
+
     private static String safeText(String text)
     {
         return text == null ? "" : text;
-    }
-
-    private static void logCompilationReport(StoryCardSelection selection, List<DroppedStoryCard> droppedForSpace,
-            boolean plotEssentialsTrimmed, String originalPlotEssentials, String finalPlotEssentials,
-            int estimatedTokens, int tokenBudget)
-    {
-        System.out.println("[PromptCompiler] Estimated prompt tokens: " + estimatedTokens + " / budget " + tokenBudget);
-        System.out.println("[PromptCompiler] Included story cards:");
-        if (selection.pinned.isEmpty() && selection.triggered.isEmpty())
-        {
-            System.out.println("[PromptCompiler]   - none");
-        }
-        for (StoryCard card : selection.pinned)
-        {
-            System.out.println("[PromptCompiler]   - " + safeTitle(card) + " (pinned)");
-        }
-        for (StoryCard card : selection.triggered)
-        {
-            List<String> matched = selection.triggerMatches.getOrDefault(card, List.of());
-            if (matched.isEmpty())
-            {
-                System.out.println("[PromptCompiler]   - " + safeTitle(card) + " (triggered)");
-            }
-            else
-            {
-                System.out.println("[PromptCompiler]   - " + safeTitle(card) + " (triggered by: "
-                        + String.join(", ", matched) + ")");
-            }
-        }
-
-        System.out.println("[PromptCompiler] Story cards dropped for space:");
-        if (droppedForSpace.isEmpty())
-        {
-            System.out.println("[PromptCompiler]   - none");
-        }
-        for (DroppedStoryCard dropped : droppedForSpace)
-        {
-            StoryCard card = dropped.card;
-            if ("triggered".equals(dropped.reason))
-            {
-                List<String> matched = selection.triggerMatches.getOrDefault(card, List.of());
-                if (matched.isEmpty())
-                {
-                    System.out.println("[PromptCompiler]   - " + safeTitle(card) + " (triggered)");
-                }
-                else
-                {
-                    System.out.println("[PromptCompiler]   - " + safeTitle(card) + " (triggered by: "
-                            + String.join(", ", matched) + ")");
-                }
-            }
-            else
-            {
-                System.out.println("[PromptCompiler]   - " + safeTitle(card) + " (pinned)");
-            }
-        }
-
-        if (plotEssentialsTrimmed)
-        {
-            System.out.println("[PromptCompiler] Plot essentials trimmed for space: yes ("
-                    + safeText(originalPlotEssentials).length() + " -> " + safeText(finalPlotEssentials).length()
-                    + " chars)");
-        }
-        else
-        {
-            System.out.println("[PromptCompiler] Plot essentials trimmed for space: no");
-        }
     }
 
     private static String safeTitle(StoryCard card)
@@ -486,12 +837,28 @@ public class PromptCompiler
         {
             return "(untitled)";
         }
-        String title = safeText(card.title()).trim();
-        if (title.isEmpty())
+        String title = normalizeContextText(card.title());
+        return title.isEmpty() ? "(untitled)" : title;
+    }
+
+    private static void logCompilationReport(PromptContextReport report)
+    {
+        PromptBudget budget = report.budget();
+        System.out.println("[PromptCompiler] Estimated prompt tokens: " + report.estimatedInputTokens()
+                + " / input budget " + budget.inputLimit()
+                + " (context " + budget.contextLimit()
+                + ", response reserve " + budget.responseReserve()
+                + ", estimation reserve " + budget.estimationSafetyReserve() + ")");
+        for (Entry entry : report.entries())
         {
-            return "(untitled)";
+            if (entry.status() != Status.INCLUDED)
+            {
+                System.out.println("[PromptCompiler] " + entry.label() + ": "
+                        + entry.status().name().toLowerCase() + " ("
+                        + entry.includedEstimatedTokens() + " / "
+                        + entry.originalEstimatedTokens() + " estimated tokens)");
+            }
         }
-        return title;
     }
 
     private record StoryCardSelection(List<StoryCard> pinned, List<StoryCard> triggered,
@@ -499,12 +866,17 @@ public class PromptCompiler
     {
     }
 
-    private record DroppedStoryCard(StoryCard card, String reason)
+    private record Message(Role role, String content)
     {
     }
 
-    private record Message(Role role, String content)
+    private record CompiledState(List<ChatMessage> messages, int estimatedTokens)
     {
+        private CompiledState
+        {
+            messages = messages == null ? List.of() : List.copyOf(messages);
+            estimatedTokens = Math.max(0, estimatedTokens);
+        }
     }
 
     private static List<ChatMessage> buildPromptMessages(String systemText, List<Message> messages)
@@ -512,7 +884,7 @@ public class PromptCompiler
         List<ChatMessage> promptMessages = new ArrayList<>();
         if (systemText != null && !systemText.isBlank())
         {
-            promptMessages.add(new ChatMessage("system", systemText.trim()));
+            promptMessages.add(new ChatMessage("system", systemText));
         }
         for (Message message : messages)
         {
@@ -520,5 +892,4 @@ public class PromptCompiler
         }
         return promptMessages;
     }
-
 }

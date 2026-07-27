@@ -71,6 +71,7 @@ import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.control.Spinner;
 import javafx.scene.control.SpinnerValueFactory;
+import javafx.scene.control.Tooltip;
 import javafx.stage.FileChooser;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
@@ -781,6 +782,8 @@ public class App extends Application
         frequencyPenaltySlider = buildDoubleSlider(-2.0, 2.0, activeModelSettings.frequencyPenalty(), 0.01);
         repetitionPenaltySlider = buildDoubleSlider(-2.0, 2.0, activeModelSettings.repetitionPenalty(), 0.01);
         responseLengthEnabledBox = optionCheckBox("Response Length", appSettings.responseLengthEnabled());
+        responseLengthEnabledBox.setTooltip(new Tooltip(
+                "When disabled, Ollama chooses the response length and LlamaQuill reserves 200 context tokens for output."));
         temperatureEnabledBox = optionCheckBox("Temperature", activeModelSettings.temperatureEnabled());
         topKEnabledBox = optionCheckBox("Top K", activeModelSettings.topKEnabled());
         topPEnabledBox = optionCheckBox("Top P", activeModelSettings.topPEnabled());
