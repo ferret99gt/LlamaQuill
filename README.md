@@ -37,7 +37,9 @@ Example pull command for Muse 12B Q8:
 ollama pull hf.co/LatitudeGames/Muse-12B-GGUF:Q8_0
 ```
 
-Any compatible model available through Ollama can be selected inside LlamaQuill once pulled. Latitude's models are suggested but you can try any model that honors ChatML style.
+Any compatible chat model available through Ollama can be selected inside LlamaQuill once pulled. Latitude's models are suggested, but Ollama now owns the model-specific chat template.
+
+Response length and model sampling controls each have an enable checkbox. Unchecked options are omitted from the Ollama request so the model's defaults can apply; the remembered response-length value remains LlamaQuill's conservative local prompt-budget reserve.
 
 ## ComfyUI Desktop setup
 

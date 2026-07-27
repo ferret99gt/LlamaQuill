@@ -49,8 +49,6 @@ public class PromptCompiler
         String plotEssentials = originalPlotEssentials;
         boolean plotEssentialsTrimmed = false;
         List<DroppedStoryCard> droppedForSpace = new ArrayList<>();
-        Map<String, Integer> tokenEstimateCache = new HashMap<>();
-
         while (true)
         {
             List<Block> windowWithNote = insertAuthorNote(window, settings.anPlacement(), safeText(story.authorNote()));
@@ -71,14 +69,13 @@ public class PromptCompiler
             }
             messages.addAll(groupMessages(windowWithNote));
             List<ChatMessage> promptMessages = buildPromptMessages(systemText, messages);
-            String prompt = ChatMl.format(promptMessages);
-            int estimatedTokens = tokenEstimateCache.computeIfAbsent(prompt, this::estimateTokens);
+            int estimatedTokens = estimateTokens(promptMessages);
 
             if (estimatedTokens <= tokenBudget)
             {
                 logCompilationReport(selection, droppedForSpace, plotEssentialsTrimmed, originalPlotEssentials,
                         plotEssentials, estimatedTokens, tokenBudget);
-                return new PromptCompilation(prompt, promptMessages, estimatedTokens);
+                return new PromptCompilation(promptMessages, estimatedTokens);
             }
 
             boolean trimmed = false;
@@ -116,7 +113,7 @@ public class PromptCompiler
             {
                 logCompilationReport(selection, droppedForSpace, plotEssentialsTrimmed, originalPlotEssentials,
                         plotEssentials, estimatedTokens, tokenBudget);
-                return new PromptCompilation(prompt, promptMessages, estimatedTokens);
+                return new PromptCompilation(promptMessages, estimatedTokens);
             }
         }
     }
@@ -410,6 +407,18 @@ public class PromptCompiler
         return estimateTokensHeuristic(text);
     }
 
+    private int estimateTokens(List<ChatMessage> messages)
+    {
+        int total = 0;
+        for (ChatMessage message : messages)
+        {
+            total += 4;
+            total += estimateTokens(message.role());
+            total += estimateTokens(message.content());
+        }
+        return total;
+    }
+
     private static int estimateTokensHeuristic(String text)
     {
         if (text == null || text.isBlank())
@@ -533,36 +542,4 @@ public class PromptCompiler
         return promptMessages;
     }
 
-    private static final class ChatMl
-    {
-        private ChatMl()
-        {
-        }
-
-        static String format(List<ChatMessage> messages)
-        {
-            StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < messages.size(); i++)
-            {
-                ChatMessage message = messages.get(i);
-                boolean isLast = i == messages.size() - 1;
-                boolean close = !(isLast && "assistant".equals(message.role()));
-                appendMessage(sb, message.role(), message.content(), close);
-            }
-            return sb.toString();
-        }
-
-        private static void appendMessage(StringBuilder sb, String role, String content, boolean close)
-        {
-            if (sb.length() > 0)
-            {
-                sb.append('\n');
-            }
-            sb.append("<|im_start|>").append(role).append('\n').append(content);
-            if (close)
-            {
-                sb.append("<|im_end|>");
-            }
-        }
-    }
 }

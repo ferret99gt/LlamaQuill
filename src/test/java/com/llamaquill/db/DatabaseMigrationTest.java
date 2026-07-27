@@ -7,7 +7,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.llamaquill.AppVersion;
+import com.llamaquill.model.AppSettings;
 import com.llamaquill.model.Block;
+import com.llamaquill.model.ModelSettings;
 import com.llamaquill.model.Role;
 import com.llamaquill.model.Story;
 import com.llamaquill.util.Timestamps;
@@ -32,7 +34,7 @@ class DatabaseMigrationTest
     Path temporaryDirectory;
 
     @Test
-    void createsACompleteVersionTwoDatabase() throws Exception
+    void createsACompleteCurrentDatabase() throws Exception
     {
         AppPaths paths = paths("fresh");
         try (Database database = Database.open(paths))
@@ -41,12 +43,46 @@ class DatabaseMigrationTest
             assertEquals(0, database.startupReport().migration().sourceSchema());
             assertEquals(AppVersion.DATABASE_SCHEMA, userVersion(database));
             assertEquals("0.2.0", scalarText(database,
-                    "SELECT app_version FROM schema_migrations WHERE schema_version = 2"));
+                    "SELECT app_version FROM schema_migrations WHERE schema_version = "
+                            + AppVersion.DATABASE_SCHEMA));
+            assertFalse(columns(database, "app_settings").contains("use_ollama_templates"));
             assertEquals("ok", scalarText(database, "PRAGMA integrity_check"));
             assertEquals(1, scalarInt(database, "PRAGMA foreign_keys"));
             Database.Diagnostics diagnostics = database.diagnostics();
             assertTrue(diagnostics.healthy());
             assertEquals("wal", diagnostics.journalMode());
+
+            AppSettingsRepository appSettings = new AppSettingsRepository(database);
+            AppSettings expectedSettings = new AppSettings(
+                    "http://settings-ollama:11434",
+                    "http://settings-comfy:8000",
+                    "settings-model",
+                    16384,
+                    false,
+                    240,
+                    9000,
+                    12,
+                    4,
+                    "SettingsWorkflow",
+                    1024,
+                    768,
+                    2);
+            appSettings.save(expectedSettings);
+            assertEquals(expectedSettings, appSettings.load().orElseThrow());
+
+            ModelSettingsRepository modelSettings = new ModelSettingsRepository(database);
+            ModelSettings expectedModelSettings = new ModelSettings(
+                    "settings-model",
+                    true,
+                    false, 0.7,
+                    true, 0,
+                    false, 0.92,
+                    true, 0.0,
+                    false, 0.0,
+                    true, 0.0,
+                    false, 1.05);
+            modelSettings.save(expectedModelSettings);
+            assertEquals(expectedModelSettings, modelSettings.load("settings-model").orElseThrow());
 
             StoryRepository stories = new StoryRepository(database);
             String now = Timestamps.now();
@@ -74,7 +110,7 @@ class DatabaseMigrationTest
             Database.StartupReport report = database.startupReport();
             assertEquals(paths.legacyDatabaseFile(), report.pathPreparation().copiedLegacyDatabase().orElseThrow());
             assertEquals(1, report.migration().sourceSchema());
-            assertEquals(2, report.migration().targetSchema());
+            assertEquals(AppVersion.DATABASE_SCHEMA, report.migration().targetSchema());
             assertTrue(Files.isRegularFile(report.migration().backup().orElseThrow()));
             assertTrue(Files.isRegularFile(paths.legacyDatabaseFile()));
 
@@ -86,7 +122,11 @@ class DatabaseMigrationTest
             assertEquals(1, scalarInt(database, "SELECT COUNT(*) FROM story_cards WHERE id = 'card-1'"));
             assertEquals(8192, scalarInt(database, "SELECT context_limit FROM app_settings WHERE id = 1"));
             assertEquals(1, scalarInt(database,
+                    "SELECT response_length_enabled FROM app_settings WHERE id = 1"));
+            assertEquals(1, scalarInt(database,
                     "SELECT COUNT(*) FROM model_settings WHERE model_name LIKE 'hf.co/%'"));
+            assertEquals(7, enabledModelOptionCount(database,
+                    "hf.co/LatitudeGames/Muse-12B-GGUF:BF16"));
 
             int nextPosition = blocks.nextPosition("story-1");
             blocks.insert(new Block("image-block", "story-1", Role.IMAGE, "image-id", Timestamps.now(), nextPosition));
@@ -106,7 +146,7 @@ class DatabaseMigrationTest
         {
             assertEquals("http://legacy-ollama:11434",
                     scalarText(database, "SELECT ollama_url FROM app_settings WHERE id = 1"));
-            assertEquals(0, scalarInt(database, "SELECT use_ollama_templates FROM app_settings WHERE id = 1"));
+            assertFalse(columns(database, "app_settings").contains("use_ollama_templates"));
             assertEquals(6, scalarInt(database, "SELECT cooldown_turns FROM app_auto_cards WHERE id = 1"));
             assertEquals("Proper Noun Heuristics",
                     scalarText(database, "SELECT candidate_selection_mode FROM app_auto_cards WHERE id = 1"));
@@ -114,6 +154,40 @@ class DatabaseMigrationTest
                     "SELECT preview_first FROM story_auto_cards WHERE story_id = 'story-late'"));
             assertFalse(columns(database, "app_auto_cards").contains("run_mode"));
             assertFalse(columns(database, "model_auto_cards").contains("temperature_override"));
+            assertEquals(1, scalarInt(database,
+                    "SELECT response_length_enabled FROM app_settings WHERE id = 1"));
+            assertEquals(7, enabledModelOptionCount(database, "legacy-model"));
+        }
+    }
+
+    @Test
+    void migratesInitialVersionTwoSettingsAndRemovesTheTemplateToggle() throws Exception
+    {
+        AppPaths paths = paths("schema-two");
+        createFixture(paths.databaseFile(), "/db/0.2.0-schema-2.sql");
+
+        try (Database database = Database.open(paths))
+        {
+            Database.StartupReport report = database.startupReport();
+            assertEquals(2, report.migration().sourceSchema());
+            assertEquals(AppVersion.DATABASE_SCHEMA, report.migration().targetSchema());
+            assertTrue(Files.isRegularFile(report.migration().backup().orElseThrow()));
+            assertEquals("http://schema-two-ollama:11434",
+                    scalarText(database, "SELECT ollama_url FROM app_settings WHERE id = 1"));
+            assertEquals("schema-two-model",
+                    scalarText(database, "SELECT selected_model FROM app_settings WHERE id = 1"));
+            assertEquals(24576, scalarInt(database, "SELECT context_limit FROM app_settings WHERE id = 1"));
+            assertEquals("SchemaTwoWorkflow",
+                    scalarText(database, "SELECT comfy_workflow FROM app_settings WHERE id = 1"));
+            assertFalse(columns(database, "app_settings").contains("use_ollama_templates"));
+            assertEquals(1, scalarInt(database,
+                    "SELECT response_length_enabled FROM app_settings WHERE id = 1"));
+            assertEquals(0, scalarInt(database,
+                    "SELECT top_k FROM model_settings WHERE model_name = 'schema-two-model'"));
+            assertEquals(1, scalarInt(database,
+                    "SELECT top_k_enabled FROM model_settings WHERE model_name = 'schema-two-model'"));
+            assertEquals(7, enabledModelOptionCount(database, "schema-two-model"));
+            assertEquals(AppVersion.DATABASE_SCHEMA, userVersion(database));
         }
     }
 
@@ -199,6 +273,16 @@ class DatabaseMigrationTest
                 return result.next() ? result.getString(1) : null;
             }
         });
+    }
+
+    private static int enabledModelOptionCount(Database database, String modelName) throws SQLException
+    {
+        return scalarInt(database, """
+                SELECT temperature_enabled + top_k_enabled + top_p_enabled + min_p_enabled
+                       + presence_penalty_enabled + frequency_penalty_enabled + repetition_penalty_enabled
+                FROM model_settings
+                WHERE model_name = '%s'
+                """.formatted(modelName.replace("'", "''")));
     }
 
     private static List<String> columns(Database database, String table) throws SQLException

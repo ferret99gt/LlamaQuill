@@ -24,22 +24,25 @@ public class AutoCardsService
     {
     }
 
-    public record PromptContext(String rawPrompt, List<ChatMessage> messages)
+    public record PromptContext(List<ChatMessage> messages)
     {
         public PromptContext
         {
-            rawPrompt = rawPrompt == null ? "" : rawPrompt;
             messages = messages == null ? List.of() : List.copyOf(messages);
         }
 
         public static PromptContext empty()
         {
-            return new PromptContext("", List.of());
+            return new PromptContext(List.of());
         }
     }
 
-    private record ModelRequest(String rawPrompt, List<ChatMessage> messages)
+    private record ModelRequest(List<ChatMessage> messages)
     {
+        private ModelRequest
+        {
+            messages = messages == null ? List.of() : List.copyOf(messages);
+        }
     }
 
     private final OllamaClient ollamaClient;
@@ -58,7 +61,7 @@ public class AutoCardsService
                 Math.max(modelAutoCardsSettings.maxTokensUpdate(), modelAutoCardsSettings.maxTokensSummarize()));
         GenerationSettings contextSettings = buildGenerationSettings(appSettings, modelSettings, tokenCap);
         PromptCompilation compiled = promptCompiler.compile(story, blocks, storyCards, contextSettings);
-        return new PromptContext(compiled.prompt(), compiled.messages());
+        return new PromptContext(compiled.messages());
     }
 
     public List<AutoCards.Candidate> extractCandidatesByModel(String excerpt, List<StoryCard> currentCards, int maxCount,
@@ -88,9 +91,8 @@ public class AutoCardsService
 
         int tokenCap = Math.max(128, modelAutoCardsSettings.maxTokensCreate());
         GenerationSettings autoSettings = buildGenerationSettings(appSettings, modelSettings, tokenCap);
-        ModelRequest request = new ModelRequest(AutoCards.buildChatPrompt(system, user),
-                AutoCards.buildChatMessages(system, user));
-        String response = generateModelResponse(request, appSettings, autoSettings);
+        ModelRequest request = new ModelRequest(AutoCards.buildChatMessages(system, user));
+        String response = generateModelResponse(request, autoSettings);
         return AutoCards.parseCandidatesFromModelResponse(response, maxCount);
     }
 
@@ -110,7 +112,7 @@ public class AutoCardsService
                 appSettings,
                 modelSettings,
                 modelAutoCardsSettings.maxTokensCreate());
-        String generated = normalizeOutput(generateModelResponse(request, appSettings, autoSettings));
+        String generated = normalizeOutput(generateModelResponse(request, autoSettings));
         return formatAsBulletedList(generated, useBulletedLists);
     }
 
@@ -130,7 +132,7 @@ public class AutoCardsService
                 appSettings,
                 modelSettings,
                 modelAutoCardsSettings.maxTokensUpdate());
-        String continuation = normalizeOutput(generateModelResponse(request, appSettings, autoSettings));
+        String continuation = normalizeOutput(generateModelResponse(request, autoSettings));
         continuation = formatAsBulletedList(continuation, useBulletedLists);
         if (continuation.isBlank())
         {
@@ -160,7 +162,7 @@ public class AutoCardsService
                 appSettings,
                 modelSettings,
                 modelAutoCardsSettings.maxTokensSummarize());
-        String generated = normalizeOutput(generateModelResponse(request, appSettings, autoSettings));
+        String generated = normalizeOutput(generateModelResponse(request, autoSettings));
         return formatAsBulletedList(generated, useBulletedLists);
     }
 
@@ -196,7 +198,7 @@ public class AutoCardsService
                 appSettings,
                 modelSettings,
                 modelAutoCardsSettings.maxTokensCreate());
-        String response = generateModelResponse(requestModel, appSettings, autoSettings);
+        String response = generateModelResponse(requestModel, autoSettings);
         AutoCards.GeneratedCard parsed = AutoCards.parseGeneratedCardFromModelResponse(response);
         if (parsed == null)
         {
@@ -245,7 +247,7 @@ public class AutoCardsService
                 appSettings,
                 modelSettings,
                 modelAutoCardsSettings.maxTokensCreate());
-        return normalizeOutput(generateModelResponse(requestModel, appSettings, autoSettings));
+        return normalizeOutput(generateModelResponse(requestModel, autoSettings));
     }
 
     public String generateOneShotResponse(String systemPrompt, String userPrompt, String excerpt,
@@ -254,7 +256,7 @@ public class AutoCardsService
     {
         ModelRequest request = buildOneShotRequest(systemPrompt, userPrompt, excerpt, fullStoryContext);
         GenerationSettings oneShotSettings = buildUnboundedGenerationSettings(appSettings, modelSettings);
-        return normalizePromptResponse(generateModelResponse(request, appSettings, oneShotSettings));
+        return normalizePromptResponse(generateModelResponse(request, oneShotSettings));
     }
 
     public String enforceCardLength(String content, boolean summarize, int limit, String title, String triggers,
@@ -295,97 +297,55 @@ public class AutoCardsService
         return new LengthEnforcementResult(AutoCards.truncateContent(content, limit), false);
     }
 
-    private String generateModelResponse(ModelRequest request, AppSettings appSettings, GenerationSettings settings)
+    private String generateModelResponse(ModelRequest request, GenerationSettings settings)
             throws IOException, InterruptedException
     {
-        if (appSettings.useOllamaTemplates())
-        {
-            return ollamaClient.chat(request.messages(), settings);
-        }
-        return ollamaClient.generate(request.rawPrompt(), settings);
+        return ollamaClient.chat(request.messages(), settings);
     }
 
     private ModelRequest buildAutoCardRequest(AutoCards.PromptParts promptParts, PromptContext fullStoryContext)
     {
-        String autoCardPrompt = AutoCards.buildChatPrompt(promptParts);
         List<ChatMessage> messages = new ArrayList<>(fullStoryContext == null ? List.of() : fullStoryContext.messages());
         messages.addAll(AutoCards.buildChatMessages(promptParts));
-
-        String rawPrefix = fullStoryContext == null ? "" : fullStoryContext.rawPrompt();
-        if (rawPrefix == null || rawPrefix.isBlank())
-        {
-            return new ModelRequest(autoCardPrompt, messages);
-        }
-        String trimmedPrefix = rawPrefix.trim();
-        if (!trimmedPrefix.endsWith("<|im_end|>"))
-        {
-            trimmedPrefix = trimmedPrefix + "<|im_end|>";
-        }
-        return new ModelRequest(trimmedPrefix + '\n' + autoCardPrompt, messages);
+        return new ModelRequest(messages);
     }
 
     private static GenerationSettings buildGenerationSettings(AppSettings appSettings, ModelSettings modelSettings, int maxTokens)
     {
-        return new GenerationSettings(appSettings.contextLimit(), maxTokens, modelSettings.temperature(),
-                modelSettings.topK(), modelSettings.topP(), modelSettings.minP(), modelSettings.presencePenalty(),
-                modelSettings.frequencyPenalty(), modelSettings.repetitionPenalty(), appSettings.minStoryWindow(),
-                appSettings.storyCardLookback(), appSettings.anPlacement());
+        return new GenerationSettings(appSettings.contextLimit(),
+                true, maxTokens,
+                modelSettings.temperatureEnabled(), modelSettings.temperature(),
+                modelSettings.topKEnabled(), modelSettings.topK(),
+                modelSettings.topPEnabled(), modelSettings.topP(),
+                modelSettings.minPEnabled(), modelSettings.minP(),
+                modelSettings.presencePenaltyEnabled(), modelSettings.presencePenalty(),
+                modelSettings.frequencyPenaltyEnabled(), modelSettings.frequencyPenalty(),
+                modelSettings.repetitionPenaltyEnabled(), modelSettings.repetitionPenalty(),
+                appSettings.minStoryWindow(), appSettings.storyCardLookback(), appSettings.anPlacement());
     }
 
     private static GenerationSettings buildUnboundedGenerationSettings(AppSettings appSettings, ModelSettings modelSettings)
     {
-        return new GenerationSettings(appSettings.contextLimit(), -1, modelSettings.temperature(),
-                modelSettings.topK(), modelSettings.topP(), modelSettings.minP(), modelSettings.presencePenalty(),
-                modelSettings.frequencyPenalty(), modelSettings.repetitionPenalty(), appSettings.minStoryWindow(),
-                appSettings.storyCardLookback(), appSettings.anPlacement());
+        return new GenerationSettings(appSettings.contextLimit(),
+                false, appSettings.responseLength(),
+                modelSettings.temperatureEnabled(), modelSettings.temperature(),
+                modelSettings.topKEnabled(), modelSettings.topK(),
+                modelSettings.topPEnabled(), modelSettings.topP(),
+                modelSettings.minPEnabled(), modelSettings.minP(),
+                modelSettings.presencePenaltyEnabled(), modelSettings.presencePenalty(),
+                modelSettings.frequencyPenaltyEnabled(), modelSettings.frequencyPenalty(),
+                modelSettings.repetitionPenaltyEnabled(), modelSettings.repetitionPenalty(),
+                appSettings.minStoryWindow(), appSettings.storyCardLookback(), appSettings.anPlacement());
     }
 
     private static ModelRequest buildOneShotRequest(String systemPrompt, String userPrompt, String excerpt,
             PromptContext fullStoryContext)
     {
-        StringBuilder prompt = new StringBuilder();
-        if (fullStoryContext != null && fullStoryContext.rawPrompt() != null && !fullStoryContext.rawPrompt().isBlank())
-        {
-            String trimmedPrefix = fullStoryContext.rawPrompt().trim();
-            prompt.append(trimmedPrefix);
-            if (!trimmedPrefix.endsWith("<|im_end|>"))
-            {
-                prompt.append("<|im_end|>");
-            }
-            prompt.append('\n');
-        }
-
-        appendChatMessage(prompt, "system", systemPrompt, true);
-        appendChatMessage(prompt, "user", excerpt == null || excerpt.isBlank() ? "" : "# Story excerpt:\n" + excerpt, true);
-        appendChatMessage(prompt, "user", userPrompt, true);
-        if (prompt.length() > 0)
-        {
-            prompt.append('\n');
-        }
-        prompt.append("<|im_start|>assistant\n");
-
         List<ChatMessage> messages = new ArrayList<>(fullStoryContext == null ? List.of() : fullStoryContext.messages());
         appendMessage(messages, "system", systemPrompt);
         appendMessage(messages, "user", excerpt == null || excerpt.isBlank() ? "" : "# Story excerpt:\n" + excerpt);
         appendMessage(messages, "user", userPrompt);
-        return new ModelRequest(prompt.toString(), messages);
-    }
-
-    private static void appendChatMessage(StringBuilder prompt, String role, String content, boolean close)
-    {
-        if (content == null || content.isBlank())
-        {
-            return;
-        }
-        if (prompt.length() > 0 && prompt.charAt(prompt.length() - 1) != '\n')
-        {
-            prompt.append('\n');
-        }
-        prompt.append("<|im_start|>").append(role).append('\n').append(content);
-        if (close)
-        {
-            prompt.append("<|im_end|>");
-        }
+        return new ModelRequest(messages);
     }
 
     private static void appendMessage(List<ChatMessage> messages, String role, String content)

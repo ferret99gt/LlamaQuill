@@ -74,11 +74,6 @@ public class OllamaClient
         return Json.extractStringArray(response.body(), "name");
     }
 
-    public String generate(String prompt, GenerationSettings settings) throws IOException, InterruptedException
-    {
-        return executeStreaming("/api/generate", buildGeneratePayload(prompt, settings), "response");
-    }
-
     public String chat(List<ChatMessage> messages, GenerationSettings settings) throws IOException, InterruptedException
     {
         return executeStreaming("/api/chat", buildChatPayload(messages, settings), "content");
@@ -129,21 +124,7 @@ public class OllamaClient
         return sb.toString();
     }
 
-    private String buildGeneratePayload(String prompt, GenerationSettings settings)
-    {
-        StringBuilder sb = new StringBuilder();
-        sb.append('{');
-        sb.append("\"model\":\"").append(Json.escape(model)).append("\"");
-        sb.append(",\"prompt\":\"").append(Json.escape(prompt)).append("\"");
-        sb.append(",\"think\":false");
-        sb.append(",\"raw\":true");
-        sb.append(",\"stream\":true");
-        appendOptions(sb, settings);
-        sb.append('}');
-        return sb.toString();
-    }
-
-    private String buildChatPayload(List<ChatMessage> messages, GenerationSettings settings)
+    String buildChatPayload(List<ChatMessage> messages, GenerationSettings settings)
     {
         StringBuilder sb = new StringBuilder();
         sb.append('{');
@@ -178,14 +159,38 @@ public class OllamaClient
     {
         sb.append(",\"options\":{");
         sb.append("\"num_ctx\":").append(settings.contextLimit());
-        sb.append(",\"temperature\":").append(settings.temperature());
-        sb.append(",\"top_k\":").append(settings.topK());
-        sb.append(",\"top_p\":").append(settings.topP());
-        sb.append(",\"min_p\":").append(settings.minP());
-        sb.append(",\"presence_penalty\":").append(settings.presencePenalty());
-        sb.append(",\"frequency_penalty\":").append(settings.frequencyPenalty());
-        sb.append(",\"repeat_penalty\":").append(settings.repetitionPenalty());
-        sb.append(",\"num_predict\":").append(settings.responseLength());
+        if (settings.temperatureEnabled())
+        {
+            sb.append(",\"temperature\":").append(settings.temperature());
+        }
+        if (settings.topKEnabled())
+        {
+            sb.append(",\"top_k\":").append(settings.topK());
+        }
+        if (settings.topPEnabled())
+        {
+            sb.append(",\"top_p\":").append(settings.topP());
+        }
+        if (settings.minPEnabled())
+        {
+            sb.append(",\"min_p\":").append(settings.minP());
+        }
+        if (settings.presencePenaltyEnabled())
+        {
+            sb.append(",\"presence_penalty\":").append(settings.presencePenalty());
+        }
+        if (settings.frequencyPenaltyEnabled())
+        {
+            sb.append(",\"frequency_penalty\":").append(settings.frequencyPenalty());
+        }
+        if (settings.repetitionPenaltyEnabled())
+        {
+            sb.append(",\"repeat_penalty\":").append(settings.repetitionPenalty());
+        }
+        if (settings.responseLengthEnabled())
+        {
+            sb.append(",\"num_predict\":").append(settings.responseLength());
+        }
         sb.append('}');
     }
 

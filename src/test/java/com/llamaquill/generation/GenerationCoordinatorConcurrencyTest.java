@@ -44,7 +44,7 @@ class GenerationCoordinatorConcurrencyTest
             fixture.insertBlock(story, "original-head", Role.ASSISTANT, "Original", 1);
 
             Future<GenerationCoordinator.ContinueResult> future = executor.submit(
-                    () -> fixture.coordinator.continueStory(story, GenerationSettings.defaults(), false, null));
+                    () -> fixture.coordinator.continueStory(story, GenerationSettings.defaults(), null));
             fixture.ollama.awaitRequest();
             fixture.insertBlock(story, "intervening-head", Role.USER, "Changed", 2);
             fixture.ollama.complete("Generated response");
@@ -68,7 +68,7 @@ class GenerationCoordinatorConcurrencyTest
             fixture.insertBlock(storyB, "b-head", Role.ASSISTANT, "B", 1);
 
             Future<GenerationCoordinator.ContinueResult> future = executor.submit(
-                    () -> fixture.coordinator.continueStory(storyA, GenerationSettings.defaults(), false, null));
+                    () -> fixture.coordinator.continueStory(storyA, GenerationSettings.defaults(), null));
             fixture.ollama.awaitRequest();
             fixture.ollama.complete("A continuation");
 
@@ -90,7 +90,7 @@ class GenerationCoordinatorConcurrencyTest
             fixture.insertBlock(story, "a-head", Role.ASSISTANT, "A", 1);
 
             Future<GenerationCoordinator.ContinueResult> future = executor.submit(
-                    () -> fixture.coordinator.continueStory(story, GenerationSettings.defaults(), false, null));
+                    () -> fixture.coordinator.continueStory(story, GenerationSettings.defaults(), null));
             fixture.ollama.awaitRequest();
             Story edited = new Story(story.id(), story.title(), "Edited System Prompt", "Edited Memory", "Edited Note",
                     story.createdAt(), Timestamps.now());
@@ -117,7 +117,7 @@ class GenerationCoordinatorConcurrencyTest
             fixture.insertBlock(story, "original-head", Role.ASSISTANT, "Original", 1);
 
             Future<GenerationCoordinator.TurnResult> future = executor.submit(
-                    () -> fixture.coordinator.takeTurn(story, "User action", GenerationSettings.defaults(), false, null));
+                    () -> fixture.coordinator.takeTurn(story, "User action", GenerationSettings.defaults(), null));
             fixture.ollama.awaitRequest();
             List<Block> afterSeed = fixture.blocks.listForStory(story.id());
             Block seed = afterSeed.getLast();
@@ -189,12 +189,6 @@ class GenerationCoordinatorConcurrencyTest
         private final CountDownLatch requested = new CountDownLatch(1);
         private final CountDownLatch completed = new CountDownLatch(1);
         private volatile String response;
-
-        @Override
-        public String generate(String prompt, GenerationSettings settings) throws IOException, InterruptedException
-        {
-            return respond();
-        }
 
         @Override
         public String chat(List<ChatMessage> messages, GenerationSettings settings) throws IOException, InterruptedException

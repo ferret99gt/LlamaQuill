@@ -471,20 +471,6 @@ public final class AutoCards
         return content.substring(0, limit - 3) + "...";
     }
 
-    public static String buildChatPrompt(String system, String user)
-    {
-        return buildChatPrompt(system, user, "");
-    }
-
-    public static String buildChatPrompt(PromptParts parts)
-    {
-        if (parts == null)
-        {
-            return buildChatPrompt("", "", "");
-        }
-        return buildChatPrompt(parts.system(), parts.user(), parts.assistant());
-    }
-
     public static List<ChatMessage> buildChatMessages(String system, String user)
     {
         return buildChatMessages(new PromptParts(system, user, ""));
@@ -501,32 +487,6 @@ public final class AutoCards
         appendChatMessage(messages, "user", parts.user());
         appendChatMessage(messages, "assistant", parts.assistant());
         return List.copyOf(messages);
-    }
-
-    private static String buildChatPrompt(String system, String user, String assistant)
-    {
-        String systemText = system == null ? "" : system.trim();
-        String userText = user == null ? "" : user.trim();
-        String assistantText = assistant == null ? "" : assistant.trim();
-        StringBuilder prompt = new StringBuilder();
-        if (!systemText.isBlank())
-        {
-            prompt.append("<|im_start|>system\n")
-                    .append(systemText)
-                    .append("<|im_end|>\n");
-        }
-        if (!userText.isBlank())
-        {
-            prompt.append("<|im_start|>user\n")
-                    .append(userText)
-                    .append("<|im_end|>\n");
-        }
-        prompt.append("<|im_start|>assistant\n");
-        if (!assistantText.isBlank())
-        {
-            prompt.append(assistantText);
-        }
-        return prompt.toString();
     }
 
     private static void appendChatMessage(List<ChatMessage> messages, String role, String content)

@@ -211,19 +211,26 @@ public class App extends Application
     private final StoryRetryHistory<RetryHistoryEntry> retryHistory = new StoryRetryHistory<>();
 
     private Slider contextLimitSlider;
+    private CheckBox responseLengthEnabledBox;
     private Slider responseLengthSlider;
+    private CheckBox temperatureEnabledBox;
     private Slider temperatureSlider;
+    private CheckBox topKEnabledBox;
     private Slider topKSlider;
+    private CheckBox topPEnabledBox;
     private Slider topPSlider;
+    private CheckBox minPEnabledBox;
     private Slider minPSlider;
+    private CheckBox presencePenaltyEnabledBox;
     private Slider presencePenaltySlider;
+    private CheckBox frequencyPenaltyEnabledBox;
     private Slider frequencyPenaltySlider;
+    private CheckBox repetitionPenaltyEnabledBox;
     private Slider repetitionPenaltySlider;
     private Slider minStoryPercentSlider;
     private Spinner<Integer> storyCardLookbackSpinner;
     private Spinner<Integer> anPlacementSpinner;
     private TextField ollamaUrlField;
-    private CheckBox useOllamaTemplatesBox;
     private TextField comfyUiUrlField;
     private ComboBox<String> comfyWorkflowSelect;
     private Spinner<Integer> comfyWidthSpinner;
@@ -644,10 +651,6 @@ public class App extends Application
             }
         });
 
-        useOllamaTemplatesBox = new CheckBox("Use Ollama templates");
-        useOllamaTemplatesBox.setSelected(appSettings.useOllamaTemplates());
-        useOllamaTemplatesBox.setOnAction(event -> updateUseOllamaTemplates(useOllamaTemplatesBox.isSelected()));
-
         comfyUiUrlField = new TextField(appSettings.comfyUiUrl());
         comfyUiUrlField.setPromptText("ComfyUI URL");
         comfyUiUrlField.focusedProperty().addListener((obs, oldValue, newValue) ->
@@ -777,6 +780,15 @@ public class App extends Application
         presencePenaltySlider = buildDoubleSlider(-2.0, 2.0, activeModelSettings.presencePenalty(), 0.01);
         frequencyPenaltySlider = buildDoubleSlider(-2.0, 2.0, activeModelSettings.frequencyPenalty(), 0.01);
         repetitionPenaltySlider = buildDoubleSlider(-2.0, 2.0, activeModelSettings.repetitionPenalty(), 0.01);
+        responseLengthEnabledBox = optionCheckBox("Response Length", appSettings.responseLengthEnabled());
+        temperatureEnabledBox = optionCheckBox("Temperature", activeModelSettings.temperatureEnabled());
+        topKEnabledBox = optionCheckBox("Top K", activeModelSettings.topKEnabled());
+        topPEnabledBox = optionCheckBox("Top P", activeModelSettings.topPEnabled());
+        minPEnabledBox = optionCheckBox("Min P", activeModelSettings.minPEnabled());
+        presencePenaltyEnabledBox = optionCheckBox("Presence Penalty", activeModelSettings.presencePenaltyEnabled());
+        frequencyPenaltyEnabledBox = optionCheckBox("Frequency Penalty", activeModelSettings.frequencyPenaltyEnabled());
+        repetitionPenaltyEnabledBox = optionCheckBox("Repetition Penalty",
+                activeModelSettings.repetitionPenaltyEnabled());
         minStoryPercentSlider = buildIntSlider(10, 100, percentFromSettings(), 1);
         storyCardLookbackSpinner = buildSpinner(0, 20, appSettings.storyCardLookback());
         anPlacementSpinner = buildSpinner(1, 10, appSettings.anPlacement());
@@ -819,28 +831,33 @@ public class App extends Application
         });
 
         content.getChildren().addAll(textFieldRow("Ollama URL", ollamaUrlField),
-                useOllamaTemplatesBox,
                 comboRow("Model", modelSelect),
                 sliderRow("Context Limit", contextLimitSlider, valueLabel(appSettings.contextLimit(), "tokens"),
                         value -> updateContextLimit(value.intValue())),
-                sliderRow("Response Length", responseLengthSlider, valueLabel(appSettings.responseLength(), "tokens"),
-                        value -> updateResponseLength(value.intValue())),
-                sliderRow("Temperature", temperatureSlider, valueLabel(activeModelSettings.temperature(), "", 2),
-                        value -> updateTemperature(roundTo(value.doubleValue(), 0.1))),
-                sliderRow("Top K", topKSlider, valueLabel(activeModelSettings.topK(), ""),
-                        value -> updateTopK(value.intValue())),
-                sliderRow("Top P", topPSlider, valueLabel(activeModelSettings.topP(), "", 2),
-                        value -> updateTopP(roundTo(value.doubleValue(), 0.01))),
-                sliderRow("Min P", minPSlider, valueLabel(activeModelSettings.minP(), "", 3),
-                        value -> updateMinP(roundTo(value.doubleValue(), 0.001))),
-                sliderRow("Presence Penalty", presencePenaltySlider, valueLabel(activeModelSettings.presencePenalty(), "", 2),
-                        value -> updatePresencePenalty(roundTo(value.doubleValue(), 0.01))),
-                sliderRow("Frequency Penalty", frequencyPenaltySlider,
+                optionalSliderRow(responseLengthEnabledBox, responseLengthSlider,
+                        valueLabel(appSettings.responseLength(), "tokens"),
+                        value -> updateResponseLength(value.intValue()), this::updateResponseLengthEnabled),
+                optionalSliderRow(temperatureEnabledBox, temperatureSlider,
+                        valueLabel(activeModelSettings.temperature(), "", 2),
+                        value -> updateTemperature(roundTo(value.doubleValue(), 0.1)), this::updateTemperatureEnabled),
+                optionalSliderRow(topKEnabledBox, topKSlider, valueLabel(activeModelSettings.topK(), ""),
+                        value -> updateTopK(value.intValue()), this::updateTopKEnabled),
+                optionalSliderRow(topPEnabledBox, topPSlider, valueLabel(activeModelSettings.topP(), "", 2),
+                        value -> updateTopP(roundTo(value.doubleValue(), 0.01)), this::updateTopPEnabled),
+                optionalSliderRow(minPEnabledBox, minPSlider, valueLabel(activeModelSettings.minP(), "", 3),
+                        value -> updateMinP(roundTo(value.doubleValue(), 0.001)), this::updateMinPEnabled),
+                optionalSliderRow(presencePenaltyEnabledBox, presencePenaltySlider,
+                        valueLabel(activeModelSettings.presencePenalty(), "", 2),
+                        value -> updatePresencePenalty(roundTo(value.doubleValue(), 0.01)),
+                        this::updatePresencePenaltyEnabled),
+                optionalSliderRow(frequencyPenaltyEnabledBox, frequencyPenaltySlider,
                         valueLabel(activeModelSettings.frequencyPenalty(), "", 2),
-                        value -> updateFrequencyPenalty(roundTo(value.doubleValue(), 0.01))),
-                sliderRow("Repetition Penalty", repetitionPenaltySlider,
+                        value -> updateFrequencyPenalty(roundTo(value.doubleValue(), 0.01)),
+                        this::updateFrequencyPenaltyEnabled),
+                optionalSliderRow(repetitionPenaltyEnabledBox, repetitionPenaltySlider,
                         valueLabel(activeModelSettings.repetitionPenalty(), "", 2),
-                        value -> updateRepetitionPenalty(roundTo(value.doubleValue(), 0.01))),
+                        value -> updateRepetitionPenalty(roundTo(value.doubleValue(), 0.01)),
+                        this::updateRepetitionPenaltyEnabled),
                 sliderRow("Context to Use for Story", minStoryPercentSlider, valueLabel(percentFromSettings(), "%"),
                         value -> updateMinStoryPercent(value.intValue())),
                 spinnerRow("Story Card Look Back", storyCardLookbackSpinner, this::updateStoryCardLookback),
@@ -1066,11 +1083,16 @@ public class App extends Application
 
     private GenerationSettings buildGenerationSettings()
     {
-        return new GenerationSettings(appSettings.contextLimit(), appSettings.responseLength(),
-                activeModelSettings.temperature(), activeModelSettings.topK(), activeModelSettings.topP(),
-                activeModelSettings.minP(), activeModelSettings.presencePenalty(), activeModelSettings.frequencyPenalty(),
-                activeModelSettings.repetitionPenalty(), appSettings.minStoryWindow(), appSettings.storyCardLookback(),
-                appSettings.anPlacement());
+        return new GenerationSettings(appSettings.contextLimit(),
+                appSettings.responseLengthEnabled(), appSettings.responseLength(),
+                activeModelSettings.temperatureEnabled(), activeModelSettings.temperature(),
+                activeModelSettings.topKEnabled(), activeModelSettings.topK(),
+                activeModelSettings.topPEnabled(), activeModelSettings.topP(),
+                activeModelSettings.minPEnabled(), activeModelSettings.minP(),
+                activeModelSettings.presencePenaltyEnabled(), activeModelSettings.presencePenalty(),
+                activeModelSettings.frequencyPenaltyEnabled(), activeModelSettings.frequencyPenalty(),
+                activeModelSettings.repetitionPenaltyEnabled(), activeModelSettings.repetitionPenalty(),
+                appSettings.minStoryWindow(), appSettings.storyCardLookback(), appSettings.anPlacement());
     }
 
     private void refreshModelSelect()
@@ -1150,16 +1172,6 @@ public class App extends Application
         {
             ollamaUrlField.setText(appSettings.ollamaUrl());
         }
-    }
-
-    private void updateUseOllamaTemplates(boolean value)
-    {
-        if (value == appSettings.useOllamaTemplates())
-        {
-            return;
-        }
-        appSettings = SettingsCoordinator.withUseOllamaTemplates(appSettings, value);
-        persistAppSettings();
     }
 
     private void updateComfyUiUrl(String url)
@@ -1501,6 +1513,13 @@ public class App extends Application
         presencePenaltySlider.setValue(activeModelSettings.presencePenalty());
         frequencyPenaltySlider.setValue(activeModelSettings.frequencyPenalty());
         repetitionPenaltySlider.setValue(activeModelSettings.repetitionPenalty());
+        temperatureEnabledBox.setSelected(activeModelSettings.temperatureEnabled());
+        topKEnabledBox.setSelected(activeModelSettings.topKEnabled());
+        topPEnabledBox.setSelected(activeModelSettings.topPEnabled());
+        minPEnabledBox.setSelected(activeModelSettings.minPEnabled());
+        presencePenaltyEnabledBox.setSelected(activeModelSettings.presencePenaltyEnabled());
+        frequencyPenaltyEnabledBox.setSelected(activeModelSettings.frequencyPenaltyEnabled());
+        repetitionPenaltyEnabledBox.setSelected(activeModelSettings.repetitionPenaltyEnabled());
         updatingModelControls = false;
     }
 
@@ -2505,7 +2524,7 @@ public class App extends Application
         submitStoryTask(session, "Retry", () ->
                 {
                     return generationCoordinator.retryAssistantHead(context.story(), blockSnapshot, head,
-                            operationSettings, context.appSettings().useOllamaTemplates());
+                            operationSettings);
                 },
                 result ->
                 {
@@ -2807,7 +2826,6 @@ public class App extends Application
         submitStoryTask(context.session(), "Continue", () ->
                 {
                     return generationCoordinator.continueStory(context.story(), operationSettings,
-                            context.appSettings().useOllamaTemplates(),
                             (currentBlocks, currentCards) ->
                                     runAutoCardsForGeneration(context, currentBlocks, currentCards));
                 },
@@ -2868,7 +2886,6 @@ public class App extends Application
         submitStoryTask(context.session(), "Take A Turn", () ->
                 {
                     return generationCoordinator.takeTurn(context.story(), userText, operationSettings,
-                            context.appSettings().useOllamaTemplates(),
                             (currentBlocks, currentCards) ->
                                     runAutoCardsForGeneration(context, currentBlocks, currentCards));
                 },
@@ -2954,6 +2971,34 @@ public class App extends Application
             valueLabel.setText(formatValue(newValue, valueLabel));
             handler.accept(newValue);
         });
+        return box;
+    }
+
+    private CheckBox optionCheckBox(String labelText, boolean selected)
+    {
+        CheckBox checkBox = new CheckBox(labelText);
+        checkBox.setSelected(selected);
+        return checkBox;
+    }
+
+    private VBox optionalSliderRow(CheckBox enabledBox, Slider slider, Label valueLabel,
+            java.util.function.Consumer<Number> valueHandler,
+            java.util.function.Consumer<Boolean> enabledHandler)
+    {
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+        HBox header = new HBox(8, enabledBox, spacer, valueLabel);
+        header.setAlignment(Pos.CENTER_LEFT);
+        VBox box = new VBox(6, header, slider);
+
+        slider.disableProperty().bind(enabledBox.selectedProperty().not());
+        valueLabel.disableProperty().bind(enabledBox.selectedProperty().not());
+        slider.valueProperty().addListener((obs, oldValue, newValue) ->
+        {
+            valueLabel.setText(formatValue(newValue, valueLabel));
+            valueHandler.accept(newValue);
+        });
+        enabledBox.setOnAction(event -> enabledHandler.accept(enabledBox.isSelected()));
         return box;
     }
 
@@ -3074,6 +3119,13 @@ public class App extends Application
         refreshGenerationSettings();
     }
 
+    private void updateResponseLengthEnabled(boolean enabled)
+    {
+        appSettings = SettingsCoordinator.withResponseLengthEnabled(appSettings, enabled);
+        persistAppSettings();
+        refreshGenerationSettings();
+    }
+
     private void updateTemperature(double value)
     {
         if (updatingModelControls)
@@ -3081,6 +3133,17 @@ public class App extends Application
             return;
         }
         activeModelSettings = SettingsCoordinator.withTemperature(activeModelSettings, value);
+        persistModelSettings();
+        refreshGenerationSettings();
+    }
+
+    private void updateTemperatureEnabled(boolean enabled)
+    {
+        if (updatingModelControls)
+        {
+            return;
+        }
+        activeModelSettings = SettingsCoordinator.withTemperatureEnabled(activeModelSettings, enabled);
         persistModelSettings();
         refreshGenerationSettings();
     }
@@ -3096,6 +3159,17 @@ public class App extends Application
         refreshGenerationSettings();
     }
 
+    private void updateTopKEnabled(boolean enabled)
+    {
+        if (updatingModelControls)
+        {
+            return;
+        }
+        activeModelSettings = SettingsCoordinator.withTopKEnabled(activeModelSettings, enabled);
+        persistModelSettings();
+        refreshGenerationSettings();
+    }
+
     private void updateTopP(double value)
     {
         if (updatingModelControls)
@@ -3103,6 +3177,17 @@ public class App extends Application
             return;
         }
         activeModelSettings = SettingsCoordinator.withTopP(activeModelSettings, value);
+        persistModelSettings();
+        refreshGenerationSettings();
+    }
+
+    private void updateTopPEnabled(boolean enabled)
+    {
+        if (updatingModelControls)
+        {
+            return;
+        }
+        activeModelSettings = SettingsCoordinator.withTopPEnabled(activeModelSettings, enabled);
         persistModelSettings();
         refreshGenerationSettings();
     }
@@ -3118,6 +3203,17 @@ public class App extends Application
         refreshGenerationSettings();
     }
 
+    private void updateMinPEnabled(boolean enabled)
+    {
+        if (updatingModelControls)
+        {
+            return;
+        }
+        activeModelSettings = SettingsCoordinator.withMinPEnabled(activeModelSettings, enabled);
+        persistModelSettings();
+        refreshGenerationSettings();
+    }
+
     private void updatePresencePenalty(double value)
     {
         if (updatingModelControls)
@@ -3125,6 +3221,17 @@ public class App extends Application
             return;
         }
         activeModelSettings = SettingsCoordinator.withPresencePenalty(activeModelSettings, value);
+        persistModelSettings();
+        refreshGenerationSettings();
+    }
+
+    private void updatePresencePenaltyEnabled(boolean enabled)
+    {
+        if (updatingModelControls)
+        {
+            return;
+        }
+        activeModelSettings = SettingsCoordinator.withPresencePenaltyEnabled(activeModelSettings, enabled);
         persistModelSettings();
         refreshGenerationSettings();
     }
@@ -3140,6 +3247,17 @@ public class App extends Application
         refreshGenerationSettings();
     }
 
+    private void updateFrequencyPenaltyEnabled(boolean enabled)
+    {
+        if (updatingModelControls)
+        {
+            return;
+        }
+        activeModelSettings = SettingsCoordinator.withFrequencyPenaltyEnabled(activeModelSettings, enabled);
+        persistModelSettings();
+        refreshGenerationSettings();
+    }
+
     private void updateRepetitionPenalty(double value)
     {
         if (updatingModelControls)
@@ -3147,6 +3265,17 @@ public class App extends Application
             return;
         }
         activeModelSettings = SettingsCoordinator.withRepetitionPenalty(activeModelSettings, value);
+        persistModelSettings();
+        refreshGenerationSettings();
+    }
+
+    private void updateRepetitionPenaltyEnabled(boolean enabled)
+    {
+        if (updatingModelControls)
+        {
+            return;
+        }
+        activeModelSettings = SettingsCoordinator.withRepetitionPenaltyEnabled(activeModelSettings, enabled);
         persistModelSettings();
         refreshGenerationSettings();
     }

@@ -42,8 +42,7 @@ public final class GenerationCoordinator
         this.ollamaClient = Objects.requireNonNull(ollamaClient, "ollamaClient");
     }
 
-    public ContinueResult continueStory(Story story, GenerationSettings settings, boolean useOllamaTemplates,
-            AutoCardsRunner autoCardsRunner)
+    public ContinueResult continueStory(Story story, GenerationSettings settings, AutoCardsRunner autoCardsRunner)
             throws Exception
     {
         Objects.requireNonNull(story, "story");
@@ -58,7 +57,7 @@ public final class GenerationCoordinator
         }
 
         PromptCompilation compilation = promptCompiler.compile(story, currentBlocks, currentCards, settings);
-        String cleaned = generateContinuationWithFallback(compilation, settings, useOllamaTemplates);
+        String cleaned = generateContinuationWithFallback(compilation, settings);
         if (cleaned.isBlank())
         {
             return new ContinueResult(story, null, compilation.estimatedTokens(), ResultStatus.EMPTY);
@@ -78,8 +77,7 @@ public final class GenerationCoordinator
         });
     }
 
-    public RetryResult retryAssistantHead(Story story, List<Block> blocks, Block head, GenerationSettings settings,
-            boolean useOllamaTemplates)
+    public RetryResult retryAssistantHead(Story story, List<Block> blocks, Block head, GenerationSettings settings)
             throws IOException, InterruptedException, SQLException
     {
         Objects.requireNonNull(story, "story");
@@ -92,7 +90,7 @@ public final class GenerationCoordinator
         List<StoryCard> currentCards = storyCardRepository.listForStory(story.id());
 
         PromptCompilation compilation = promptCompiler.compile(story, promptBlocks, currentCards, settings);
-        String cleaned = generateContinuationWithFallback(compilation, settings, useOllamaTemplates);
+        String cleaned = generateContinuationWithFallback(compilation, settings);
         if (cleaned.isBlank())
         {
             return new RetryResult(null, compilation.estimatedTokens(), ResultStatus.EMPTY);
@@ -104,7 +102,7 @@ public final class GenerationCoordinator
                 applied ? ResultStatus.APPLIED : ResultStatus.STALE);
     }
 
-    public TurnResult takeTurn(Story story, String userText, GenerationSettings settings, boolean useOllamaTemplates,
+    public TurnResult takeTurn(Story story, String userText, GenerationSettings settings,
             AutoCardsRunner autoCardsRunner)
             throws Exception
     {
@@ -142,7 +140,7 @@ public final class GenerationCoordinator
         currentCards = storyCardRepository.listForStory(story.id());
 
         PromptCompilation compilation = promptCompiler.compile(story, currentBlocks, currentCards, settings);
-        String response = generateResponse(compilation, settings, useOllamaTemplates);
+        String response = generateResponse(compilation, settings);
         String cleaned = normalizeOutput(response);
         if (cleaned.isBlank())
         {
@@ -169,24 +167,23 @@ public final class GenerationCoordinator
         return storyRepository.touch(story.id(), Timestamps.now());
     }
 
-    private String generateContinuationWithFallback(PromptCompilation compilation, GenerationSettings settings,
-            boolean useOllamaTemplates)
+    private String generateContinuationWithFallback(PromptCompilation compilation, GenerationSettings settings)
             throws IOException, InterruptedException
     {
-        String cleaned = normalizeOutput(generateResponse(compilation, settings, useOllamaTemplates));
+        String cleaned = normalizeOutput(generateResponse(compilation, settings));
         if (!cleaned.isBlank())
         {
             return cleaned;
         }
 
-        cleaned = normalizeOutput(generateResponseWithAssistantSuffix(compilation, settings, useOllamaTemplates, " "));
+        cleaned = normalizeOutput(generateResponseWithAssistantSuffix(compilation, settings, " "));
         if (!cleaned.isBlank())
         {
             System.out.println("Continuation fallback succeeded with trailing space.");
             return " " + cleaned;
         }
 
-        cleaned = normalizeOutput(generateResponseWithAssistantSuffix(compilation, settings, useOllamaTemplates, "\n"));
+        cleaned = normalizeOutput(generateResponseWithAssistantSuffix(compilation, settings, "\n"));
         if (!cleaned.isBlank())
         {
             System.out.println("Continuation fallback succeeded with trailing newline.");
@@ -195,23 +192,15 @@ public final class GenerationCoordinator
         return cleaned;
     }
 
-    private String generateResponse(PromptCompilation compilation, GenerationSettings settings, boolean useOllamaTemplates)
+    private String generateResponse(PromptCompilation compilation, GenerationSettings settings)
             throws IOException, InterruptedException
     {
-        if (useOllamaTemplates)
-        {
-            return ollamaClient.chat(compilation.messages(), settings);
-        }
-        return ollamaClient.generate(compilation.prompt(), settings);
+        return ollamaClient.chat(compilation.messages(), settings);
     }
 
     private String generateResponseWithAssistantSuffix(PromptCompilation compilation, GenerationSettings settings,
-            boolean useOllamaTemplates, String suffix) throws IOException, InterruptedException
+            String suffix) throws IOException, InterruptedException
     {
-        if (!useOllamaTemplates)
-        {
-            return ollamaClient.generate(compilation.prompt() + suffix, settings);
-        }
         return ollamaClient.chat(withAssistantSuffix(compilation.messages(), suffix), settings);
     }
 

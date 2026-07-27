@@ -4,7 +4,7 @@ import com.llamaquill.model.ChatMessage;
 
 import java.util.List;
 
-public record PromptCompilation(String prompt, List<ChatMessage> messages, int estimatedTokens)
+public record PromptCompilation(List<ChatMessage> messages, int estimatedTokens)
 {
     public PromptCompilation
     {

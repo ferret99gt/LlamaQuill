@@ -25,8 +25,14 @@ public class ModelSettingsRepository
         return database.withConnection(connection ->
         {
             try (PreparedStatement stmt = connection.prepareStatement("""
-                    SELECT model_name, active, temperature, top_k, top_p, min_p, presence_penalty,
-                           frequency_penalty, repetition_penalty
+                    SELECT model_name, active,
+                           temperature_enabled, temperature,
+                           top_k_enabled, top_k,
+                           top_p_enabled, top_p,
+                           min_p_enabled, min_p,
+                           presence_penalty_enabled, presence_penalty,
+                           frequency_penalty_enabled, frequency_penalty,
+                           repetition_penalty_enabled, repetition_penalty
                     FROM model_settings
                     WHERE model_name = ?
                     """))
@@ -49,8 +55,14 @@ public class ModelSettingsRepository
         return database.withConnection(connection ->
         {
             try (PreparedStatement stmt = connection.prepareStatement("""
-                    SELECT model_name, active, temperature, top_k, top_p, min_p, presence_penalty,
-                           frequency_penalty, repetition_penalty
+                    SELECT model_name, active,
+                           temperature_enabled, temperature,
+                           top_k_enabled, top_k,
+                           top_p_enabled, top_p,
+                           min_p_enabled, min_p,
+                           presence_penalty_enabled, presence_penalty,
+                           frequency_penalty_enabled, frequency_penalty,
+                           repetition_penalty_enabled, repetition_penalty
                     FROM model_settings
                     WHERE active = 1
                     ORDER BY model_name
@@ -72,8 +84,14 @@ public class ModelSettingsRepository
         return database.withConnection(connection ->
         {
             try (PreparedStatement stmt = connection.prepareStatement("""
-                    SELECT model_name, active, temperature, top_k, top_p, min_p, presence_penalty,
-                           frequency_penalty, repetition_penalty
+                    SELECT model_name, active,
+                           temperature_enabled, temperature,
+                           top_k_enabled, top_k,
+                           top_p_enabled, top_p,
+                           min_p_enabled, min_p,
+                           presence_penalty_enabled, presence_penalty,
+                           frequency_penalty_enabled, frequency_penalty,
+                           repetition_penalty_enabled, repetition_penalty
                     FROM model_settings
                     ORDER BY model_name
                     """);
@@ -95,29 +113,49 @@ public class ModelSettingsRepository
         {
             try (PreparedStatement stmt = connection.prepareStatement("""
                     INSERT INTO model_settings (
-                        model_name, active, temperature, top_k, top_p, min_p,
-                        presence_penalty, frequency_penalty, repetition_penalty
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        model_name, active,
+                        temperature_enabled, temperature,
+                        top_k_enabled, top_k,
+                        top_p_enabled, top_p,
+                        min_p_enabled, min_p,
+                        presence_penalty_enabled, presence_penalty,
+                        frequency_penalty_enabled, frequency_penalty,
+                        repetition_penalty_enabled, repetition_penalty
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(model_name) DO UPDATE SET
                         active = excluded.active,
+                        temperature_enabled = excluded.temperature_enabled,
                         temperature = excluded.temperature,
+                        top_k_enabled = excluded.top_k_enabled,
                         top_k = excluded.top_k,
+                        top_p_enabled = excluded.top_p_enabled,
                         top_p = excluded.top_p,
+                        min_p_enabled = excluded.min_p_enabled,
                         min_p = excluded.min_p,
+                        presence_penalty_enabled = excluded.presence_penalty_enabled,
                         presence_penalty = excluded.presence_penalty,
+                        frequency_penalty_enabled = excluded.frequency_penalty_enabled,
                         frequency_penalty = excluded.frequency_penalty,
+                        repetition_penalty_enabled = excluded.repetition_penalty_enabled,
                         repetition_penalty = excluded.repetition_penalty
                     """))
             {
                 stmt.setString(1, settings.modelName());
                 stmt.setInt(2, settings.active() ? 1 : 0);
-                stmt.setDouble(3, settings.temperature());
-                stmt.setInt(4, settings.topK());
-                stmt.setDouble(5, settings.topP());
-                stmt.setDouble(6, settings.minP());
-                stmt.setDouble(7, settings.presencePenalty());
-                stmt.setDouble(8, settings.frequencyPenalty());
-                stmt.setDouble(9, settings.repetitionPenalty());
+                stmt.setInt(3, settings.temperatureEnabled() ? 1 : 0);
+                stmt.setDouble(4, settings.temperature());
+                stmt.setInt(5, settings.topKEnabled() ? 1 : 0);
+                stmt.setInt(6, settings.topK());
+                stmt.setInt(7, settings.topPEnabled() ? 1 : 0);
+                stmt.setDouble(8, settings.topP());
+                stmt.setInt(9, settings.minPEnabled() ? 1 : 0);
+                stmt.setDouble(10, settings.minP());
+                stmt.setInt(11, settings.presencePenaltyEnabled() ? 1 : 0);
+                stmt.setDouble(12, settings.presencePenalty());
+                stmt.setInt(13, settings.frequencyPenaltyEnabled() ? 1 : 0);
+                stmt.setDouble(14, settings.frequencyPenalty());
+                stmt.setInt(15, settings.repetitionPenaltyEnabled() ? 1 : 0);
+                stmt.setDouble(16, settings.repetitionPenalty());
                 stmt.executeUpdate();
             }
         });
@@ -142,16 +180,26 @@ public class ModelSettingsRepository
                     ModelSettings current = existingRow.get();
                     if (!current.active())
                     {
-                        save(new ModelSettings(model, true, current.temperature(), current.topK(),
-                                current.topP(), current.minP(), current.presencePenalty(),
-                                current.frequencyPenalty(), current.repetitionPenalty()));
+                        save(new ModelSettings(model, true,
+                                current.temperatureEnabled(), current.temperature(),
+                                current.topKEnabled(), current.topK(),
+                                current.topPEnabled(), current.topP(),
+                                current.minPEnabled(), current.minP(),
+                                current.presencePenaltyEnabled(), current.presencePenalty(),
+                                current.frequencyPenaltyEnabled(), current.frequencyPenalty(),
+                                current.repetitionPenaltyEnabled(), current.repetitionPenalty()));
                     }
                 }
                 else
                 {
-                    save(new ModelSettings(model, true, defaults.temperature(), defaults.topK(),
-                            defaults.topP(), defaults.minP(), defaults.presencePenalty(),
-                            defaults.frequencyPenalty(), defaults.repetitionPenalty()));
+                    save(new ModelSettings(model, true,
+                            defaults.temperatureEnabled(), defaults.temperature(),
+                            defaults.topKEnabled(), defaults.topK(),
+                            defaults.topPEnabled(), defaults.topP(),
+                            defaults.minPEnabled(), defaults.minP(),
+                            defaults.presencePenaltyEnabled(), defaults.presencePenalty(),
+                            defaults.frequencyPenaltyEnabled(), defaults.frequencyPenalty(),
+                            defaults.repetitionPenaltyEnabled(), defaults.repetitionPenalty()));
                 }
             }
 
@@ -165,9 +213,14 @@ public class ModelSettingsRepository
                         ModelSettings current = existingRow.get();
                         if (current.active())
                         {
-                            save(new ModelSettings(model, false, current.temperature(), current.topK(),
-                                    current.topP(), current.minP(), current.presencePenalty(),
-                                    current.frequencyPenalty(), current.repetitionPenalty()));
+                            save(new ModelSettings(model, false,
+                                    current.temperatureEnabled(), current.temperature(),
+                                    current.topKEnabled(), current.topK(),
+                                    current.topPEnabled(), current.topP(),
+                                    current.minPEnabled(), current.minP(),
+                                    current.presencePenaltyEnabled(), current.presencePenalty(),
+                                    current.frequencyPenaltyEnabled(), current.frequencyPenalty(),
+                                    current.repetitionPenaltyEnabled(), current.repetitionPenalty()));
                         }
                     }
                 }
@@ -180,12 +233,19 @@ public class ModelSettingsRepository
         return new ModelSettings(
                 rs.getString("model_name"),
                 rs.getInt("active") == 1,
+                rs.getInt("temperature_enabled") == 1,
                 rs.getDouble("temperature"),
+                rs.getInt("top_k_enabled") == 1,
                 rs.getInt("top_k"),
+                rs.getInt("top_p_enabled") == 1,
                 rs.getDouble("top_p"),
+                rs.getInt("min_p_enabled") == 1,
                 rs.getDouble("min_p"),
+                rs.getInt("presence_penalty_enabled") == 1,
                 rs.getDouble("presence_penalty"),
+                rs.getInt("frequency_penalty_enabled") == 1,
                 rs.getDouble("frequency_penalty"),
+                rs.getInt("repetition_penalty_enabled") == 1,
                 rs.getDouble("repetition_penalty"));
     }
 }
