@@ -17,6 +17,7 @@
     <javafx.maven.plugin.version>0.0.8</javafx.maven.plugin.version>
 
     <junit.jupiter.version>5.10.3</junit.jupiter.version>
+    <slf4j.version>1.7.36</slf4j.version>
     <jpackage.plugin.version>1.7.3</jpackage.plugin.version>
     <maven.antrun.plugin.version>3.1.0</maven.antrun.plugin.version>
     <maven.clean.plugin.version>3.4.1</maven.clean.plugin.version>
@@ -68,6 +69,12 @@
     </dependency>
 
     <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-nop</artifactId>
+      <version>${slf4j.version}</version>
+    </dependency>
+
+    <dependency>
       <groupId>org.json</groupId>
       <artifactId>json</artifactId>
       <version>20240303</version>
@@ -109,6 +116,7 @@
         <artifactId>maven-surefire-plugin</artifactId>
         <version>${maven.surefire.plugin.version}</version>
         <configuration>
+          <argLine>--enable-native-access=ALL-UNNAMED</argLine>
           <failIfNoTests>true</failIfNoTests>
         </configuration>
       </plugin>
@@ -301,6 +309,9 @@
                 <option>--no-header-files</option>
                 <option>--no-man-pages</option>
               </jLinkOptions>
+              <javaOptions>
+                <option>--enable-native-access=org.xerial.sqlitejdbc</option>
+              </javaOptions>
             </configuration>
           </plugin>
         </plugins>
