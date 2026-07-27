@@ -31,8 +31,10 @@ public class ModelSettingsRepository
                            top_k_enabled, top_k,
                            top_p_enabled, top_p,
                            min_p_enabled, min_p,
+                           typical_p_enabled, typical_p,
                            presence_penalty_enabled, presence_penalty,
                            frequency_penalty_enabled, frequency_penalty,
+                           repeat_last_n_enabled, repeat_last_n,
                            repetition_penalty_enabled, repetition_penalty
                     FROM model_settings
                     WHERE model_name = ?
@@ -62,8 +64,10 @@ public class ModelSettingsRepository
                            top_k_enabled, top_k,
                            top_p_enabled, top_p,
                            min_p_enabled, min_p,
+                           typical_p_enabled, typical_p,
                            presence_penalty_enabled, presence_penalty,
                            frequency_penalty_enabled, frequency_penalty,
+                           repeat_last_n_enabled, repeat_last_n,
                            repetition_penalty_enabled, repetition_penalty
                     FROM model_settings
                     WHERE active = 1
@@ -92,8 +96,10 @@ public class ModelSettingsRepository
                            top_k_enabled, top_k,
                            top_p_enabled, top_p,
                            min_p_enabled, min_p,
+                           typical_p_enabled, typical_p,
                            presence_penalty_enabled, presence_penalty,
                            frequency_penalty_enabled, frequency_penalty,
+                           repeat_last_n_enabled, repeat_last_n,
                            repetition_penalty_enabled, repetition_penalty
                     FROM model_settings
                     ORDER BY model_name
@@ -121,10 +127,12 @@ public class ModelSettingsRepository
                         top_k_enabled, top_k,
                         top_p_enabled, top_p,
                         min_p_enabled, min_p,
+                        typical_p_enabled, typical_p,
                         presence_penalty_enabled, presence_penalty,
                         frequency_penalty_enabled, frequency_penalty,
+                        repeat_last_n_enabled, repeat_last_n,
                         repetition_penalty_enabled, repetition_penalty
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(model_name) DO UPDATE SET
                         active = excluded.active,
                         context_limit = excluded.context_limit,
@@ -137,10 +145,14 @@ public class ModelSettingsRepository
                         top_p = excluded.top_p,
                         min_p_enabled = excluded.min_p_enabled,
                         min_p = excluded.min_p,
+                        typical_p_enabled = excluded.typical_p_enabled,
+                        typical_p = excluded.typical_p,
                         presence_penalty_enabled = excluded.presence_penalty_enabled,
                         presence_penalty = excluded.presence_penalty,
                         frequency_penalty_enabled = excluded.frequency_penalty_enabled,
                         frequency_penalty = excluded.frequency_penalty,
+                        repeat_last_n_enabled = excluded.repeat_last_n_enabled,
+                        repeat_last_n = excluded.repeat_last_n,
                         repetition_penalty_enabled = excluded.repetition_penalty_enabled,
                         repetition_penalty = excluded.repetition_penalty
                     """))
@@ -157,12 +169,16 @@ public class ModelSettingsRepository
                 stmt.setDouble(10, settings.topP());
                 stmt.setInt(11, settings.minPEnabled() ? 1 : 0);
                 stmt.setDouble(12, settings.minP());
-                stmt.setInt(13, settings.presencePenaltyEnabled() ? 1 : 0);
-                stmt.setDouble(14, settings.presencePenalty());
-                stmt.setInt(15, settings.frequencyPenaltyEnabled() ? 1 : 0);
-                stmt.setDouble(16, settings.frequencyPenalty());
-                stmt.setInt(17, settings.repetitionPenaltyEnabled() ? 1 : 0);
-                stmt.setDouble(18, settings.repetitionPenalty());
+                stmt.setInt(13, settings.typicalPEnabled() ? 1 : 0);
+                stmt.setDouble(14, settings.typicalP());
+                stmt.setInt(15, settings.presencePenaltyEnabled() ? 1 : 0);
+                stmt.setDouble(16, settings.presencePenalty());
+                stmt.setInt(17, settings.frequencyPenaltyEnabled() ? 1 : 0);
+                stmt.setDouble(18, settings.frequencyPenalty());
+                stmt.setInt(19, settings.repeatLastNEnabled() ? 1 : 0);
+                stmt.setInt(20, settings.repeatLastN());
+                stmt.setInt(21, settings.repetitionPenaltyEnabled() ? 1 : 0);
+                stmt.setDouble(22, settings.repetitionPenalty());
                 stmt.executeUpdate();
             }
         });
@@ -192,8 +208,10 @@ public class ModelSettingsRepository
                                 current.topKEnabled(), current.topK(),
                                 current.topPEnabled(), current.topP(),
                                 current.minPEnabled(), current.minP(),
+                                current.typicalPEnabled(), current.typicalP(),
                                 current.presencePenaltyEnabled(), current.presencePenalty(),
                                 current.frequencyPenaltyEnabled(), current.frequencyPenalty(),
+                                current.repeatLastNEnabled(), current.repeatLastN(),
                                 current.repetitionPenaltyEnabled(), current.repetitionPenalty()));
                     }
                 }
@@ -204,8 +222,10 @@ public class ModelSettingsRepository
                             defaults.topKEnabled(), defaults.topK(),
                             defaults.topPEnabled(), defaults.topP(),
                             defaults.minPEnabled(), defaults.minP(),
+                            defaults.typicalPEnabled(), defaults.typicalP(),
                             defaults.presencePenaltyEnabled(), defaults.presencePenalty(),
                             defaults.frequencyPenaltyEnabled(), defaults.frequencyPenalty(),
+                            defaults.repeatLastNEnabled(), defaults.repeatLastN(),
                             defaults.repetitionPenaltyEnabled(), defaults.repetitionPenalty()));
                 }
             }
@@ -225,8 +245,10 @@ public class ModelSettingsRepository
                                     current.topKEnabled(), current.topK(),
                                     current.topPEnabled(), current.topP(),
                                     current.minPEnabled(), current.minP(),
+                                    current.typicalPEnabled(), current.typicalP(),
                                     current.presencePenaltyEnabled(), current.presencePenalty(),
                                     current.frequencyPenaltyEnabled(), current.frequencyPenalty(),
+                                    current.repeatLastNEnabled(), current.repeatLastN(),
                                     current.repetitionPenaltyEnabled(), current.repetitionPenalty()));
                         }
                     }
@@ -250,10 +272,14 @@ public class ModelSettingsRepository
                 rs.getDouble("top_p"),
                 rs.getInt("min_p_enabled") == 1,
                 rs.getDouble("min_p"),
+                rs.getInt("typical_p_enabled") == 1,
+                rs.getDouble("typical_p"),
                 rs.getInt("presence_penalty_enabled") == 1,
                 rs.getDouble("presence_penalty"),
                 rs.getInt("frequency_penalty_enabled") == 1,
                 rs.getDouble("frequency_penalty"),
+                rs.getInt("repeat_last_n_enabled") == 1,
+                rs.getInt("repeat_last_n"),
                 rs.getInt("repetition_penalty_enabled") == 1,
                 rs.getDouble("repetition_penalty"));
     }

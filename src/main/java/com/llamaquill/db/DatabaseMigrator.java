@@ -133,7 +133,11 @@ public final class DatabaseMigrator
                 || appColumns.contains("context_limit")
                 || appColumns.contains("min_story_window")
                 || !modelColumns.contains("context_limit")
-                || !modelColumns.contains("prompt_token_scale");
+                || !modelColumns.contains("prompt_token_scale")
+                || !modelColumns.contains("typical_p_enabled")
+                || !modelColumns.contains("typical_p")
+                || !modelColumns.contains("repeat_last_n_enabled")
+                || !modelColumns.contains("repeat_last_n");
     }
 
     private static void createCurrentSchema(Connection connection) throws SQLException
@@ -212,10 +216,14 @@ public final class DatabaseMigrator
                     top_p REAL NOT NULL,
                     min_p_enabled INTEGER NOT NULL DEFAULT 0 CHECK (min_p_enabled IN (0,1)),
                     min_p REAL NOT NULL,
+                    typical_p_enabled INTEGER NOT NULL DEFAULT 0 CHECK (typical_p_enabled IN (0,1)),
+                    typical_p REAL NOT NULL DEFAULT 1.0,
                     presence_penalty_enabled INTEGER NOT NULL DEFAULT 0 CHECK (presence_penalty_enabled IN (0,1)),
                     presence_penalty REAL NOT NULL,
                     frequency_penalty_enabled INTEGER NOT NULL DEFAULT 0 CHECK (frequency_penalty_enabled IN (0,1)),
                     frequency_penalty REAL NOT NULL,
+                    repeat_last_n_enabled INTEGER NOT NULL DEFAULT 0 CHECK (repeat_last_n_enabled IN (0,1)),
+                    repeat_last_n INTEGER NOT NULL DEFAULT 64,
                     repetition_penalty_enabled INTEGER NOT NULL DEFAULT 0 CHECK (repetition_penalty_enabled IN (0,1)),
                     repetition_penalty REAL NOT NULL
                 )
@@ -592,10 +600,18 @@ public final class DatabaseMigrator
                 "INTEGER NOT NULL DEFAULT 1 CHECK (top_p_enabled IN (0,1))");
         addColumnIfMissing(connection, "model_settings", "min_p_enabled",
                 "INTEGER NOT NULL DEFAULT 1 CHECK (min_p_enabled IN (0,1))");
+        addColumnIfMissing(connection, "model_settings", "typical_p_enabled",
+                "INTEGER NOT NULL DEFAULT 0 CHECK (typical_p_enabled IN (0,1))");
+        addColumnIfMissing(connection, "model_settings", "typical_p",
+                "REAL NOT NULL DEFAULT 1.0");
         addColumnIfMissing(connection, "model_settings", "presence_penalty_enabled",
                 "INTEGER NOT NULL DEFAULT 1 CHECK (presence_penalty_enabled IN (0,1))");
         addColumnIfMissing(connection, "model_settings", "frequency_penalty_enabled",
                 "INTEGER NOT NULL DEFAULT 1 CHECK (frequency_penalty_enabled IN (0,1))");
+        addColumnIfMissing(connection, "model_settings", "repeat_last_n_enabled",
+                "INTEGER NOT NULL DEFAULT 0 CHECK (repeat_last_n_enabled IN (0,1))");
+        addColumnIfMissing(connection, "model_settings", "repeat_last_n",
+                "INTEGER NOT NULL DEFAULT 64");
         addColumnIfMissing(connection, "model_settings", "repetition_penalty_enabled",
                 "INTEGER NOT NULL DEFAULT 1 CHECK (repetition_penalty_enabled IN (0,1))");
     }

@@ -321,8 +321,10 @@ public class AutoCardsService
                 modelSettings.topKEnabled(), modelSettings.topK(),
                 modelSettings.topPEnabled(), modelSettings.topP(),
                 modelSettings.minPEnabled(), modelSettings.minP(),
+                modelSettings.typicalPEnabled(), modelSettings.typicalP(),
                 modelSettings.presencePenaltyEnabled(), modelSettings.presencePenalty(),
                 modelSettings.frequencyPenaltyEnabled(), modelSettings.frequencyPenalty(),
+                modelSettings.repeatLastNEnabled(), modelSettings.repeatLastN(),
                 modelSettings.repetitionPenaltyEnabled(), modelSettings.repetitionPenalty(),
                 protectedStoryTokens, appSettings.storyCardLookback(), appSettings.anPlacement());
     }
@@ -338,8 +340,10 @@ public class AutoCardsService
                 modelSettings.topKEnabled(), modelSettings.topK(),
                 modelSettings.topPEnabled(), modelSettings.topP(),
                 modelSettings.minPEnabled(), modelSettings.minP(),
+                modelSettings.typicalPEnabled(), modelSettings.typicalP(),
                 modelSettings.presencePenaltyEnabled(), modelSettings.presencePenalty(),
                 modelSettings.frequencyPenaltyEnabled(), modelSettings.frequencyPenalty(),
+                modelSettings.repeatLastNEnabled(), modelSettings.repeatLastN(),
                 modelSettings.repetitionPenaltyEnabled(), modelSettings.repetitionPenalty(),
                 protectedStoryTokens, appSettings.storyCardLookback(), appSettings.anPlacement());
     }

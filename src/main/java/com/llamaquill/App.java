@@ -228,10 +228,14 @@ public class App extends Application
     private Slider topPSlider;
     private CheckBox minPEnabledBox;
     private Slider minPSlider;
+    private CheckBox typicalPEnabledBox;
+    private Slider typicalPSlider;
     private CheckBox presencePenaltyEnabledBox;
     private Slider presencePenaltySlider;
     private CheckBox frequencyPenaltyEnabledBox;
     private Slider frequencyPenaltySlider;
+    private CheckBox repeatLastNEnabledBox;
+    private Slider repeatLastNSlider;
     private CheckBox repetitionPenaltyEnabledBox;
     private Slider repetitionPenaltySlider;
     private Slider minStoryPercentSlider;
@@ -797,8 +801,11 @@ public class App extends Application
         topKSlider = buildIntSlider(0, 10000, activeModelSettings.topK(), 1);
         topPSlider = buildDoubleSlider(0.0, 1.0, activeModelSettings.topP(), 0.01);
         minPSlider = buildDoubleSlider(0.0, 1.0, activeModelSettings.minP(), 0.001);
+        typicalPSlider = buildDoubleSlider(0.0, 1.0, activeModelSettings.typicalP(), 0.01);
         presencePenaltySlider = buildDoubleSlider(-2.0, 2.0, activeModelSettings.presencePenalty(), 0.01);
         frequencyPenaltySlider = buildDoubleSlider(-2.0, 2.0, activeModelSettings.frequencyPenalty(), 0.01);
+        repeatLastNSlider = buildIntSlider(-1, activeModelSettings.contextLimit(),
+                activeModelSettings.repeatLastN(), 1);
         repetitionPenaltySlider = buildDoubleSlider(0.0, 5.0, activeModelSettings.repetitionPenalty(), 0.01);
         responseLengthEnabledBox = optionCheckBox("Response Length", appSettings.responseLengthEnabled());
         responseLengthEnabledBox.setTooltip(new Tooltip(
@@ -807,8 +814,14 @@ public class App extends Application
         topKEnabledBox = optionCheckBox("Top K", activeModelSettings.topKEnabled());
         topPEnabledBox = optionCheckBox("Top P", activeModelSettings.topPEnabled());
         minPEnabledBox = optionCheckBox("Min P", activeModelSettings.minPEnabled());
+        typicalPEnabledBox = optionCheckBox("Typical P", activeModelSettings.typicalPEnabled());
+        typicalPEnabledBox.setTooltip(new Tooltip(
+                "Locally typical sampling. 1.0 has no effect; disabling leaves the value to Ollama and the model."));
         presencePenaltyEnabledBox = optionCheckBox("Presence Penalty", activeModelSettings.presencePenaltyEnabled());
         frequencyPenaltyEnabledBox = optionCheckBox("Frequency Penalty", activeModelSettings.frequencyPenaltyEnabled());
+        repeatLastNEnabledBox = optionCheckBox("Repeat Last N", activeModelSettings.repeatLastNEnabled());
+        repeatLastNEnabledBox.setTooltip(new Tooltip(
+                "Tokens checked by repetition penalty. 0 disables the lookback; -1 uses the full context."));
         repetitionPenaltyEnabledBox = optionCheckBox("Repetition Penalty",
                 activeModelSettings.repetitionPenaltyEnabled());
         minStoryPercentSlider = buildIntSlider(10, 100, percentFromSettings(), 1);
@@ -869,6 +882,9 @@ public class App extends Application
                         value -> updateTopP(roundTo(value.doubleValue(), 0.01)), this::updateTopPEnabled),
                 optionalSliderRow(minPEnabledBox, minPSlider, valueLabel(activeModelSettings.minP(), "", 3),
                         value -> updateMinP(roundTo(value.doubleValue(), 0.001)), this::updateMinPEnabled),
+                optionalSliderRow(typicalPEnabledBox, typicalPSlider,
+                        valueLabel(activeModelSettings.typicalP(), "", 2),
+                        value -> updateTypicalP(roundTo(value.doubleValue(), 0.01)), this::updateTypicalPEnabled),
                 optionalSliderRow(presencePenaltyEnabledBox, presencePenaltySlider,
                         valueLabel(activeModelSettings.presencePenalty(), "", 2),
                         value -> updatePresencePenalty(roundTo(value.doubleValue(), 0.01)),
@@ -877,6 +893,9 @@ public class App extends Application
                         valueLabel(activeModelSettings.frequencyPenalty(), "", 2),
                         value -> updateFrequencyPenalty(roundTo(value.doubleValue(), 0.01)),
                         this::updateFrequencyPenaltyEnabled),
+                optionalSliderRow(repeatLastNEnabledBox, repeatLastNSlider,
+                        valueLabel(activeModelSettings.repeatLastN(), ""),
+                        value -> updateRepeatLastN(value.intValue()), this::updateRepeatLastNEnabled),
                 optionalSliderRow(repetitionPenaltyEnabledBox, repetitionPenaltySlider,
                         valueLabel(activeModelSettings.repetitionPenalty(), "", 2),
                         value -> updateRepetitionPenalty(roundTo(value.doubleValue(), 0.01)),
@@ -1242,8 +1261,10 @@ public class App extends Application
                 activeModelSettings.topKEnabled(), activeModelSettings.topK(),
                 activeModelSettings.topPEnabled(), activeModelSettings.topP(),
                 activeModelSettings.minPEnabled(), activeModelSettings.minP(),
+                activeModelSettings.typicalPEnabled(), activeModelSettings.typicalP(),
                 activeModelSettings.presencePenaltyEnabled(), activeModelSettings.presencePenalty(),
                 activeModelSettings.frequencyPenaltyEnabled(), activeModelSettings.frequencyPenalty(),
+                activeModelSettings.repeatLastNEnabled(), activeModelSettings.repeatLastN(),
                 activeModelSettings.repetitionPenaltyEnabled(), activeModelSettings.repetitionPenalty(),
                 minStoryWindow, appSettings.storyCardLookback(), appSettings.anPlacement());
     }
@@ -1760,15 +1781,20 @@ public class App extends Application
         topKSlider.setValue(activeModelSettings.topK());
         topPSlider.setValue(activeModelSettings.topP());
         minPSlider.setValue(activeModelSettings.minP());
+        typicalPSlider.setValue(activeModelSettings.typicalP());
         presencePenaltySlider.setValue(activeModelSettings.presencePenalty());
         frequencyPenaltySlider.setValue(activeModelSettings.frequencyPenalty());
+        repeatLastNSlider.setMax(activeModelSettings.contextLimit());
+        repeatLastNSlider.setValue(activeModelSettings.repeatLastN());
         repetitionPenaltySlider.setValue(activeModelSettings.repetitionPenalty());
         temperatureEnabledBox.setSelected(activeModelSettings.temperatureEnabled());
         topKEnabledBox.setSelected(activeModelSettings.topKEnabled());
         topPEnabledBox.setSelected(activeModelSettings.topPEnabled());
         minPEnabledBox.setSelected(activeModelSettings.minPEnabled());
+        typicalPEnabledBox.setSelected(activeModelSettings.typicalPEnabled());
         presencePenaltyEnabledBox.setSelected(activeModelSettings.presencePenaltyEnabled());
         frequencyPenaltyEnabledBox.setSelected(activeModelSettings.frequencyPenaltyEnabled());
+        repeatLastNEnabledBox.setSelected(activeModelSettings.repeatLastNEnabled());
         repetitionPenaltyEnabledBox.setSelected(activeModelSettings.repetitionPenaltyEnabled());
         updatingModelControls = false;
     }
@@ -3421,6 +3447,7 @@ public class App extends Application
                 ? Math.min(ModelSettings.MAX_CONTEXT_LIMIT, details.maxContextLength())
                 : ModelSettings.MAX_CONTEXT_LIMIT;
         activeModelSettings = SettingsCoordinator.withContextLimit(activeModelSettings, Math.min(value, maximum));
+        updateModelControls();
         persistModelSettings();
         refreshGenerationSettings();
     }
@@ -3527,6 +3554,28 @@ public class App extends Application
         refreshGenerationSettings();
     }
 
+    private void updateTypicalP(double value)
+    {
+        if (updatingModelControls)
+        {
+            return;
+        }
+        activeModelSettings = SettingsCoordinator.withTypicalP(activeModelSettings, value);
+        persistModelSettings();
+        refreshGenerationSettings();
+    }
+
+    private void updateTypicalPEnabled(boolean enabled)
+    {
+        if (updatingModelControls)
+        {
+            return;
+        }
+        activeModelSettings = SettingsCoordinator.withTypicalPEnabled(activeModelSettings, enabled);
+        persistModelSettings();
+        refreshGenerationSettings();
+    }
+
     private void updatePresencePenalty(double value)
     {
         if (updatingModelControls)
@@ -3567,6 +3616,28 @@ public class App extends Application
             return;
         }
         activeModelSettings = SettingsCoordinator.withFrequencyPenaltyEnabled(activeModelSettings, enabled);
+        persistModelSettings();
+        refreshGenerationSettings();
+    }
+
+    private void updateRepeatLastN(int value)
+    {
+        if (updatingModelControls)
+        {
+            return;
+        }
+        activeModelSettings = SettingsCoordinator.withRepeatLastN(activeModelSettings, value);
+        persistModelSettings();
+        refreshGenerationSettings();
+    }
+
+    private void updateRepeatLastNEnabled(boolean enabled)
+    {
+        if (updatingModelControls)
+        {
+            return;
+        }
+        activeModelSettings = SettingsCoordinator.withRepeatLastNEnabled(activeModelSettings, enabled);
         persistModelSettings();
         refreshGenerationSettings();
     }

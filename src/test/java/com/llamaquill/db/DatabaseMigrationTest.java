@@ -79,8 +79,10 @@ class DatabaseMigrationTest
                     true, 0,
                     false, 0.92,
                     true, 0.0,
+                    true, 0.73,
                     false, 0.0,
                     true, 0.0,
+                    true, -1,
                     false, 1.05);
             modelSettings.save(expectedModelSettings);
             assertEquals(expectedModelSettings, modelSettings.load("settings-model").orElseThrow());
@@ -221,6 +223,14 @@ class DatabaseMigrationTest
                     "SELECT context_limit FROM model_settings WHERE model_name = 'schema-two-model'"));
             assertEquals(1, scalarInt(database,
                     "SELECT prompt_token_scale FROM model_settings WHERE model_name = 'schema-two-model'"));
+            assertEquals(0, scalarInt(database,
+                    "SELECT typical_p_enabled FROM model_settings WHERE model_name = 'schema-two-model'"));
+            assertEquals(1, scalarInt(database,
+                    "SELECT typical_p FROM model_settings WHERE model_name = 'schema-two-model'"));
+            assertEquals(0, scalarInt(database,
+                    "SELECT repeat_last_n_enabled FROM model_settings WHERE model_name = 'schema-two-model'"));
+            assertEquals(64, scalarInt(database,
+                    "SELECT repeat_last_n FROM model_settings WHERE model_name = 'schema-two-model'"));
         }
     }
 
@@ -312,7 +322,8 @@ class DatabaseMigrationTest
     {
         return scalarInt(database, """
                 SELECT temperature_enabled + top_k_enabled + top_p_enabled + min_p_enabled
-                       + presence_penalty_enabled + frequency_penalty_enabled + repetition_penalty_enabled
+                       + typical_p_enabled + presence_penalty_enabled + frequency_penalty_enabled
+                       + repeat_last_n_enabled + repetition_penalty_enabled
                 FROM model_settings
                 WHERE model_name = '%s'
                 """.formatted(modelName.replace("'", "''")));

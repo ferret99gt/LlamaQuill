@@ -6,8 +6,10 @@ public record GenerationSettings(String modelName, String ollamaHost, int contex
         boolean topKEnabled, int topK,
         boolean topPEnabled, double topP,
         boolean minPEnabled, double minP,
+        boolean typicalPEnabled, double typicalP,
         boolean presencePenaltyEnabled, double presencePenalty,
         boolean frequencyPenaltyEnabled, double frequencyPenalty,
+        boolean repeatLastNEnabled, int repeatLastN,
         boolean repetitionPenaltyEnabled, double repetitionPenalty,
         int minStoryWindow, int storyCardLookback, int anPlacement)
 {
@@ -30,8 +32,10 @@ public record GenerationSettings(String modelName, String ollamaHost, int contex
         topK = Math.max(0, Math.min(10000, topK));
         topP = Math.max(0.0, Math.min(1.0, topP));
         minP = Math.max(0.0, Math.min(1.0, minP));
+        typicalP = Math.max(0.0, Math.min(1.0, typicalP));
         presencePenalty = Math.max(-2.0, Math.min(2.0, presencePenalty));
         frequencyPenalty = Math.max(-2.0, Math.min(2.0, frequencyPenalty));
+        repeatLastN = Math.max(-1, Math.min(contextLimit, repeatLastN));
         repetitionPenalty = Math.max(0.0, Math.min(5.0, repetitionPenalty));
         minStoryWindow = Math.max(0, Math.min(contextLimit, minStoryWindow));
         storyCardLookback = Math.max(0, Math.min(100, storyCardLookback));
@@ -48,8 +52,10 @@ public record GenerationSettings(String modelName, String ollamaHost, int contex
                 false, 200,
                 false, 0.95,
                 false, 0.025,
+                false, 1.0,
                 false, 0.25,
                 false, 0.0,
+                false, 64,
                 false, 1.05,
                 minStoryWindow, 7, 3);
     }

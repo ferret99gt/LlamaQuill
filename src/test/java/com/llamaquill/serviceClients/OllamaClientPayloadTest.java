@@ -41,8 +41,10 @@ class OllamaClientPayloadTest
         assertEquals(0, options.getInt("top_k"));
         assertEquals(0.0, options.getDouble("top_p"));
         assertEquals(0.0, options.getDouble("min_p"));
+        assertEquals(0.0, options.getDouble("typical_p"));
         assertEquals(0.0, options.getDouble("presence_penalty"));
         assertEquals(0.0, options.getDouble("frequency_penalty"));
+        assertEquals(0, options.getInt("repeat_last_n"));
         assertEquals(0.0, options.getDouble("repeat_penalty"));
         assertEquals(150, options.getInt("num_predict"));
     }
@@ -101,6 +103,8 @@ class OllamaClientPayloadTest
                 enabled, 0.0,
                 enabled, 0.0,
                 enabled, 0.0,
+                enabled, 0.0,
+                enabled, 0,
                 enabled, 0.0,
                 4096,
                 7,

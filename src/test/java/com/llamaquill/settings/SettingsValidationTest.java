@@ -20,8 +20,10 @@ class SettingsValidationTest
                 true, -20,
                 true, -0.5,
                 true, 0.0,
+                true, Double.POSITIVE_INFINITY,
                 true, -20.0,
                 true, 20.0,
+                true, Integer.MAX_VALUE,
                 true, -3.0);
 
         assertEquals("model-name", settings.modelName());
@@ -31,8 +33,10 @@ class SettingsValidationTest
         assertEquals(0, settings.topK());
         assertEquals(0.0, settings.topP());
         assertEquals(0.0, settings.minP());
+        assertEquals(1.0, settings.typicalP());
         assertEquals(-2.0, settings.presencePenalty());
         assertEquals(2.0, settings.frequencyPenalty());
+        assertEquals(ModelSettings.MAX_CONTEXT_LIMIT, settings.repeatLastN());
         assertEquals(0.0, settings.repetitionPenalty());
     }
 
@@ -43,6 +47,10 @@ class SettingsValidationTest
         original = SettingsCoordinator.withContextLimit(original, 131072);
         original = SettingsCoordinator.withPromptTokenScale(original, 1.4);
         original = SettingsCoordinator.withTemperatureEnabled(original, true);
+        original = SettingsCoordinator.withTypicalPEnabled(original, true);
+        original = SettingsCoordinator.withTypicalP(original, 0.73);
+        original = SettingsCoordinator.withRepeatLastNEnabled(original, true);
+        original = SettingsCoordinator.withRepeatLastN(original, -1);
 
         ModelSettings updated = SettingsCoordinator.withTemperature(original, 0.0);
 
@@ -50,6 +58,10 @@ class SettingsValidationTest
         assertEquals(1.4, updated.promptTokenScale());
         assertTrue(updated.temperatureEnabled());
         assertEquals(0.0, updated.temperature());
+        assertTrue(updated.typicalPEnabled());
+        assertEquals(0.73, updated.typicalP());
+        assertTrue(updated.repeatLastNEnabled());
+        assertEquals(-1, updated.repeatLastN());
         assertFalse(updated.topKEnabled());
     }
 

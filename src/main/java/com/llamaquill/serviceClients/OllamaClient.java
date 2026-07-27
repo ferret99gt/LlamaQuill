@@ -324,6 +324,10 @@ public class OllamaClient implements AutoCloseable
         {
             options.put("min_p", settings.minP());
         }
+        if (settings.typicalPEnabled())
+        {
+            options.put("typical_p", settings.typicalP());
+        }
         if (settings.presencePenaltyEnabled())
         {
             options.put("presence_penalty", settings.presencePenalty());
@@ -331,6 +335,10 @@ public class OllamaClient implements AutoCloseable
         if (settings.frequencyPenaltyEnabled())
         {
             options.put("frequency_penalty", settings.frequencyPenalty());
+        }
+        if (settings.repeatLastNEnabled())
+        {
+            options.put("repeat_last_n", settings.repeatLastN());
         }
         if (settings.repetitionPenaltyEnabled())
         {

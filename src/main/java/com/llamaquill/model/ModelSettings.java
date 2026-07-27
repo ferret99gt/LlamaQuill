@@ -5,8 +5,10 @@ public record ModelSettings(String modelName, boolean active, int contextLimit, 
         boolean topKEnabled, int topK,
         boolean topPEnabled, double topP,
         boolean minPEnabled, double minP,
+        boolean typicalPEnabled, double typicalP,
         boolean presencePenaltyEnabled, double presencePenalty,
         boolean frequencyPenaltyEnabled, double frequencyPenalty,
+        boolean repeatLastNEnabled, int repeatLastN,
         boolean repetitionPenaltyEnabled, double repetitionPenalty)
 {
     public static final int MIN_CONTEXT_LIMIT = 1024;
@@ -28,8 +30,10 @@ public record ModelSettings(String modelName, boolean active, int contextLimit, 
         topK = clamp(topK, 0, 10000);
         topP = clampFinite(topP, 0.95, 0.0, 1.0);
         minP = clampFinite(minP, 0.025, 0.0, 1.0);
+        typicalP = clampFinite(typicalP, 1.0, 0.0, 1.0);
         presencePenalty = clampFinite(presencePenalty, 0.25, -2.0, 2.0);
         frequencyPenalty = clampFinite(frequencyPenalty, 0.0, -2.0, 2.0);
+        repeatLastN = clamp(repeatLastN, -1, contextLimit);
         repetitionPenalty = clampFinite(repetitionPenalty, 1.05, 0.0, 5.0);
     }
 
@@ -41,8 +45,10 @@ public record ModelSettings(String modelName, boolean active, int contextLimit, 
                 false, defaults.topK(),
                 false, defaults.topP(),
                 false, defaults.minP(),
+                false, defaults.typicalP(),
                 false, defaults.presencePenalty(),
                 false, defaults.frequencyPenalty(),
+                false, defaults.repeatLastN(),
                 false, defaults.repetitionPenalty());
     }
 
