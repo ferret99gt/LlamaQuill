@@ -322,7 +322,7 @@ public class App extends Application
             modelAutoCardsRepository = new ModelAutoCardsRepository(database);
             promptCompiler = new PromptCompiler();
             aiDungeonImports = new AIDungeonImports(database, storyRepository, blockRepository, cardRepository,
-                    DEFAULT_SYSTEM_PROMPT);
+                    imageRepository, DEFAULT_SYSTEM_PROMPT);
             ollamaClient = new OllamaClient();
             comfyUiClient = new ComfyUiClient();
             generationCoordinator = new GenerationCoordinator(database, blockRepository, storyRepository, cardRepository,
