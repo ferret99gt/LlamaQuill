@@ -122,6 +122,8 @@ public class App extends Application
     private static final int MAX_STORY_LINES = 20;
     private static final int LEFT_SIDEBAR_WIDTH = 480;
     private static final int RIGHT_SIDEBAR_WIDTH = 480;
+    private static final List<String> BUNDLED_COMFY_WORKFLOW_NAMES =
+            List.of("ChromaHD", "Chroma2Kaleidoscope");
 
     private Database database;
     private StoryRepository storyRepository;
@@ -1536,7 +1538,7 @@ public class App extends Application
 
     private List<String> discoverComfyWorkflowNames()
     {
-        List<String> names = new ArrayList<>();
+        List<String> names = new ArrayList<>(bundledComfyWorkflowNames());
         try
         {
             Enumeration<URL> urls = Thread.currentThread().getContextClassLoader().getResources("comfyui");
@@ -1553,6 +1555,13 @@ public class App extends Application
         names = new ArrayList<>(new java.util.LinkedHashSet<>(names));
         Collections.sort(names);
         return names;
+    }
+
+    static List<String> bundledComfyWorkflowNames()
+    {
+        return BUNDLED_COMFY_WORKFLOW_NAMES.stream()
+                .filter(name -> App.class.getResource("/comfyui/" + name + ".json") != null)
+                .toList();
     }
 
     private List<String> listWorkflowNamesFromResourceRoot(URL url)
