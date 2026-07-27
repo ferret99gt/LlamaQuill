@@ -34,7 +34,11 @@ import com.llamaquill.imports.AIDungeonImports;
 import com.llamaquill.imports.ImportDialogs;
 import com.llamaquill.prompt.PromptCompiler;
 import com.llamaquill.serviceClients.ComfyUiClient;
+import com.llamaquill.serviceClients.OllamaChatResult;
 import com.llamaquill.serviceClients.OllamaClient;
+import com.llamaquill.serviceClients.OllamaEndpoint;
+import com.llamaquill.serviceClients.OllamaException;
+import com.llamaquill.serviceClients.OllamaModelDetails;
 import com.llamaquill.retry.RetryHistoryDialog;
 import com.llamaquill.session.StoryOperationRegistry;
 import com.llamaquill.session.StoryRetryHistory;
@@ -86,6 +90,8 @@ import java.nio.file.FileSystemNotFoundException;
 import java.nio.file.FileSystems;
 import java.nio.file.Path;
 import java.io.IOException;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
@@ -238,16 +244,15 @@ public class App extends Application
     private Spinner<Integer> comfyHeightSpinner;
     private Spinner<Integer> comfyBatchSizeSpinner;
     private ComboBox<String> modelSelect;
+    private Button refreshModelsButton;
+    private Label modelDetailsLabel;
+    private Label contextLimitValueLabel;
     private boolean updatingModelControls;
+    private boolean modelRefreshInProgress;
 
     private List<String> comfyWorkflowNames = new ArrayList<>();
-    private static final double TOKEN_SCALE_DEFAULT = 1.0;
-    private static final double TOKEN_SCALE_MIN = 0.7;
-    private static final double TOKEN_SCALE_MAX = 1.6;
     private static final double TOKEN_SCALE_ALPHA = 0.2;
-    private static final int CHARS_PER_TOKEN_ESTIMATE = 4;
-
-    private final Map<String, Double> tokenScaleByModel = new HashMap<>();
+    private final Map<String, OllamaModelDetails> modelDetailsByName = new HashMap<>();
 
     private static final String DEFAULT_SEE_REQUEST = "Generate an image prompt for the most recent scene in the story.";
     private static final String DEFAULT_ONE_SHOT_SYSTEM_PROMPT = "You respond to the user's prompt using the existing story context.";
@@ -288,6 +293,11 @@ public class App extends Application
     {
     }
 
+    private record ModelDiscoveryResult(String endpoint, List<String> models, String selectedModel,
+            OllamaModelDetails selectedDetails, Exception metadataError)
+    {
+    }
+
     @Override
     public void start(Stage stage)
     {
@@ -322,11 +332,9 @@ public class App extends Application
             ensureValidComfyWorkflowSelection();
             ollamaClient.setHost(appSettings.ollamaUrl());
             comfyUiClient.setHost(appSettings.comfyUiUrl());
-            syncModelsFromOllama();
             activeModelSettings = loadActiveModelSettings(appSettings.selectedModel());
             modelAutoCardsSettings = loadOrCreateModelAutoCardsSettings(activeModelSettings.modelName());
             ollamaClient.setModel(activeModelSettings.modelName());
-            promptCompiler.setTokenEstimator(this::estimatePromptTokensCalibrated);
             settings = buildGenerationSettings();
             executor = Executors.newSingleThreadExecutor();
 
@@ -399,6 +407,7 @@ public class App extends Application
         stage.setTitle(AppVersion.displayName());
         stage.setScene(scene);
         stage.show();
+        refreshModelsFromOllama(false);
     }
 
     @Override
@@ -421,6 +430,10 @@ public class App extends Application
             {
                 Thread.currentThread().interrupt();
             }
+        }
+        if (ollamaClient != null)
+        {
+            ollamaClient.close();
         }
         if (database != null)
         {
@@ -685,11 +698,15 @@ public class App extends Application
         modelSelect.setOnAction(event ->
         {
             String selected = modelSelect.getValue();
-            if (selected != null)
+            if (!updatingModelControls && selected != null)
             {
                 selectModel(selected);
             }
         });
+        refreshModelsButton = new Button("Refresh");
+        refreshModelsButton.setOnAction(event -> refreshModelsFromOllama(true));
+        modelDetailsLabel = new Label("Model metadata has not been loaded.");
+        modelDetailsLabel.setWrapText(true);
 
         autoCardsCandidateSelectionMode = new ComboBox<>();
         autoCardsCandidateSelectionMode.setItems(FXCollections.observableArrayList(
@@ -772,15 +789,17 @@ public class App extends Application
         autoCardsMaxTokensSummarize.valueProperty().addListener((obs, oldValue, newValue) ->
                 updateModelAutoCardsTokens());
 
-        contextLimitSlider = buildIntSlider(1024, 32768, appSettings.contextLimit(), 512);
-        responseLengthSlider = buildIntSlider(1, 250, appSettings.responseLength(), 1);
-        temperatureSlider = buildDoubleSlider(0.1, 2.0, activeModelSettings.temperature(), 0.1);
-        topKSlider = buildIntSlider(0, 999, activeModelSettings.topK(), 1);
-        topPSlider = buildDoubleSlider(0.1, 1.0, activeModelSettings.topP(), 0.01);
-        minPSlider = buildDoubleSlider(0.01, 0.2, activeModelSettings.minP(), 0.001);
+        contextLimitSlider = buildIntSlider(ModelSettings.MIN_CONTEXT_LIMIT,
+                Math.max(131072, activeModelSettings.contextLimit()), activeModelSettings.contextLimit(), 512);
+        contextLimitValueLabel = valueLabel(activeModelSettings.contextLimit(), "tokens");
+        responseLengthSlider = buildIntSlider(1, 32768, appSettings.responseLength(), 1);
+        temperatureSlider = buildDoubleSlider(0.0, 5.0, activeModelSettings.temperature(), 0.1);
+        topKSlider = buildIntSlider(0, 10000, activeModelSettings.topK(), 1);
+        topPSlider = buildDoubleSlider(0.0, 1.0, activeModelSettings.topP(), 0.01);
+        minPSlider = buildDoubleSlider(0.0, 1.0, activeModelSettings.minP(), 0.001);
         presencePenaltySlider = buildDoubleSlider(-2.0, 2.0, activeModelSettings.presencePenalty(), 0.01);
         frequencyPenaltySlider = buildDoubleSlider(-2.0, 2.0, activeModelSettings.frequencyPenalty(), 0.01);
-        repetitionPenaltySlider = buildDoubleSlider(-2.0, 2.0, activeModelSettings.repetitionPenalty(), 0.01);
+        repetitionPenaltySlider = buildDoubleSlider(0.0, 5.0, activeModelSettings.repetitionPenalty(), 0.01);
         responseLengthEnabledBox = optionCheckBox("Response Length", appSettings.responseLengthEnabled());
         responseLengthEnabledBox.setTooltip(new Tooltip(
                 "When disabled, Ollama chooses the response length and LlamaQuill reserves 200 context tokens for output."));
@@ -793,8 +812,8 @@ public class App extends Application
         repetitionPenaltyEnabledBox = optionCheckBox("Repetition Penalty",
                 activeModelSettings.repetitionPenaltyEnabled());
         minStoryPercentSlider = buildIntSlider(10, 100, percentFromSettings(), 1);
-        storyCardLookbackSpinner = buildSpinner(0, 20, appSettings.storyCardLookback());
-        anPlacementSpinner = buildSpinner(1, 10, appSettings.anPlacement());
+        storyCardLookbackSpinner = buildSpinner(0, 100, appSettings.storyCardLookback());
+        anPlacementSpinner = buildSpinner(1, 100, appSettings.anPlacement());
 
         Label databaseLocationLabel = new Label(database.paths().databaseFile().toString());
         databaseLocationLabel.setWrapText(true);
@@ -834,8 +853,9 @@ public class App extends Application
         });
 
         content.getChildren().addAll(textFieldRow("Ollama URL", ollamaUrlField),
-                comboRow("Model", modelSelect),
-                sliderRow("Context Limit", contextLimitSlider, valueLabel(appSettings.contextLimit(), "tokens"),
+                modelSelectorRow(),
+                modelDetailsLabel,
+                sliderRow("Context Limit", contextLimitSlider, contextLimitValueLabel,
                         value -> updateContextLimit(value.intValue())),
                 optionalSliderRow(responseLengthEnabledBox, responseLengthSlider,
                         valueLabel(appSettings.responseLength(), "tokens"),
@@ -999,7 +1019,9 @@ public class App extends Application
         Optional<AppSettings> current = appSettingsRepository.load();
         if (current.isPresent())
         {
-            return current.get();
+            AppSettings validated = current.get();
+            appSettingsRepository.save(validated);
+            return validated;
         }
         AppSettings defaults = appSettingsRepository.defaults();
         try
@@ -1049,16 +1071,139 @@ public class App extends Application
         return defaults;
     }
 
-    private void syncModelsFromOllama()
+    private void refreshModelsFromOllama(boolean userInitiated)
     {
-        try
+        if (modelRefreshInProgress || executor == null)
         {
-            List<String> models = ollamaClient.listModels();
-            modelSettingsRepository.syncWithModels(models, ModelSettings.defaults(OllamaClient.DEFAULT_MODEL));
+            return;
         }
-        catch (Exception e)
+
+        modelRefreshInProgress = true;
+        if (refreshModelsButton != null)
         {
-            // If Ollama is unavailable, keep existing model settings.
+            refreshModelsButton.setDisable(true);
+        }
+        if (statusLabel != null)
+        {
+            statusLabel.setText("Refreshing Ollama models...");
+        }
+
+        String endpoint = ollamaClient.getHost();
+        String preferredModel = appSettings.selectedModel();
+        submitTask(() ->
+                {
+                    List<String> models = ollamaClient.listModels(endpoint);
+                    String selected = models.contains(preferredModel)
+                            ? preferredModel
+                            : models.isEmpty() ? "" : models.getFirst();
+                    OllamaModelDetails details = null;
+                    Exception metadataError = null;
+                    if (!selected.isBlank())
+                    {
+                        try
+                        {
+                            details = ollamaClient.showModel(endpoint, selected);
+                        }
+                        catch (IOException e)
+                        {
+                            metadataError = e;
+                        }
+                    }
+                    return new ModelDiscoveryResult(endpoint, models, selected, details, metadataError);
+                },
+                result ->
+                {
+                    finishModelRefresh();
+                    if (!result.endpoint().equals(ollamaClient.getHost()))
+                    {
+                        refreshModelsFromOllama(false);
+                        return;
+                    }
+                    try
+                    {
+                        if (result.models().isEmpty())
+                        {
+                            modelSettingsRepository.syncWithModels(List.of(),
+                                    ModelSettings.defaults(appSettings.selectedModel()));
+                            refreshModelSelect();
+                            statusLabel.setText("Ollama is available, but no local models were found.");
+                            modelDetailsLabel.setText("No local Ollama models were found.");
+                            if (userInitiated)
+                            {
+                                showInfo("Ollama is available, but no local models were found.");
+                            }
+                            return;
+                        }
+
+                        modelSettingsRepository.syncWithModels(result.models(),
+                                ModelSettings.defaults(result.selectedModel()));
+                        String selectedModel = result.models().contains(appSettings.selectedModel())
+                                ? appSettings.selectedModel()
+                                : result.selectedModel();
+                        OllamaModelDetails selectedDetails = selectedModel.equals(result.selectedModel())
+                                ? result.selectedDetails()
+                                : null;
+                        modelDetailsByName.clear();
+                        if (selectedDetails != null)
+                        {
+                            modelDetailsByName.put(selectedModel, selectedDetails);
+                        }
+                        selectModelInternal(selectedModel, selectedDetails);
+                        refreshModelSelect();
+                        if (selectedDetails == null)
+                        {
+                            if (selectedModel.equals(result.selectedModel()) && result.metadataError() != null)
+                            {
+                                modelDetailsLabel.setText("Model metadata unavailable: "
+                                        + taskErrorMessage(result.metadataError()));
+                                statusLabel.setText("Models refreshed, but context validation failed.");
+                                if (userInitiated)
+                                {
+                                    showError("Failed to inspect Ollama model", result.metadataError());
+                                }
+                            }
+                            else
+                            {
+                                loadModelDetails(selectedModel);
+                            }
+                        }
+                        else
+                        {
+                            statusLabel.setText("Ollama models refreshed.");
+                        }
+                    }
+                    catch (SQLException e)
+                    {
+                        showError("Failed to save discovered Ollama models", e);
+                    }
+                },
+                error ->
+                {
+                    finishModelRefresh();
+                    if (!endpoint.equals(ollamaClient.getHost()))
+                    {
+                        refreshModelsFromOllama(false);
+                        return;
+                    }
+                    String message = taskErrorMessage(error);
+                    statusLabel.setText("Ollama model refresh failed: " + message);
+                    if (modelDetailsLabel != null)
+                    {
+                        modelDetailsLabel.setText("Model discovery failed. Existing saved settings remain available.");
+                    }
+                    if (userInitiated)
+                    {
+                        showError("Failed to refresh Ollama models", error);
+                    }
+                });
+    }
+
+    private void finishModelRefresh()
+    {
+        modelRefreshInProgress = false;
+        if (refreshModelsButton != null)
+        {
+            refreshModelsButton.setDisable(false);
         }
     }
 
@@ -1067,7 +1212,9 @@ public class App extends Application
         Optional<ModelSettings> selected = modelSettingsRepository.load(modelName);
         if (selected.isPresent() && selected.get().active())
         {
-            return selected.get();
+            ModelSettings validated = selected.get();
+            modelSettingsRepository.save(validated);
+            return validated;
         }
 
         List<ModelSettings> activeModels = modelSettingsRepository.listActive();
@@ -1086,7 +1233,10 @@ public class App extends Application
 
     private GenerationSettings buildGenerationSettings()
     {
-        return new GenerationSettings(appSettings.contextLimit(),
+        int contextLimit = activeModelSettings.contextLimit();
+        int minStoryWindow = (int) Math.round(contextLimit * (appSettings.minStoryPercent() / 100.0));
+        return new GenerationSettings(activeModelSettings.modelName(), appSettings.ollamaUrl(), contextLimit,
+                activeModelSettings.promptTokenScale(),
                 appSettings.responseLengthEnabled(), appSettings.responseLength(),
                 activeModelSettings.temperatureEnabled(), activeModelSettings.temperature(),
                 activeModelSettings.topKEnabled(), activeModelSettings.topK(),
@@ -1095,7 +1245,7 @@ public class App extends Application
                 activeModelSettings.presencePenaltyEnabled(), activeModelSettings.presencePenalty(),
                 activeModelSettings.frequencyPenaltyEnabled(), activeModelSettings.frequencyPenalty(),
                 activeModelSettings.repetitionPenaltyEnabled(), activeModelSettings.repetitionPenalty(),
-                appSettings.minStoryWindow(), appSettings.storyCardLookback(), appSettings.anPlacement());
+                minStoryWindow, appSettings.storyCardLookback(), appSettings.anPlacement());
     }
 
     private void refreshModelSelect()
@@ -1112,11 +1262,14 @@ public class App extends Application
             {
                 names.add(model.modelName());
             }
+            updatingModelControls = true;
             modelSelect.setItems(FXCollections.observableArrayList(names));
-            modelSelect.setValue(appSettings.selectedModel());
+            modelSelect.setValue(names.contains(appSettings.selectedModel()) ? appSettings.selectedModel() : null);
+            updatingModelControls = false;
         }
         catch (SQLException e)
         {
+            updatingModelControls = false;
             showError("Failed to load models", e);
         }
     }
@@ -1129,19 +1282,11 @@ public class App extends Application
         }
         try
         {
-            Optional<ModelSettings> selected = modelSettingsRepository.load(modelName);
-            if (selected.isEmpty())
+            selectModelInternal(modelName, modelDetailsByName.get(modelName));
+            if (!modelDetailsByName.containsKey(modelName))
             {
-                return;
+                loadModelDetails(modelName);
             }
-            activeModelSettings = selected.get();
-            modelAutoCardsSettings = loadOrCreateModelAutoCardsSettings(modelName);
-            appSettings = SettingsCoordinator.withSelectedModel(appSettings, modelName);
-            persistAppSettings();
-            updateModelControls();
-            updateModelAutoCardsControls();
-            refreshGenerationSettings();
-            ollamaClient.setModel(modelName);
         }
         catch (SQLException e)
         {
@@ -1149,15 +1294,102 @@ public class App extends Application
         }
     }
 
+    private void selectModelInternal(String modelName, OllamaModelDetails details) throws SQLException
+    {
+        Optional<ModelSettings> selected = modelSettingsRepository.load(modelName);
+        if (selected.isEmpty())
+        {
+            return;
+        }
+        activeModelSettings = selected.get();
+        modelSettingsRepository.save(activeModelSettings);
+        modelAutoCardsSettings = loadOrCreateModelAutoCardsSettings(modelName);
+        appSettings = SettingsCoordinator.withSelectedModel(appSettings, modelName);
+        persistAppSettings();
+        ollamaClient.setModel(modelName);
+        applyModelDetails(details);
+        updateModelControls();
+        updateModelAutoCardsControls();
+        refreshGenerationSettings();
+    }
+
+    private void loadModelDetails(String modelName)
+    {
+        String endpoint = ollamaClient.getHost();
+        if (modelDetailsLabel != null)
+        {
+            modelDetailsLabel.setText("Loading model metadata...");
+        }
+        submitTask(() -> ollamaClient.showModel(endpoint, modelName),
+                details ->
+                {
+                    if (!endpoint.equals(ollamaClient.getHost()))
+                    {
+                        return;
+                    }
+                    modelDetailsByName.put(modelName, details);
+                    if (activeModelSettings != null && modelName.equals(activeModelSettings.modelName()))
+                    {
+                        applyModelDetails(details);
+                        updateModelControls();
+                        refreshGenerationSettings();
+                    }
+                },
+                error ->
+                {
+                    if (activeModelSettings != null && modelName.equals(activeModelSettings.modelName()))
+                    {
+                        modelDetailsLabel.setText("Model metadata unavailable: " + taskErrorMessage(error));
+                        statusLabel.setText("Could not validate model context.");
+                        showError("Failed to inspect Ollama model", error);
+                    }
+                });
+    }
+
+    private void applyModelDetails(OllamaModelDetails details)
+    {
+        if (modelDetailsLabel == null || activeModelSettings == null)
+        {
+            return;
+        }
+        if (details == null)
+        {
+            modelDetailsLabel.setText("Model metadata has not been loaded.");
+            return;
+        }
+
+        String summary = details.displaySummary();
+        if (details.hasCapability("thinking"))
+        {
+            summary += " · thinking is requested off for narrative compatibility";
+        }
+        int declaredMaximum = details.maxContextLength();
+        if (declaredMaximum > 0 && activeModelSettings.contextLimit() > declaredMaximum)
+        {
+            int previous = activeModelSettings.contextLimit();
+            activeModelSettings = SettingsCoordinator.withContextLimit(activeModelSettings, declaredMaximum);
+            persistModelSettings();
+            summary = "Configured context reduced from " + previous + " to the model maximum of "
+                    + activeModelSettings.contextLimit() + " tokens. " + summary;
+            statusLabel.setText("Context limit adjusted to model maximum.");
+        }
+        modelDetailsLabel.setText(summary);
+    }
+
     private void updateOllamaUrl(String url)
     {
-        String normalized = url == null ? "" : url.trim();
-        if (normalized.isBlank())
+        final String normalized;
+        try
+        {
+            normalized = OllamaEndpoint.normalize(url);
+        }
+        catch (IllegalArgumentException e)
         {
             if (ollamaUrlField != null)
             {
                 ollamaUrlField.setText(appSettings.ollamaUrl());
             }
+            showError("Invalid Ollama URL", e);
             return;
         }
         if (normalized.equals(appSettings.ollamaUrl()))
@@ -1175,6 +1407,8 @@ public class App extends Application
         {
             ollamaUrlField.setText(appSettings.ollamaUrl());
         }
+        modelDetailsByName.clear();
+        refreshModelsFromOllama(false);
     }
 
     private void updateComfyUiUrl(String url)
@@ -1376,49 +1610,51 @@ public class App extends Application
         return names;
     }
 
-    private int estimatePromptTokensCalibrated(String prompt)
+    private void observePromptCalibration(int estimatedPromptTokens, OllamaChatResult response)
     {
-        if (prompt == null || prompt.isBlank())
-        {
-            return 0;
-        }
-        double heuristic = Math.max(1.0, Math.ceil(prompt.length() / (double) CHARS_PER_TOKEN_ESTIMATE));
-        double scale = currentTokenScale();
-        return Math.max(1, (int) Math.ceil(heuristic * scale));
-    }
-
-    private synchronized double currentTokenScale()
-    {
-        String modelName = activeModelSettings == null ? ollamaClient.getModel() : activeModelSettings.modelName();
-        if (modelName == null || modelName.isBlank())
-        {
-            modelName = "__default__";
-        }
-        return tokenScaleByModel.getOrDefault(modelName, TOKEN_SCALE_DEFAULT);
-    }
-
-    private void observePromptCalibration(int estimatedPromptTokens)
-    {
-        int actualPromptTokens = ollamaClient.getLastPromptEvalCount();
-        if (estimatedPromptTokens <= 0 || actualPromptTokens <= 0)
+        if (response == null || response.model().isBlank()
+                || estimatedPromptTokens <= 0 || response.promptEvalCount() <= 0)
         {
             return;
         }
-        synchronized (this)
+        try
         {
-            String modelName = activeModelSettings == null ? ollamaClient.getModel() : activeModelSettings.modelName();
-            if (modelName == null || modelName.isBlank())
+            Optional<ModelSettings> stored = modelSettingsRepository.load(response.model());
+            if (stored.isEmpty())
             {
-                modelName = "__default__";
+                return;
             }
 
-            double oldScale = tokenScaleByModel.getOrDefault(modelName, TOKEN_SCALE_DEFAULT);
-            double sampleRatio = actualPromptTokens / (double) estimatedPromptTokens;
+            ModelSettings modelSettings = stored.get();
+            double oldScale = modelSettings.promptTokenScale();
+            double sampleRatio = response.promptEvalCount() / (double) estimatedPromptTokens;
             double targetScale = oldScale * sampleRatio;
-            targetScale = Math.max(TOKEN_SCALE_MIN, Math.min(TOKEN_SCALE_MAX, targetScale));
+            targetScale = Math.max(ModelSettings.MIN_PROMPT_TOKEN_SCALE,
+                    Math.min(ModelSettings.MAX_PROMPT_TOKEN_SCALE, targetScale));
             double updated = oldScale + (targetScale - oldScale) * TOKEN_SCALE_ALPHA;
-            updated = Math.max(TOKEN_SCALE_MIN, Math.min(TOKEN_SCALE_MAX, updated));
-            tokenScaleByModel.put(modelName, updated);
+            updated = Math.max(ModelSettings.MIN_PROMPT_TOKEN_SCALE,
+                    Math.min(ModelSettings.MAX_PROMPT_TOKEN_SCALE, updated));
+            ModelSettings calibrated = SettingsCoordinator.withPromptTokenScale(modelSettings, updated);
+            modelSettingsRepository.save(calibrated);
+            if (activeModelSettings != null && response.model().equals(activeModelSettings.modelName()))
+            {
+                activeModelSettings = calibrated;
+                refreshGenerationSettings();
+            }
+        }
+        catch (SQLException e)
+        {
+            statusLabel.setText("Response completed, but prompt calibration could not be saved.");
+        }
+    }
+
+    private void recordOllamaResponse(int estimatedPromptTokens, OllamaChatResult response)
+    {
+        observePromptCalibration(estimatedPromptTokens, response);
+        if (statusLabel != null && response != null)
+        {
+            String summary = response.diagnosticSummary();
+            statusLabel.setTooltip(summary.isBlank() ? null : new Tooltip(summary));
         }
     }
 
@@ -1508,7 +1744,18 @@ public class App extends Application
 
     private void updateModelControls()
     {
+        if (activeModelSettings == null || contextLimitSlider == null)
+        {
+            return;
+        }
         updatingModelControls = true;
+        OllamaModelDetails details = modelDetailsByName.get(activeModelSettings.modelName());
+        int sliderMaximum = details != null && details.maxContextLength() > 0
+                ? Math.min(ModelSettings.MAX_CONTEXT_LIMIT, details.maxContextLength())
+                : Math.max(131072, activeModelSettings.contextLimit());
+        sliderMaximum = Math.max(ModelSettings.MIN_CONTEXT_LIMIT, sliderMaximum);
+        contextLimitSlider.setMax(sliderMaximum);
+        contextLimitSlider.setValue(Math.min(activeModelSettings.contextLimit(), sliderMaximum));
         temperatureSlider.setValue(activeModelSettings.temperature());
         topKSlider.setValue(activeModelSettings.topK());
         topPSlider.setValue(activeModelSettings.topP());
@@ -2531,7 +2778,7 @@ public class App extends Application
                 },
                 result ->
                 {
-                    observePromptCalibration(result.estimatedPromptTokens());
+                    recordOllamaResponse(result.estimatedPromptTokens(), result.ollamaResponse());
                     try
                     {
                         if (result.status() == GenerationCoordinator.ResultStatus.STALE)
@@ -2571,6 +2818,7 @@ public class App extends Application
                 {
                     restoreStoryActionButtonsState();
                     statusLabel.setText("Error: " + taskErrorMessage(error));
+                    showError("Ollama generation failed", error);
                 });
     }
 
@@ -2834,7 +3082,7 @@ public class App extends Application
                 },
                 result ->
                 {
-                    observePromptCalibration(result.estimatedPromptTokens());
+                    recordOllamaResponse(result.estimatedPromptTokens(), result.ollamaResponse());
                     try
                     {
                         if (result.status() == GenerationCoordinator.ResultStatus.STALE)
@@ -2872,6 +3120,7 @@ public class App extends Application
                 {
                     restoreStoryActionButtonsState();
                     statusLabel.setText("Error: " + taskErrorMessage(error));
+                    showError("Ollama generation failed", error);
                 });
     }
 
@@ -2896,7 +3145,7 @@ public class App extends Application
                 {
                     try
                     {
-                        observePromptCalibration(result.estimatedPromptTokens());
+                        recordOllamaResponse(result.estimatedPromptTokens(), result.ollamaResponse());
                         if (result.status() == GenerationCoordinator.ResultStatus.STALE)
                         {
                             if (canApplyToActiveSession(context.session()))
@@ -2932,6 +3181,7 @@ public class App extends Application
                     }
                     restoreStoryActionButtonsState();
                     statusLabel.setText("Error: " + taskErrorMessage(error));
+                    showError("Ollama generation failed", error);
                 });
     }
 
@@ -3019,6 +3269,14 @@ public class App extends Application
         return box;
     }
 
+    private VBox modelSelectorRow()
+    {
+        Label label = new Label("Model");
+        HBox row = new HBox(8, modelSelect, refreshModelsButton);
+        HBox.setHgrow(modelSelect, Priority.ALWAYS);
+        return new VBox(6, label, row);
+    }
+
     private VBox spinnerRow(String labelText, Spinner<Integer> spinner, java.util.function.Consumer<Integer> handler)
     {
         Label label = new Label(labelText);
@@ -3100,18 +3358,21 @@ public class App extends Application
 
     private int percentFromSettings()
     {
-        if (appSettings.contextLimit() == 0)
-        {
-            return 0;
-        }
-        return (int) Math.round((appSettings.minStoryWindow() * 100.0) / appSettings.contextLimit());
+        return appSettings.minStoryPercent();
     }
 
     private void updateContextLimit(int value)
     {
-        int percent = minStoryPercentSlider == null ? 90 : (int) Math.round(minStoryPercentSlider.getValue());
-        appSettings = SettingsCoordinator.withContextLimit(appSettings, value, percent);
-        persistAppSettings();
+        if (updatingModelControls)
+        {
+            return;
+        }
+        OllamaModelDetails details = modelDetailsByName.get(activeModelSettings.modelName());
+        int maximum = details != null && details.maxContextLength() > 0
+                ? Math.min(ModelSettings.MAX_CONTEXT_LIMIT, details.maxContextLength())
+                : ModelSettings.MAX_CONTEXT_LIMIT;
+        activeModelSettings = SettingsCoordinator.withContextLimit(activeModelSettings, Math.min(value, maximum));
+        persistModelSettings();
         refreshGenerationSettings();
     }
 
@@ -3543,7 +3804,8 @@ public class App extends Application
     private Exception asException(Throwable throwable)
     {
         Throwable current = throwable;
-        while (current instanceof CompletionException && current.getCause() != null)
+        while ((current instanceof CompletionException || current instanceof ExecutionException)
+                && current.getCause() != null)
         {
             current = current.getCause();
         }
@@ -3561,12 +3823,34 @@ public class App extends Application
 
     private void showError(String message, Exception e)
     {
+        Exception error = asException(e);
         Alert alert = new Alert(Alert.AlertType.ERROR);
         alert.initOwner(primaryStage);
         alert.setTitle("LlamaQuill");
         alert.setHeaderText(message);
-        alert.setContentText(e.getMessage());
+        String userMessage = error.getMessage();
+        alert.setContentText(userMessage == null || userMessage.isBlank()
+                ? error.getClass().getSimpleName()
+                : userMessage);
+
+        TextArea diagnostics = new TextArea(diagnosticText(error));
+        diagnostics.setEditable(false);
+        diagnostics.setWrapText(false);
+        diagnostics.setMaxWidth(Double.MAX_VALUE);
+        diagnostics.setMaxHeight(Double.MAX_VALUE);
+        alert.getDialogPane().setExpandableContent(diagnostics);
         alert.showAndWait();
+    }
+
+    private static String diagnosticText(Exception error)
+    {
+        if (error instanceof OllamaException ollamaError)
+        {
+            return ollamaError.diagnosticText();
+        }
+        StringWriter text = new StringWriter();
+        error.printStackTrace(new PrintWriter(text));
+        return text.toString();
     }
 
     private void showError(String message, Throwable error)

@@ -26,6 +26,7 @@ public class ModelSettingsRepository
         {
             try (PreparedStatement stmt = connection.prepareStatement("""
                     SELECT model_name, active,
+                           context_limit, prompt_token_scale,
                            temperature_enabled, temperature,
                            top_k_enabled, top_k,
                            top_p_enabled, top_p,
@@ -56,6 +57,7 @@ public class ModelSettingsRepository
         {
             try (PreparedStatement stmt = connection.prepareStatement("""
                     SELECT model_name, active,
+                           context_limit, prompt_token_scale,
                            temperature_enabled, temperature,
                            top_k_enabled, top_k,
                            top_p_enabled, top_p,
@@ -85,6 +87,7 @@ public class ModelSettingsRepository
         {
             try (PreparedStatement stmt = connection.prepareStatement("""
                     SELECT model_name, active,
+                           context_limit, prompt_token_scale,
                            temperature_enabled, temperature,
                            top_k_enabled, top_k,
                            top_p_enabled, top_p,
@@ -113,7 +116,7 @@ public class ModelSettingsRepository
         {
             try (PreparedStatement stmt = connection.prepareStatement("""
                     INSERT INTO model_settings (
-                        model_name, active,
+                        model_name, active, context_limit, prompt_token_scale,
                         temperature_enabled, temperature,
                         top_k_enabled, top_k,
                         top_p_enabled, top_p,
@@ -121,9 +124,11 @@ public class ModelSettingsRepository
                         presence_penalty_enabled, presence_penalty,
                         frequency_penalty_enabled, frequency_penalty,
                         repetition_penalty_enabled, repetition_penalty
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(model_name) DO UPDATE SET
                         active = excluded.active,
+                        context_limit = excluded.context_limit,
+                        prompt_token_scale = excluded.prompt_token_scale,
                         temperature_enabled = excluded.temperature_enabled,
                         temperature = excluded.temperature,
                         top_k_enabled = excluded.top_k_enabled,
@@ -142,20 +147,22 @@ public class ModelSettingsRepository
             {
                 stmt.setString(1, settings.modelName());
                 stmt.setInt(2, settings.active() ? 1 : 0);
-                stmt.setInt(3, settings.temperatureEnabled() ? 1 : 0);
-                stmt.setDouble(4, settings.temperature());
-                stmt.setInt(5, settings.topKEnabled() ? 1 : 0);
-                stmt.setInt(6, settings.topK());
-                stmt.setInt(7, settings.topPEnabled() ? 1 : 0);
-                stmt.setDouble(8, settings.topP());
-                stmt.setInt(9, settings.minPEnabled() ? 1 : 0);
-                stmt.setDouble(10, settings.minP());
-                stmt.setInt(11, settings.presencePenaltyEnabled() ? 1 : 0);
-                stmt.setDouble(12, settings.presencePenalty());
-                stmt.setInt(13, settings.frequencyPenaltyEnabled() ? 1 : 0);
-                stmt.setDouble(14, settings.frequencyPenalty());
-                stmt.setInt(15, settings.repetitionPenaltyEnabled() ? 1 : 0);
-                stmt.setDouble(16, settings.repetitionPenalty());
+                stmt.setInt(3, settings.contextLimit());
+                stmt.setDouble(4, settings.promptTokenScale());
+                stmt.setInt(5, settings.temperatureEnabled() ? 1 : 0);
+                stmt.setDouble(6, settings.temperature());
+                stmt.setInt(7, settings.topKEnabled() ? 1 : 0);
+                stmt.setInt(8, settings.topK());
+                stmt.setInt(9, settings.topPEnabled() ? 1 : 0);
+                stmt.setDouble(10, settings.topP());
+                stmt.setInt(11, settings.minPEnabled() ? 1 : 0);
+                stmt.setDouble(12, settings.minP());
+                stmt.setInt(13, settings.presencePenaltyEnabled() ? 1 : 0);
+                stmt.setDouble(14, settings.presencePenalty());
+                stmt.setInt(15, settings.frequencyPenaltyEnabled() ? 1 : 0);
+                stmt.setDouble(16, settings.frequencyPenalty());
+                stmt.setInt(17, settings.repetitionPenaltyEnabled() ? 1 : 0);
+                stmt.setDouble(18, settings.repetitionPenalty());
                 stmt.executeUpdate();
             }
         });
@@ -180,7 +187,7 @@ public class ModelSettingsRepository
                     ModelSettings current = existingRow.get();
                     if (!current.active())
                     {
-                        save(new ModelSettings(model, true,
+                        save(new ModelSettings(model, true, current.contextLimit(), current.promptTokenScale(),
                                 current.temperatureEnabled(), current.temperature(),
                                 current.topKEnabled(), current.topK(),
                                 current.topPEnabled(), current.topP(),
@@ -192,7 +199,7 @@ public class ModelSettingsRepository
                 }
                 else
                 {
-                    save(new ModelSettings(model, true,
+                    save(new ModelSettings(model, true, defaults.contextLimit(), defaults.promptTokenScale(),
                             defaults.temperatureEnabled(), defaults.temperature(),
                             defaults.topKEnabled(), defaults.topK(),
                             defaults.topPEnabled(), defaults.topP(),
@@ -213,7 +220,7 @@ public class ModelSettingsRepository
                         ModelSettings current = existingRow.get();
                         if (current.active())
                         {
-                            save(new ModelSettings(model, false,
+                            save(new ModelSettings(model, false, current.contextLimit(), current.promptTokenScale(),
                                     current.temperatureEnabled(), current.temperature(),
                                     current.topKEnabled(), current.topK(),
                                     current.topPEnabled(), current.topP(),
@@ -233,6 +240,8 @@ public class ModelSettingsRepository
         return new ModelSettings(
                 rs.getString("model_name"),
                 rs.getInt("active") == 1,
+                rs.getInt("context_limit"),
+                rs.getDouble("prompt_token_scale"),
                 rs.getInt("temperature_enabled") == 1,
                 rs.getDouble("temperature"),
                 rs.getInt("top_k_enabled") == 1,

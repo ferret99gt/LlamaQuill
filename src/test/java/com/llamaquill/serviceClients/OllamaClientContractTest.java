@@ -1,6 +1,7 @@
 package com.llamaquill.serviceClients;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -21,6 +22,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 class OllamaClientContractTest
 {
@@ -75,15 +79,22 @@ class OllamaClientContractTest
         client.streamBody = """
                 {"message":{"role":"assistant","content":"Hello \\"world\\""},"done":false}
                 {"message":{"role":"assistant","content":"\\n\\u2603"},"done":false}
-                {"message":{"role":"assistant","content":"!"},"done":true,"prompt_eval_count":42}
+                {"model":"test-model","message":{"role":"assistant","content":"!"},"done":true,"done_reason":"stop","prompt_eval_count":42,"eval_count":7,"total_duration":2500000000,"load_duration":500000000,"prompt_eval_duration":750000000,"eval_duration":1250000000}
                 """;
 
-        String result = client.chat(
+        OllamaChatResult result = client.chat(
                 List.of(new ChatMessage("user", "Continue.")),
                 GenerationSettings.defaults());
 
-        assertEquals("Hello \"world\"\n\u2603!", result);
-        assertEquals(42, client.getLastPromptEvalCount());
+        assertEquals("Hello \"world\"\n\u2603!", result.content());
+        assertEquals("test-model", result.model());
+        assertEquals(42, result.promptEvalCount());
+        assertEquals(7, result.evalCount());
+        assertEquals("stop", result.doneReason());
+        assertEquals(2_500_000_000L, result.totalDurationNanos());
+        assertEquals(500_000_000L, result.loadDurationNanos());
+        assertEquals(750_000_000L, result.promptEvalDurationNanos());
+        assertEquals(1_250_000_000L, result.evalDurationNanos());
         assertEquals("POST", client.lastStreamRequest.method());
         assertEquals("/api/chat", client.lastStreamRequest.uri().getPath());
         assertEquals("application/json", client.lastStreamRequest.headers().firstValue("Content-Type").orElseThrow());
@@ -103,7 +114,38 @@ class OllamaClientContractTest
                 GenerationSettings.defaults()));
 
         assertEquals("Ollama stream error on line 2: runner crashed", error.getMessage());
-        assertEquals(-1, client.getLastPromptEvalCount());
+    }
+
+    @Test
+    void readsModelCapabilitiesAndArchitectureContextFromShow() throws Exception
+    {
+        StubOllamaClient client = new StubOllamaClient();
+        client.stringBody = """
+                {
+                  "capabilities": ["completion", "tools"],
+                  "details": {
+                    "family": "gemma3",
+                    "parameter_size": "31B",
+                    "quantization_level": "Q6_K"
+                  },
+                  "model_info": {
+                    "general.architecture": "gemma3",
+                    "gemma3.context_length": 131072,
+                    "clip.vision.context_length": 4096
+                  }
+                }
+                """;
+
+        OllamaModelDetails details = client.showModel("equinox:Q6_K");
+
+        assertEquals("equinox:Q6_K", details.model());
+        assertEquals(131072, details.maxContextLength());
+        assertEquals(List.of("completion", "tools"), details.capabilities());
+        assertEquals("gemma3", details.family());
+        assertEquals("31B", details.parameterSize());
+        assertEquals("Q6_K", details.quantization());
+        assertEquals("POST", client.lastStringRequest.method());
+        assertEquals("/api/show", client.lastStringRequest.uri().getPath());
     }
 
     @Test
@@ -153,6 +195,35 @@ class OllamaClientContractTest
         assertEquals("Ollama returned status 400 for /api/chat: invalid chat sequence", error.getMessage());
     }
 
+    @Test
+    void interruptionClosesAnActiveResponseStream() throws Exception
+    {
+        StubOllamaClient client = new StubOllamaClient();
+        BlockingInputStream stream = new BlockingInputStream();
+        client.streamInput = stream;
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread generation = Thread.ofPlatform().start(() ->
+        {
+            try
+            {
+                client.chat(List.of(new ChatMessage("user", "Continue.")), GenerationSettings.defaults());
+            }
+            catch (Throwable error)
+            {
+                failure.set(error);
+            }
+        });
+
+        assertTrue(stream.readEntered.await(2, TimeUnit.SECONDS), "Stream read did not begin.");
+        generation.interrupt();
+        generation.join(2000);
+
+        assertFalse(generation.isAlive(), "Interrupted generation thread did not finish.");
+        assertTrue(stream.closed, "Response stream was not closed.");
+        assertTrue(failure.get() instanceof InterruptedException,
+                () -> "Expected InterruptedException but got " + failure.get());
+    }
+
     private static final class StubOllamaClient extends OllamaClient
     {
         private int stringStatus = 200;
@@ -161,6 +232,7 @@ class OllamaClientContractTest
         private String streamBody = """
                 {"message":{"role":"assistant","content":""},"done":true}
                 """;
+        private InputStream streamInput;
         private HttpRequest lastStringRequest;
         private HttpRequest lastStreamRequest;
 
@@ -180,8 +252,40 @@ class OllamaClientContractTest
         HttpResponse<InputStream> sendStream(HttpRequest request)
         {
             lastStreamRequest = request;
-            InputStream body = new ByteArrayInputStream(streamBody.getBytes(StandardCharsets.UTF_8));
+            InputStream body = streamInput == null
+                    ? new ByteArrayInputStream(streamBody.getBytes(StandardCharsets.UTF_8))
+                    : streamInput;
             return response(request, streamStatus, body);
+        }
+    }
+
+    private static final class BlockingInputStream extends InputStream
+    {
+        private final CountDownLatch readEntered = new CountDownLatch(1);
+        private final CountDownLatch release = new CountDownLatch(1);
+        private volatile boolean closed;
+
+        @Override
+        public int read() throws IOException
+        {
+            readEntered.countDown();
+            try
+            {
+                release.await();
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+                throw new IOException("Blocking test stream was interrupted.", e);
+            }
+            return -1;
+        }
+
+        @Override
+        public void close()
+        {
+            closed = true;
+            release.countDown();
         }
     }
 

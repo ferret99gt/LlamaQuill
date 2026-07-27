@@ -300,7 +300,7 @@ public class AutoCardsService
     private String generateModelResponse(ModelRequest request, GenerationSettings settings)
             throws IOException, InterruptedException
     {
-        return ollamaClient.chat(request.messages(), settings);
+        return ollamaClient.chat(request.messages(), settings).content();
     }
 
     private ModelRequest buildAutoCardRequest(AutoCards.PromptParts promptParts, PromptContext fullStoryContext)
@@ -312,7 +312,10 @@ public class AutoCardsService
 
     private static GenerationSettings buildGenerationSettings(AppSettings appSettings, ModelSettings modelSettings, int maxTokens)
     {
-        return new GenerationSettings(appSettings.contextLimit(),
+        int contextLimit = modelSettings.contextLimit();
+        int protectedStoryTokens = (int) Math.round(contextLimit * (appSettings.minStoryPercent() / 100.0));
+        return new GenerationSettings(modelSettings.modelName(), appSettings.ollamaUrl(),
+                contextLimit, modelSettings.promptTokenScale(),
                 true, maxTokens,
                 modelSettings.temperatureEnabled(), modelSettings.temperature(),
                 modelSettings.topKEnabled(), modelSettings.topK(),
@@ -321,12 +324,15 @@ public class AutoCardsService
                 modelSettings.presencePenaltyEnabled(), modelSettings.presencePenalty(),
                 modelSettings.frequencyPenaltyEnabled(), modelSettings.frequencyPenalty(),
                 modelSettings.repetitionPenaltyEnabled(), modelSettings.repetitionPenalty(),
-                appSettings.minStoryWindow(), appSettings.storyCardLookback(), appSettings.anPlacement());
+                protectedStoryTokens, appSettings.storyCardLookback(), appSettings.anPlacement());
     }
 
     private static GenerationSettings buildUnboundedGenerationSettings(AppSettings appSettings, ModelSettings modelSettings)
     {
-        return new GenerationSettings(appSettings.contextLimit(),
+        int contextLimit = modelSettings.contextLimit();
+        int protectedStoryTokens = (int) Math.round(contextLimit * (appSettings.minStoryPercent() / 100.0));
+        return new GenerationSettings(modelSettings.modelName(), appSettings.ollamaUrl(),
+                contextLimit, modelSettings.promptTokenScale(),
                 false, appSettings.responseLength(),
                 modelSettings.temperatureEnabled(), modelSettings.temperature(),
                 modelSettings.topKEnabled(), modelSettings.topK(),
@@ -335,7 +341,7 @@ public class AutoCardsService
                 modelSettings.presencePenaltyEnabled(), modelSettings.presencePenalty(),
                 modelSettings.frequencyPenaltyEnabled(), modelSettings.frequencyPenalty(),
                 modelSettings.repetitionPenaltyEnabled(), modelSettings.repetitionPenalty(),
-                appSettings.minStoryWindow(), appSettings.storyCardLookback(), appSettings.anPlacement());
+                protectedStoryTokens, appSettings.storyCardLookback(), appSettings.anPlacement());
     }
 
     private static ModelRequest buildOneShotRequest(String systemPrompt, String userPrompt, String excerpt,

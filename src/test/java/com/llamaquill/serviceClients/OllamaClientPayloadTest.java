@@ -77,7 +77,7 @@ class OllamaClientPayloadTest
 
         JSONObject payload = new JSONObject(client.buildChatPayload(
                 List.of(new ChatMessage("user", content)),
-                settings(false)));
+                settings(false, "model/with:\"quotes\"")));
 
         assertEquals("model/with:\"quotes\"", payload.getString("model"));
         assertEquals(content, payload.getJSONArray("messages").getJSONObject(0).getString("content"));
@@ -87,8 +87,13 @@ class OllamaClientPayloadTest
 
     private static GenerationSettings settings(boolean enabled)
     {
+        return settings(enabled, "test-model");
+    }
+
+    private static GenerationSettings settings(boolean enabled, String modelName)
+    {
         return new GenerationSettings(
-                8192,
+                modelName, GenerationSettings.DEFAULT_OLLAMA_HOST, 8192, 1.0,
                 enabled, 150,
                 enabled, 0.0,
                 enabled, 0,

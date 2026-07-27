@@ -10,7 +10,6 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -18,18 +17,24 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
-public class OllamaClient
+public class OllamaClient implements AutoCloseable
 {
     public static final String DEFAULT_HOST = "http://localhost:11434";
     public static final String DEFAULT_MODEL = "hf.co/LatitudeGames/Muse-12B-GGUF:BF16";
+    private static final Duration METADATA_TIMEOUT = Duration.ofSeconds(20);
+    private static final Duration CHAT_RESPONSE_TIMEOUT = Duration.ofMinutes(10);
+    private static final Duration STREAM_IDLE_TIMEOUT = Duration.ofMinutes(2);
     private static final int MAX_ERROR_BODY_BYTES = 4096;
     private static final int MAX_ERROR_MESSAGE_CHARS = 1000;
 
     private final HttpClient client;
-    private String host;
-    private String model;
-    private volatile int lastPromptEvalCount = -1;
+    private volatile String host;
+    private volatile String model;
 
     public OllamaClient()
     {
@@ -38,19 +43,19 @@ public class OllamaClient
 
     public OllamaClient(String host, String model)
     {
-        this.client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
-        this.host = host;
-        this.model = model;
+        client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+        setHost(host);
+        setModel(model);
     }
 
     public void setHost(String host)
     {
-        this.host = host;
+        this.host = OllamaEndpoint.normalize(host);
     }
 
     public void setModel(String model)
     {
-        this.model = model;
+        this.model = model == null || model.isBlank() ? DEFAULT_MODEL : model.trim();
     }
 
     public String getModel()
@@ -58,69 +63,123 @@ public class OllamaClient
         return model;
     }
 
-    public int getLastPromptEvalCount()
-    {
-        return lastPromptEvalCount;
-    }
-
     public String getHost()
     {
         return host;
     }
 
+    @Override
+    public void close()
+    {
+        client.shutdownNow();
+        try
+        {
+            client.awaitTermination(Duration.ofSeconds(2));
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     public List<String> listModels() throws IOException, InterruptedException
     {
-        HttpRequest request = HttpRequest.newBuilder().uri(URI.create(host + "/api/tags")).timeout(Duration.ofSeconds(10)).GET()
+        return listModels(host);
+    }
+
+    public List<String> listModels(String baseHost) throws IOException, InterruptedException
+    {
+        String endpoint = OllamaEndpoint.resolve(baseHost, "/api/tags").toString();
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(java.net.URI.create(endpoint))
+                .timeout(METADATA_TIMEOUT)
+                .GET()
                 .build();
         HttpResponse<String> response = sendString(request);
-        if (response.statusCode() < 200 || response.statusCode() >= 300)
-        {
-            throw httpError("/api/tags", response.statusCode(), response.body());
-        }
+        requireSuccess("/api/tags", endpoint, response.statusCode(), response.body());
         return parseModelList(response.body());
     }
 
-    public String chat(List<ChatMessage> messages, GenerationSettings settings) throws IOException, InterruptedException
+    public OllamaModelDetails showModel(String modelName) throws IOException, InterruptedException
     {
-        return executeStreaming("/api/chat", buildChatPayload(messages, settings));
+        return showModel(host, modelName);
     }
 
-    private String executeStreaming(String path, String payload) throws IOException, InterruptedException
+    public OllamaModelDetails showModel(String baseHost, String modelName) throws IOException, InterruptedException
     {
-        lastPromptEvalCount = -1;
-        HttpRequest request = HttpRequest.newBuilder().uri(URI.create(host + path)).timeout(Duration.ofMinutes(2))
+        String requestedModel = requireModel(modelName);
+        String endpoint = OllamaEndpoint.resolve(baseHost, "/api/show").toString();
+        JSONObject body = new JSONObject().put("model", requestedModel);
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(java.net.URI.create(endpoint))
+                .timeout(METADATA_TIMEOUT)
                 .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8)).build();
+                .POST(HttpRequest.BodyPublishers.ofString(body.toString(), StandardCharsets.UTF_8))
+                .build();
+        HttpResponse<String> response = sendString(request);
+        requireSuccess("/api/show", endpoint, response.statusCode(), response.body());
+        return parseModelDetails(requestedModel, response.body());
+    }
+
+    public OllamaChatResult chat(List<ChatMessage> messages, GenerationSettings settings)
+            throws IOException, InterruptedException
+    {
+        if (settings == null)
+        {
+            throw new IllegalArgumentException("Generation settings are required.");
+        }
+        String requestedModel = requireModel(settings.modelName());
+        return executeStreaming(settings.ollamaHost(), "/api/chat", requestedModel,
+                buildChatPayload(messages, settings));
+    }
+
+    private OllamaChatResult executeStreaming(String baseHost, String path, String requestedModel, String payload)
+            throws IOException, InterruptedException
+    {
+        String endpoint = OllamaEndpoint.resolve(baseHost, path).toString();
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(java.net.URI.create(endpoint))
+                .timeout(CHAT_RESPONSE_TIMEOUT)
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8))
+                .build();
 
         HttpResponse<InputStream> response = sendStream(request);
         if (response.statusCode() < 200 || response.statusCode() >= 300)
         {
             try (InputStream body = response.body())
             {
-                throw httpError(path, response.statusCode(), readErrorBody(body));
+                throw httpError(path, endpoint, response.statusCode(), readErrorBody(body));
             }
         }
         if (response.body() == null)
         {
-            throw new IOException("Ollama returned an empty response body for " + path);
+            throw new OllamaException("Ollama returned an empty response body for " + path, endpoint, -1, "");
         }
 
-        StringBuilder sb = new StringBuilder();
+        StringBuilder content = new StringBuilder();
         JSONObject terminalEvent = null;
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(response.body(), StandardCharsets.UTF_8)))
+        InputStream responseBody = response.body();
+        try (responseBody;
+             BufferedReader reader = new BufferedReader(
+                     new InputStreamReader(responseBody, StandardCharsets.UTF_8)))
         {
-            String line;
             int lineNumber = 0;
-            while ((line = reader.readLine()) != null)
+            while (true)
             {
+                String line = readLineWithTimeout(reader, responseBody, endpoint);
+                if (line == null)
+                {
+                    break;
+                }
                 lineNumber++;
                 if (line.isBlank())
                 {
                     continue;
                 }
 
-                ChatStreamEvent event = parseChatStreamEvent(line, lineNumber);
-                sb.append(event.content());
+                ChatStreamEvent event = parseChatStreamEvent(line, lineNumber, endpoint);
+                content.append(event.content());
                 if (event.done())
                 {
                     terminalEvent = event.json();
@@ -131,23 +190,26 @@ public class OllamaClient
 
         if (terminalEvent == null)
         {
-            throw new IOException("Ollama stream for " + path + " ended before a terminal done response");
+            throw new OllamaException("Ollama stream for " + path + " ended before a terminal done response",
+                    endpoint, -1, "");
         }
 
-        Object promptEvalCount = terminalEvent.opt("prompt_eval_count");
-        if (promptEvalCount instanceof Number number && number.intValue() > 0)
-        {
-            lastPromptEvalCount = number.intValue();
-        }
-        System.out.println("Ollama final response:");
-        System.out.println(terminalEvent);
-        return sb.toString();
+        return new OllamaChatResult(
+                terminalEvent.optString("model", requestedModel),
+                content.toString(),
+                intMetadata(terminalEvent, "prompt_eval_count"),
+                intMetadata(terminalEvent, "eval_count"),
+                terminalEvent.optString("done_reason", ""),
+                longMetadata(terminalEvent, "total_duration"),
+                longMetadata(terminalEvent, "load_duration"),
+                longMetadata(terminalEvent, "prompt_eval_duration"),
+                longMetadata(terminalEvent, "eval_duration"));
     }
 
     String buildChatPayload(List<ChatMessage> messages, GenerationSettings settings)
     {
         JSONObject payload = new JSONObject();
-        payload.put("model", model == null ? "" : model);
+        payload.put("model", requireModel(settings.modelName()));
 
         JSONArray messageArray = new JSONArray();
         for (ChatMessage message : normalizeChatMessages(messages))
@@ -158,6 +220,11 @@ public class OllamaClient
             messageArray.put(serialized);
         }
         payload.put("messages", messageArray);
+
+        // Thinking is deliberately disabled for narrative generation. It consumes
+        // num_predict, disrupts partial-sentence continuation, and can replace prose
+        // with incomplete reasoning. GPT-OSS models that require thinking remain an
+        // acknowledged compatibility edge case to revisit later.
         payload.put("think", false);
         payload.put("stream", true);
         payload.put("options", buildOptions(settings));
@@ -189,7 +256,7 @@ public class OllamaClient
         return normalized;
     }
 
-    private JSONObject buildOptions(GenerationSettings settings)
+    private static JSONObject buildOptions(GenerationSettings settings)
     {
         JSONObject options = new JSONObject();
         options.put("num_ctx", settings.contextLimit());
@@ -244,7 +311,8 @@ public class OllamaClient
         JSONArray models = root.optJSONArray("models");
         if (models == null)
         {
-            throw new IOException("Invalid Ollama /api/tags response: missing models array");
+            throw new OllamaException("Invalid Ollama /api/tags response: missing models array",
+                    "/api/tags", -1, "");
         }
 
         List<String> names = new ArrayList<>(models.length());
@@ -253,31 +321,103 @@ public class OllamaClient
             JSONObject entry = models.optJSONObject(i);
             if (entry == null)
             {
-                throw new IOException("Invalid Ollama /api/tags response: models[" + i + "] is not an object");
+                throw new OllamaException("Invalid Ollama /api/tags response: models[" + i + "] is not an object",
+                        "/api/tags", -1, "");
             }
             Object nameValue = entry.opt("name");
             if (!(nameValue instanceof String name) || name.isBlank())
             {
-                throw new IOException("Invalid Ollama /api/tags response: models[" + i + "] has no name");
+                throw new OllamaException("Invalid Ollama /api/tags response: models[" + i + "] has no name",
+                        "/api/tags", -1, "");
             }
-            names.add(name);
+            names.add(name.trim());
         }
         return List.copyOf(names);
     }
 
-    private static ChatStreamEvent parseChatStreamEvent(String line, int lineNumber) throws IOException
+    private static OllamaModelDetails parseModelDetails(String requestedModel, String body) throws IOException
+    {
+        JSONObject root = parseObject(body, "Ollama /api/show response");
+        JSONObject modelInfo = root.optJSONObject("model_info");
+        int contextLength = findContextLength(modelInfo);
+
+        List<String> capabilities = new ArrayList<>();
+        JSONArray capabilityValues = root.optJSONArray("capabilities");
+        if (capabilityValues != null)
+        {
+            for (int i = 0; i < capabilityValues.length(); i++)
+            {
+                Object value = capabilityValues.opt(i);
+                if (value instanceof String text && !text.isBlank())
+                {
+                    capabilities.add(text);
+                }
+            }
+        }
+
+        JSONObject details = root.optJSONObject("details");
+        return new OllamaModelDetails(
+                requestedModel,
+                contextLength,
+                capabilities,
+                details == null ? "" : details.optString("family", ""),
+                details == null ? "" : details.optString("parameter_size", ""),
+                details == null ? "" : details.optString("quantization_level", ""));
+    }
+
+    private static int findContextLength(JSONObject modelInfo)
+    {
+        if (modelInfo == null)
+        {
+            return -1;
+        }
+
+        String architecture = modelInfo.optString("general.architecture", "").trim();
+        if (!architecture.isBlank())
+        {
+            int exact = positiveInt(modelInfo.opt(architecture + ".context_length"));
+            if (exact > 0)
+            {
+                return exact;
+            }
+        }
+
+        int fallback = -1;
+        for (String key : modelInfo.keySet())
+        {
+            if (!key.endsWith(".context_length"))
+            {
+                continue;
+            }
+            int candidate = positiveInt(modelInfo.opt(key));
+            if (candidate <= 0)
+            {
+                continue;
+            }
+            if (!key.contains(".vision.") && !key.startsWith("clip."))
+            {
+                return candidate;
+            }
+            fallback = Math.max(fallback, candidate);
+        }
+        return fallback;
+    }
+
+    private static ChatStreamEvent parseChatStreamEvent(String line, int lineNumber, String endpoint)
+            throws IOException
     {
         JSONObject event = parseObject(line, "Ollama stream line " + lineNumber);
         String error = extractErrorMessage(event);
         if (!error.isBlank())
         {
-            throw new IOException("Ollama stream error on line " + lineNumber + ": " + error);
+            throw new OllamaException("Ollama stream error on line " + lineNumber + ": " + error,
+                    endpoint, -1, truncate(error, MAX_ERROR_MESSAGE_CHARS));
         }
 
         Object doneValue = event.opt("done");
         if (!(doneValue instanceof Boolean done))
         {
-            throw new IOException("Invalid Ollama stream line " + lineNumber + ": missing boolean done field");
+            throw invalidStream(lineNumber, "missing boolean done field", endpoint);
         }
 
         String content = "";
@@ -286,7 +426,7 @@ public class OllamaClient
         {
             if (!done)
             {
-                throw new IOException("Invalid Ollama stream line " + lineNumber + ": missing message object");
+                throw invalidStream(lineNumber, "missing message object", endpoint);
             }
         }
         else
@@ -296,7 +436,7 @@ public class OllamaClient
             {
                 if (!done)
                 {
-                    throw new IOException("Invalid Ollama stream line " + lineNumber + ": missing message content");
+                    throw invalidStream(lineNumber, "missing message content", endpoint);
                 }
             }
             else if (contentValue instanceof String text)
@@ -305,10 +445,56 @@ public class OllamaClient
             }
             else
             {
-                throw new IOException("Invalid Ollama stream line " + lineNumber + ": message content is not text");
+                throw invalidStream(lineNumber, "message content is not text", endpoint);
             }
         }
         return new ChatStreamEvent(content, done, event);
+    }
+
+    private static String readLineWithTimeout(BufferedReader reader, InputStream responseBody, String path)
+            throws IOException, InterruptedException
+    {
+        FutureTask<String> read = new FutureTask<>(reader::readLine);
+        Thread thread = Thread.ofVirtual().name("llamaquill-ollama-stream-read").start(read);
+        try
+        {
+            return read.get(STREAM_IDLE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        }
+        catch (TimeoutException e)
+        {
+            closeQuietly(responseBody);
+            read.cancel(true);
+            throw new OllamaException("Ollama stopped sending data for "
+                    + STREAM_IDLE_TIMEOUT.toMinutes() + " minutes", path, e);
+        }
+        catch (ExecutionException e)
+        {
+            Throwable cause = e.getCause();
+            if (cause instanceof IOException io)
+            {
+                throw io;
+            }
+            throw new OllamaException("Failed while reading the Ollama response stream", path, cause);
+        }
+        catch (InterruptedException e)
+        {
+            closeQuietly(responseBody);
+            read.cancel(true);
+            thread.interrupt();
+            throw e;
+        }
+    }
+
+    private static void closeQuietly(InputStream stream)
+    {
+        try
+        {
+            stream.close();
+        }
+        catch (IOException ignored)
+        {
+            // Preserve the timeout or interruption that caused cleanup.
+        }
     }
 
     private static JSONObject parseObject(String body, String context) throws IOException
@@ -319,15 +505,31 @@ public class OllamaClient
         }
         catch (JSONException e)
         {
-            throw new IOException("Invalid " + context + " JSON: " + e.getMessage(), e);
+            throw new OllamaException("Invalid " + context + " JSON: " + e.getMessage(), context, e);
         }
     }
 
-    private static IOException httpError(String path, int statusCode, String body)
+    private static void requireSuccess(String path, String endpoint, int statusCode, String body) throws IOException
+    {
+        if (statusCode < 200 || statusCode >= 300)
+        {
+            throw httpError(path, endpoint, statusCode, body);
+        }
+    }
+
+    private static OllamaException httpError(String path, String endpoint, int statusCode, String body)
     {
         String detail = extractErrorMessage(body);
-        String suffix = detail.isBlank() ? "" : ": " + truncate(detail, MAX_ERROR_MESSAGE_CHARS);
-        return new IOException("Ollama returned status " + statusCode + " for " + path + suffix);
+        String safeDetail = truncate(detail, MAX_ERROR_MESSAGE_CHARS);
+        String suffix = safeDetail.isBlank() ? "" : ": " + safeDetail;
+        return new OllamaException("Ollama returned status " + statusCode + " for " + path + suffix,
+                endpoint, statusCode, safeDetail);
+    }
+
+    private static OllamaException invalidStream(int lineNumber, String detail, String endpoint)
+    {
+        return new OllamaException("Invalid Ollama stream line " + lineNumber + ": " + detail,
+                endpoint, -1, detail);
     }
 
     private static String extractErrorMessage(String body)
@@ -373,6 +575,38 @@ public class OllamaClient
         int length = truncated ? MAX_ERROR_BODY_BYTES : bytes.length;
         String text = new String(bytes, 0, length, StandardCharsets.UTF_8);
         return truncated ? text + "..." : text;
+    }
+
+    private static int intMetadata(JSONObject source, String key)
+    {
+        Object value = source.opt(key);
+        return value instanceof Number number ? Math.max(-1, number.intValue()) : -1;
+    }
+
+    private static long longMetadata(JSONObject source, String key)
+    {
+        Object value = source.opt(key);
+        return value instanceof Number number ? Math.max(-1L, number.longValue()) : -1L;
+    }
+
+    private static int positiveInt(Object value)
+    {
+        if (value instanceof Number number)
+        {
+            long candidate = number.longValue();
+            return candidate > 0 && candidate <= Integer.MAX_VALUE ? (int) candidate : -1;
+        }
+        return -1;
+    }
+
+    private static String requireModel(String modelName)
+    {
+        String candidate = modelName == null ? "" : modelName.trim();
+        if (candidate.isBlank())
+        {
+            throw new IllegalArgumentException("Ollama model name is required.");
+        }
+        return candidate;
     }
 
     private static String truncate(String value, int maxChars)

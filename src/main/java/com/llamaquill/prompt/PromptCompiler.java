@@ -26,20 +26,22 @@ public class PromptCompiler
     private static final boolean PREFIX_USER_LINES = true;
     private static final int BOUNDARY_SEARCH_LIMIT = 256;
 
-    private ToIntFunction<String> tokenEstimator = PromptCompiler::estimateTokensHeuristic;
+    private double operationTokenScale = 1.0;
+    private ToIntFunction<String> tokenEstimatorOverride;
 
     public void setTokenEstimator(ToIntFunction<String> tokenEstimator)
     {
-        this.tokenEstimator = tokenEstimator == null ? PromptCompiler::estimateTokensHeuristic : tokenEstimator;
+        tokenEstimatorOverride = tokenEstimator;
     }
 
-    public PromptCompilation compile(Story story, List<Block> blocks, List<StoryCard> storyCards,
+    public synchronized PromptCompilation compile(Story story, List<Block> blocks, List<StoryCard> storyCards,
             GenerationSettings settings)
     {
         Objects.requireNonNull(story, "story");
         Objects.requireNonNull(blocks, "blocks");
         Objects.requireNonNull(storyCards, "storyCards");
         Objects.requireNonNull(settings, "settings");
+        operationTokenScale = settings.promptTokenScale();
 
         PromptBudget budget = PromptBudget.from(settings);
         List<Block> originalWindow = List.copyOf(filterPromptBlocks(blocks));
@@ -783,20 +785,23 @@ public class PromptCompiler
         {
             return 0;
         }
-        int estimated = -1;
-        try
+        int baseEstimate = estimateTokensHeuristic(text);
+        if (tokenEstimatorOverride != null)
         {
-            estimated = tokenEstimator.applyAsInt(text);
+            try
+            {
+                int overridden = tokenEstimatorOverride.applyAsInt(text);
+                if (overridden > 0)
+                {
+                    baseEstimate = overridden;
+                }
+            }
+            catch (RuntimeException ignored)
+            {
+                // Keep the stable heuristic when a custom estimator fails.
+            }
         }
-        catch (Exception ignored)
-        {
-            // Fall back to the stable heuristic below.
-        }
-        if (estimated > 0)
-        {
-            return estimated;
-        }
-        return estimateTokensHeuristic(text);
+        return Math.max(1, (int) Math.ceil(baseEstimate * operationTokenScale));
     }
 
     private int estimateTokens(List<ChatMessage> messages)

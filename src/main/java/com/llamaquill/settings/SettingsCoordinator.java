@@ -14,44 +14,56 @@ public final class SettingsCoordinator
 
     public static AppSettings withSelectedModel(AppSettings current, String modelName)
     {
-        return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), modelName, current.contextLimit(),
-                current.responseLengthEnabled(), current.responseLength(), current.minStoryWindow(), current.storyCardLookback(),
+        return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), modelName,
+                current.responseLengthEnabled(), current.responseLength(), current.minStoryPercent(), current.storyCardLookback(),
                 current.anPlacement(), current.comfyWorkflow(), current.comfyWidth(), current.comfyHeight(),
                 current.comfyBatchSize());
     }
 
     public static AppSettings withOllamaUrl(AppSettings current, String url)
     {
-        return new AppSettings(url.trim(), current.comfyUiUrl(), current.selectedModel(), current.contextLimit(),
-                current.responseLengthEnabled(), current.responseLength(), current.minStoryWindow(), current.storyCardLookback(),
+        return new AppSettings(url, current.comfyUiUrl(), current.selectedModel(),
+                current.responseLengthEnabled(), current.responseLength(), current.minStoryPercent(), current.storyCardLookback(),
                 current.anPlacement(), current.comfyWorkflow(), current.comfyWidth(), current.comfyHeight(),
                 current.comfyBatchSize());
     }
 
     public static AppSettings withComfyUiUrl(AppSettings current, String url)
     {
-        return new AppSettings(current.ollamaUrl(), url.trim(), current.selectedModel(), current.contextLimit(),
-                current.responseLengthEnabled(), current.responseLength(), current.minStoryWindow(),
+        return new AppSettings(current.ollamaUrl(), url, current.selectedModel(),
+                current.responseLengthEnabled(), current.responseLength(), current.minStoryPercent(),
                 current.storyCardLookback(), current.anPlacement(),
                 current.comfyWorkflow(), current.comfyWidth(), current.comfyHeight(), current.comfyBatchSize());
     }
 
-    public static AppSettings withContextLimit(AppSettings current, int value, int minStoryPercent)
+    public static ModelSettings withContextLimit(ModelSettings current, int value)
     {
-        int capped = Math.max(1024, Math.min(32768, value));
-        int percent = Math.max(10, Math.min(100, minStoryPercent));
-        int minWindow = (int) Math.round(capped * (percent / 100.0));
-        return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(), capped,
-                current.responseLengthEnabled(), current.responseLength(), minWindow,
-                current.storyCardLookback(), current.anPlacement(),
-                current.comfyWorkflow(), current.comfyWidth(), current.comfyHeight(), current.comfyBatchSize());
+        return new ModelSettings(current.modelName(), current.active(), value, current.promptTokenScale(),
+                current.temperatureEnabled(), current.temperature(),
+                current.topKEnabled(), current.topK(),
+                current.topPEnabled(), current.topP(),
+                current.minPEnabled(), current.minP(),
+                current.presencePenaltyEnabled(), current.presencePenalty(),
+                current.frequencyPenaltyEnabled(), current.frequencyPenalty(),
+                current.repetitionPenaltyEnabled(), current.repetitionPenalty());
+    }
+
+    public static ModelSettings withPromptTokenScale(ModelSettings current, double value)
+    {
+        return new ModelSettings(current.modelName(), current.active(), current.contextLimit(), value,
+                current.temperatureEnabled(), current.temperature(),
+                current.topKEnabled(), current.topK(),
+                current.topPEnabled(), current.topP(),
+                current.minPEnabled(), current.minP(),
+                current.presencePenaltyEnabled(), current.presencePenalty(),
+                current.frequencyPenaltyEnabled(), current.frequencyPenalty(),
+                current.repetitionPenaltyEnabled(), current.repetitionPenalty());
     }
 
     public static AppSettings withResponseLength(AppSettings current, int value)
     {
-        int capped = Math.max(1, Math.min(250, value));
         return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(),
-                current.contextLimit(), current.responseLengthEnabled(), capped, current.minStoryWindow(),
+                current.responseLengthEnabled(), value, current.minStoryPercent(),
                 current.storyCardLookback(), current.anPlacement(),
                 current.comfyWorkflow(), current.comfyWidth(), current.comfyHeight(), current.comfyBatchSize());
     }
@@ -59,33 +71,31 @@ public final class SettingsCoordinator
     public static AppSettings withResponseLengthEnabled(AppSettings current, boolean enabled)
     {
         return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(),
-                current.contextLimit(), enabled, current.responseLength(), current.minStoryWindow(),
+                enabled, current.responseLength(), current.minStoryPercent(),
                 current.storyCardLookback(), current.anPlacement(), current.comfyWorkflow(),
                 current.comfyWidth(), current.comfyHeight(), current.comfyBatchSize());
     }
 
     public static AppSettings withMinStoryPercent(AppSettings current, int percent)
     {
-        int capped = Math.max(10, Math.min(100, percent));
-        int minWindow = (int) Math.round(current.contextLimit() * (capped / 100.0));
-        return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(), current.contextLimit(),
-                current.responseLengthEnabled(), current.responseLength(), minWindow,
+        return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(),
+                current.responseLengthEnabled(), current.responseLength(), percent,
                 current.storyCardLookback(), current.anPlacement(),
                 current.comfyWorkflow(), current.comfyWidth(), current.comfyHeight(), current.comfyBatchSize());
     }
 
     public static AppSettings withStoryCardLookback(AppSettings current, int value)
     {
-        return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(), current.contextLimit(),
-                current.responseLengthEnabled(), current.responseLength(), current.minStoryWindow(),
+        return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(),
+                current.responseLengthEnabled(), current.responseLength(), current.minStoryPercent(),
                 value, current.anPlacement(),
                 current.comfyWorkflow(), current.comfyWidth(), current.comfyHeight(), current.comfyBatchSize());
     }
 
     public static AppSettings withAnPlacement(AppSettings current, int value)
     {
-        return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(), current.contextLimit(),
-                current.responseLengthEnabled(), current.responseLength(), current.minStoryWindow(),
+        return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(),
+                current.responseLengthEnabled(), current.responseLength(), current.minStoryPercent(),
                 current.storyCardLookback(), value,
                 current.comfyWorkflow(), current.comfyWidth(), current.comfyHeight(), current.comfyBatchSize());
     }
@@ -97,8 +107,8 @@ public final class SettingsCoordinator
         {
             trimmed = current.comfyWorkflow();
         }
-        return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(), current.contextLimit(),
-                current.responseLengthEnabled(), current.responseLength(), current.minStoryWindow(),
+        return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(),
+                current.responseLengthEnabled(), current.responseLength(), current.minStoryPercent(),
                 current.storyCardLookback(), current.anPlacement(),
                 trimmed, current.comfyWidth(), current.comfyHeight(), current.comfyBatchSize());
     }
@@ -106,8 +116,8 @@ public final class SettingsCoordinator
     public static AppSettings withComfyWidth(AppSettings current, int width)
     {
         int capped = Math.max(64, Math.min(4096, width));
-        return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(), current.contextLimit(),
-                current.responseLengthEnabled(), current.responseLength(), current.minStoryWindow(),
+        return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(),
+                current.responseLengthEnabled(), current.responseLength(), current.minStoryPercent(),
                 current.storyCardLookback(), current.anPlacement(),
                 current.comfyWorkflow(), capped, current.comfyHeight(), current.comfyBatchSize());
     }
@@ -115,8 +125,8 @@ public final class SettingsCoordinator
     public static AppSettings withComfyHeight(AppSettings current, int height)
     {
         int capped = Math.max(64, Math.min(4096, height));
-        return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(), current.contextLimit(),
-                current.responseLengthEnabled(), current.responseLength(), current.minStoryWindow(),
+        return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(),
+                current.responseLengthEnabled(), current.responseLength(), current.minStoryPercent(),
                 current.storyCardLookback(), current.anPlacement(),
                 current.comfyWorkflow(), current.comfyWidth(), capped, current.comfyBatchSize());
     }
@@ -124,15 +134,15 @@ public final class SettingsCoordinator
     public static AppSettings withComfyBatchSize(AppSettings current, int batchSize)
     {
         int capped = Math.max(1, Math.min(32, batchSize));
-        return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(), current.contextLimit(),
-                current.responseLengthEnabled(), current.responseLength(), current.minStoryWindow(),
+        return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(),
+                current.responseLengthEnabled(), current.responseLength(), current.minStoryPercent(),
                 current.storyCardLookback(), current.anPlacement(),
                 current.comfyWorkflow(), current.comfyWidth(), current.comfyHeight(), capped);
     }
 
     public static ModelSettings withTemperature(ModelSettings current, double value)
     {
-        return new ModelSettings(current.modelName(), current.active(),
+        return new ModelSettings(current.modelName(), current.active(), current.contextLimit(), current.promptTokenScale(),
                 current.temperatureEnabled(), value,
                 current.topKEnabled(), current.topK(),
                 current.topPEnabled(), current.topP(),
@@ -144,7 +154,7 @@ public final class SettingsCoordinator
 
     public static ModelSettings withTemperatureEnabled(ModelSettings current, boolean enabled)
     {
-        return new ModelSettings(current.modelName(), current.active(),
+        return new ModelSettings(current.modelName(), current.active(), current.contextLimit(), current.promptTokenScale(),
                 enabled, current.temperature(),
                 current.topKEnabled(), current.topK(),
                 current.topPEnabled(), current.topP(),
@@ -156,7 +166,7 @@ public final class SettingsCoordinator
 
     public static ModelSettings withTopK(ModelSettings current, int value)
     {
-        return new ModelSettings(current.modelName(), current.active(),
+        return new ModelSettings(current.modelName(), current.active(), current.contextLimit(), current.promptTokenScale(),
                 current.temperatureEnabled(), current.temperature(),
                 current.topKEnabled(), value,
                 current.topPEnabled(), current.topP(),
@@ -168,7 +178,7 @@ public final class SettingsCoordinator
 
     public static ModelSettings withTopKEnabled(ModelSettings current, boolean enabled)
     {
-        return new ModelSettings(current.modelName(), current.active(),
+        return new ModelSettings(current.modelName(), current.active(), current.contextLimit(), current.promptTokenScale(),
                 current.temperatureEnabled(), current.temperature(),
                 enabled, current.topK(),
                 current.topPEnabled(), current.topP(),
@@ -180,7 +190,7 @@ public final class SettingsCoordinator
 
     public static ModelSettings withTopP(ModelSettings current, double value)
     {
-        return new ModelSettings(current.modelName(), current.active(),
+        return new ModelSettings(current.modelName(), current.active(), current.contextLimit(), current.promptTokenScale(),
                 current.temperatureEnabled(), current.temperature(),
                 current.topKEnabled(), current.topK(),
                 current.topPEnabled(), value,
@@ -192,7 +202,7 @@ public final class SettingsCoordinator
 
     public static ModelSettings withTopPEnabled(ModelSettings current, boolean enabled)
     {
-        return new ModelSettings(current.modelName(), current.active(),
+        return new ModelSettings(current.modelName(), current.active(), current.contextLimit(), current.promptTokenScale(),
                 current.temperatureEnabled(), current.temperature(),
                 current.topKEnabled(), current.topK(),
                 enabled, current.topP(),
@@ -204,7 +214,7 @@ public final class SettingsCoordinator
 
     public static ModelSettings withMinP(ModelSettings current, double value)
     {
-        return new ModelSettings(current.modelName(), current.active(),
+        return new ModelSettings(current.modelName(), current.active(), current.contextLimit(), current.promptTokenScale(),
                 current.temperatureEnabled(), current.temperature(),
                 current.topKEnabled(), current.topK(),
                 current.topPEnabled(), current.topP(),
@@ -216,7 +226,7 @@ public final class SettingsCoordinator
 
     public static ModelSettings withMinPEnabled(ModelSettings current, boolean enabled)
     {
-        return new ModelSettings(current.modelName(), current.active(),
+        return new ModelSettings(current.modelName(), current.active(), current.contextLimit(), current.promptTokenScale(),
                 current.temperatureEnabled(), current.temperature(),
                 current.topKEnabled(), current.topK(),
                 current.topPEnabled(), current.topP(),
@@ -228,7 +238,7 @@ public final class SettingsCoordinator
 
     public static ModelSettings withPresencePenalty(ModelSettings current, double value)
     {
-        return new ModelSettings(current.modelName(), current.active(),
+        return new ModelSettings(current.modelName(), current.active(), current.contextLimit(), current.promptTokenScale(),
                 current.temperatureEnabled(), current.temperature(),
                 current.topKEnabled(), current.topK(),
                 current.topPEnabled(), current.topP(),
@@ -240,7 +250,7 @@ public final class SettingsCoordinator
 
     public static ModelSettings withPresencePenaltyEnabled(ModelSettings current, boolean enabled)
     {
-        return new ModelSettings(current.modelName(), current.active(),
+        return new ModelSettings(current.modelName(), current.active(), current.contextLimit(), current.promptTokenScale(),
                 current.temperatureEnabled(), current.temperature(),
                 current.topKEnabled(), current.topK(),
                 current.topPEnabled(), current.topP(),
@@ -252,7 +262,7 @@ public final class SettingsCoordinator
 
     public static ModelSettings withFrequencyPenalty(ModelSettings current, double value)
     {
-        return new ModelSettings(current.modelName(), current.active(),
+        return new ModelSettings(current.modelName(), current.active(), current.contextLimit(), current.promptTokenScale(),
                 current.temperatureEnabled(), current.temperature(),
                 current.topKEnabled(), current.topK(),
                 current.topPEnabled(), current.topP(),
@@ -264,7 +274,7 @@ public final class SettingsCoordinator
 
     public static ModelSettings withFrequencyPenaltyEnabled(ModelSettings current, boolean enabled)
     {
-        return new ModelSettings(current.modelName(), current.active(),
+        return new ModelSettings(current.modelName(), current.active(), current.contextLimit(), current.promptTokenScale(),
                 current.temperatureEnabled(), current.temperature(),
                 current.topKEnabled(), current.topK(),
                 current.topPEnabled(), current.topP(),
@@ -276,7 +286,7 @@ public final class SettingsCoordinator
 
     public static ModelSettings withRepetitionPenalty(ModelSettings current, double value)
     {
-        return new ModelSettings(current.modelName(), current.active(),
+        return new ModelSettings(current.modelName(), current.active(), current.contextLimit(), current.promptTokenScale(),
                 current.temperatureEnabled(), current.temperature(),
                 current.topKEnabled(), current.topK(),
                 current.topPEnabled(), current.topP(),
@@ -288,7 +298,7 @@ public final class SettingsCoordinator
 
     public static ModelSettings withRepetitionPenaltyEnabled(ModelSettings current, boolean enabled)
     {
-        return new ModelSettings(current.modelName(), current.active(),
+        return new ModelSettings(current.modelName(), current.active(), current.contextLimit(), current.promptTokenScale(),
                 current.temperatureEnabled(), current.temperature(),
                 current.topKEnabled(), current.topK(),
                 current.topPEnabled(), current.topP(),

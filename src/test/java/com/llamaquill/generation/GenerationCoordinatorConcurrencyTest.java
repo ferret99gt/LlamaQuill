@@ -16,6 +16,7 @@ import com.llamaquill.model.Role;
 import com.llamaquill.model.Story;
 import com.llamaquill.prompt.PromptCompiler;
 import com.llamaquill.serviceClients.OllamaClient;
+import com.llamaquill.serviceClients.OllamaChatResult;
 import com.llamaquill.util.Timestamps;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -191,9 +192,10 @@ class GenerationCoordinatorConcurrencyTest
         private volatile String response;
 
         @Override
-        public String chat(List<ChatMessage> messages, GenerationSettings settings) throws IOException, InterruptedException
+        public OllamaChatResult chat(List<ChatMessage> messages, GenerationSettings settings)
+                throws IOException, InterruptedException
         {
-            return respond();
+            return new OllamaChatResult(settings.modelName(), respond(), 10, 5, "stop", 1, 0, 1, 1);
         }
 
         private String respond() throws InterruptedException

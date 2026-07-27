@@ -23,8 +23,8 @@ public class AppSettingsRepository
         return database.withConnection(connection ->
         {
             try (PreparedStatement stmt = connection.prepareStatement("""
-                    SELECT ollama_url, selected_model, context_limit, response_length_enabled, response_length,
-                           min_story_window, story_card_lookback, an_placement, comfyui_url,
+                    SELECT ollama_url, selected_model, response_length_enabled, response_length,
+                           min_story_percent, story_card_lookback, an_placement, comfyui_url,
                            comfy_workflow, comfy_width, comfy_height, comfy_batch_size
                     FROM app_settings
                     WHERE id = ?
@@ -41,10 +41,9 @@ public class AppSettingsRepository
                             rs.getString("ollama_url"),
                             rs.getString("comfyui_url"),
                             rs.getString("selected_model"),
-                            rs.getInt("context_limit"),
                             rs.getInt("response_length_enabled") != 0,
                             rs.getInt("response_length"),
-                            rs.getInt("min_story_window"),
+                            rs.getInt("min_story_percent"),
                             rs.getInt("story_card_lookback"),
                             rs.getInt("an_placement"),
                             rs.getString("comfy_workflow"),
@@ -62,18 +61,17 @@ public class AppSettingsRepository
         {
             try (PreparedStatement stmt = connection.prepareStatement("""
                     INSERT INTO app_settings (
-                        id, ollama_url, selected_model, context_limit, response_length_enabled, response_length,
-                        min_story_window, story_card_lookback, an_placement, comfyui_url,
+                        id, ollama_url, selected_model, response_length_enabled, response_length,
+                        min_story_percent, story_card_lookback, an_placement, comfyui_url,
                         comfy_workflow, comfy_width, comfy_height, comfy_batch_size
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         ollama_url = excluded.ollama_url,
                         comfyui_url = excluded.comfyui_url,
                         selected_model = excluded.selected_model,
-                        context_limit = excluded.context_limit,
                         response_length_enabled = excluded.response_length_enabled,
                         response_length = excluded.response_length,
-                        min_story_window = excluded.min_story_window,
+                        min_story_percent = excluded.min_story_percent,
                         story_card_lookback = excluded.story_card_lookback,
                         an_placement = excluded.an_placement,
                         comfy_workflow = excluded.comfy_workflow,
@@ -85,17 +83,16 @@ public class AppSettingsRepository
                 stmt.setInt(1, SETTINGS_ID);
                 stmt.setString(2, settings.ollamaUrl());
                 stmt.setString(3, settings.selectedModel());
-                stmt.setInt(4, settings.contextLimit());
-                stmt.setInt(5, settings.responseLengthEnabled() ? 1 : 0);
-                stmt.setInt(6, settings.responseLength());
-                stmt.setInt(7, settings.minStoryWindow());
-                stmt.setInt(8, settings.storyCardLookback());
-                stmt.setInt(9, settings.anPlacement());
-                stmt.setString(10, settings.comfyUiUrl());
-                stmt.setString(11, settings.comfyWorkflow());
-                stmt.setInt(12, settings.comfyWidth());
-                stmt.setInt(13, settings.comfyHeight());
-                stmt.setInt(14, settings.comfyBatchSize());
+                stmt.setInt(4, settings.responseLengthEnabled() ? 1 : 0);
+                stmt.setInt(5, settings.responseLength());
+                stmt.setInt(6, settings.minStoryPercent());
+                stmt.setInt(7, settings.storyCardLookback());
+                stmt.setInt(8, settings.anPlacement());
+                stmt.setString(9, settings.comfyUiUrl());
+                stmt.setString(10, settings.comfyWorkflow());
+                stmt.setInt(11, settings.comfyWidth());
+                stmt.setInt(12, settings.comfyHeight());
+                stmt.setInt(13, settings.comfyBatchSize());
                 stmt.executeUpdate();
             }
         });

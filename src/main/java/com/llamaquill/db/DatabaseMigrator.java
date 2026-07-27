@@ -57,6 +57,20 @@ public final class DatabaseMigrator
         int sourceVersion = declaredVersion == UNVERSIONED ? VERSION_0_1_0 : declaredVersion;
         if (sourceVersion == CURRENT_SCHEMA)
         {
+            if (needsCurrentSchemaNormalization(connection))
+            {
+                checkpoint(connection);
+                Path backup = createBackup(paths);
+                runMigrationTransaction(connection, () ->
+                {
+                    migrateFromInitialVersionTwo(connection);
+                    recordMigration(connection, CURRENT_SCHEMA,
+                            AppVersion.CURRENT + "-schema-" + CURRENT_SCHEMA + "-provisional");
+                    validateDatabase(connection);
+                });
+                enableWal(connection);
+                return new MigrationReport(sourceVersion, CURRENT_SCHEMA, Optional.of(backup), false);
+            }
             validateDatabase(connection);
             enableWal(connection);
             return new MigrationReport(sourceVersion, CURRENT_SCHEMA, Optional.empty(), false);
@@ -102,8 +116,24 @@ public final class DatabaseMigrator
 
     private static void migrateFromInitialVersionTwo(Connection connection) throws SQLException
     {
+        int legacyContextLimit = readLegacyContextLimit(connection);
         rebuildAppSettings(connection);
-        addModelSettingEnabledColumns(connection);
+        addModelSettingColumns(connection, legacyContextLimit);
+    }
+
+    private static boolean needsCurrentSchemaNormalization(Connection connection) throws SQLException
+    {
+        if (!tableExists(connection, "app_settings") || !tableExists(connection, "model_settings"))
+        {
+            return true;
+        }
+        Set<String> appColumns = columns(connection, "app_settings");
+        Set<String> modelColumns = columns(connection, "model_settings");
+        return !appColumns.contains("min_story_percent")
+                || appColumns.contains("context_limit")
+                || appColumns.contains("min_story_window")
+                || !modelColumns.contains("context_limit")
+                || !modelColumns.contains("prompt_token_scale");
     }
 
     private static void createCurrentSchema(Connection connection) throws SQLException
@@ -172,6 +202,8 @@ public final class DatabaseMigrator
                 CREATE TABLE IF NOT EXISTS model_settings (
                     model_name TEXT PRIMARY KEY,
                     active INTEGER NOT NULL CHECK (active IN (0,1)),
+                    context_limit INTEGER NOT NULL DEFAULT 8192,
+                    prompt_token_scale REAL NOT NULL DEFAULT 1.0,
                     temperature_enabled INTEGER NOT NULL DEFAULT 0 CHECK (temperature_enabled IN (0,1)),
                     temperature REAL NOT NULL,
                     top_k_enabled INTEGER NOT NULL DEFAULT 0 CHECK (top_k_enabled IN (0,1)),
@@ -225,6 +257,7 @@ public final class DatabaseMigrator
     {
         boolean hadAppSettings = tableExists(connection, "app_settings");
         boolean hadGenerationSettings = tableExists(connection, "generation_settings");
+        int legacyContextLimit = readLegacyContextLimit(connection);
 
         if (hadAppSettings)
         {
@@ -236,13 +269,15 @@ public final class DatabaseMigrator
             execute(connection, """
                     INSERT INTO app_settings (
                         id, ollama_url, comfyui_url, selected_model,
-                        context_limit, response_length_enabled, response_length,
-                        min_story_window, story_card_lookback, an_placement,
+                        response_length_enabled, response_length,
+                        min_story_percent, story_card_lookback, an_placement,
                         comfy_workflow, comfy_width, comfy_height, comfy_batch_size
                     )
                     SELECT id, 'http://localhost:11434', 'http://localhost:8000',
                            'hf.co/LatitudeGames/Muse-12B-GGUF:BF16',
-                           context_limit, 1, response_length, min_story_window, story_card_lookback, an_placement,
+                           1, response_length,
+                           MAX(10, MIN(100, ROUND(min_story_window * 100.0 / MAX(1, context_limit)))),
+                           story_card_lookback, an_placement,
                            'ChromaHD', 720, 720, 4
                     FROM generation_settings
                     WHERE id = 1
@@ -257,7 +292,7 @@ public final class DatabaseMigrator
         createModelSettingsTable(connection);
         if (hadModelSettings)
         {
-            addModelSettingEnabledColumns(connection);
+            addModelSettingColumns(connection, legacyContextLimit);
         }
         else if (hadGenerationSettings)
         {
@@ -266,7 +301,7 @@ public final class DatabaseMigrator
             String repetitionPenalty = columns.contains("repetition_penalty") ? "repetition_penalty" : "1.05";
             execute(connection, """
                     INSERT INTO model_settings (
-                        model_name, active,
+                        model_name, active, context_limit, prompt_token_scale,
                         temperature_enabled, temperature,
                         top_k_enabled, top_k,
                         top_p_enabled, top_p,
@@ -276,6 +311,7 @@ public final class DatabaseMigrator
                         repetition_penalty_enabled, repetition_penalty
                     )
                     SELECT 'hf.co/LatitudeGames/Muse-12B-GGUF:BF16', 1,
+                           context_limit, 1.0,
                            1, temperature,
                            1, top_k,
                            1, top_p,
@@ -322,11 +358,13 @@ public final class DatabaseMigrator
             execute(connection, """
                     INSERT INTO app_settings_v3 (
                         id, ollama_url, comfyui_url, selected_model,
-                        context_limit, response_length_enabled, response_length,
-                        min_story_window, story_card_lookback, an_placement,
+                        response_length_enabled, response_length,
+                        min_story_percent, story_card_lookback, an_placement,
                         comfy_workflow, comfy_width, comfy_height, comfy_batch_size
                     )
-                    SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    SELECT %s, %s, %s, %s, %s, %s,
+                           MAX(10, MIN(100, %s)),
+                           %s, %s, %s, %s, %s, %s
                     FROM app_settings
                     WHERE %s = 1
                     """.formatted(
@@ -334,10 +372,13 @@ public final class DatabaseMigrator
                     value(oldColumns, "ollama_url", "'http://localhost:11434'"),
                     value(oldColumns, "comfyui_url", "'http://localhost:8000'"),
                     value(oldColumns, "selected_model", "'hf.co/LatitudeGames/Muse-12B-GGUF:BF16'"),
-                    value(oldColumns, "context_limit", "8192"),
                     value(oldColumns, "response_length_enabled", "1"),
                     value(oldColumns, "response_length", "200"),
-                    value(oldColumns, "min_story_window", "7000"),
+                    oldColumns.contains("min_story_percent")
+                            ? "min_story_percent"
+                            : "ROUND((" + value(oldColumns, "min_story_window", "4915")
+                                    + ") * 100.0 / MAX(1, "
+                                    + value(oldColumns, "context_limit", "8192") + "))",
                     value(oldColumns, "story_card_lookback", "5"),
                     value(oldColumns, "an_placement", "2"),
                     value(oldColumns, "comfy_workflow", "'ChromaHD'"),
@@ -464,11 +505,11 @@ public final class DatabaseMigrator
                     ollama_url TEXT NOT NULL,
                     comfyui_url TEXT NOT NULL DEFAULT 'http://localhost:8000',
                     selected_model TEXT NOT NULL,
-                    context_limit INTEGER NOT NULL,
                     response_length_enabled INTEGER NOT NULL DEFAULT 0
                         CHECK (response_length_enabled IN (0,1)),
                     response_length INTEGER NOT NULL,
-                    min_story_window INTEGER NOT NULL,
+                    min_story_percent INTEGER NOT NULL DEFAULT 60
+                        CHECK (min_story_percent BETWEEN 10 AND 100),
                     story_card_lookback INTEGER NOT NULL,
                     an_placement INTEGER NOT NULL,
                     comfy_workflow TEXT NOT NULL DEFAULT 'ChromaHD',
@@ -532,13 +573,17 @@ public final class DatabaseMigrator
         execute(connection, "DROP TABLE IF EXISTS generation_settings");
     }
 
-    private static void addModelSettingEnabledColumns(Connection connection) throws SQLException
+    private static void addModelSettingColumns(Connection connection, int legacyContextLimit) throws SQLException
     {
         if (!tableExists(connection, "model_settings"))
         {
             createModelSettingsTable(connection);
             return;
         }
+        addColumnIfMissing(connection, "model_settings", "context_limit",
+                "INTEGER NOT NULL DEFAULT " + Math.max(1024, legacyContextLimit));
+        addColumnIfMissing(connection, "model_settings", "prompt_token_scale",
+                "REAL NOT NULL DEFAULT 1.0");
         addColumnIfMissing(connection, "model_settings", "temperature_enabled",
                 "INTEGER NOT NULL DEFAULT 1 CHECK (temperature_enabled IN (0,1))");
         addColumnIfMissing(connection, "model_settings", "top_k_enabled",
@@ -553,6 +598,34 @@ public final class DatabaseMigrator
                 "INTEGER NOT NULL DEFAULT 1 CHECK (frequency_penalty_enabled IN (0,1))");
         addColumnIfMissing(connection, "model_settings", "repetition_penalty_enabled",
                 "INTEGER NOT NULL DEFAULT 1 CHECK (repetition_penalty_enabled IN (0,1))");
+    }
+
+    private static int readLegacyContextLimit(Connection connection) throws SQLException
+    {
+        if (tableExists(connection, "app_settings") && columns(connection, "app_settings").contains("context_limit"))
+        {
+            try (Statement statement = connection.createStatement();
+                 ResultSet result = statement.executeQuery("SELECT context_limit FROM app_settings WHERE id = 1"))
+            {
+                if (result.next())
+                {
+                    return Math.max(1024, result.getInt(1));
+                }
+            }
+        }
+        if (tableExists(connection, "generation_settings")
+                && columns(connection, "generation_settings").contains("context_limit"))
+        {
+            try (Statement statement = connection.createStatement();
+                 ResultSet result = statement.executeQuery("SELECT context_limit FROM generation_settings WHERE id = 1"))
+            {
+                if (result.next())
+                {
+                    return Math.max(1024, result.getInt(1));
+                }
+            }
+        }
+        return 8192;
     }
 
     private static void addColumnIfMissing(Connection connection, String table, String column, String definition)

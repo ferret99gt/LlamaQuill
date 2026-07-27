@@ -57,10 +57,9 @@ class DatabaseMigrationTest
                     "http://settings-ollama:11434",
                     "http://settings-comfy:8000",
                     "settings-model",
-                    16384,
                     false,
                     240,
-                    9000,
+                    55,
                     12,
                     4,
                     "SettingsWorkflow",
@@ -74,6 +73,8 @@ class DatabaseMigrationTest
             ModelSettings expectedModelSettings = new ModelSettings(
                     "settings-model",
                     true,
+                    16384,
+                    1.25,
                     false, 0.7,
                     true, 0,
                     false, 0.92,
@@ -120,7 +121,10 @@ class DatabaseMigrationTest
             List<Block> migratedBlocks = blocks.listForStory("story-1");
             assertEquals(List.of(1, 2), migratedBlocks.stream().map(Block::position).toList());
             assertEquals(1, scalarInt(database, "SELECT COUNT(*) FROM story_cards WHERE id = 'card-1'"));
-            assertEquals(8192, scalarInt(database, "SELECT context_limit FROM app_settings WHERE id = 1"));
+            assertEquals(8192, scalarInt(database,
+                    "SELECT context_limit FROM model_settings WHERE model_name = "
+                            + "'hf.co/LatitudeGames/Muse-12B-GGUF:BF16'"));
+            assertEquals(85, scalarInt(database, "SELECT min_story_percent FROM app_settings WHERE id = 1"));
             assertEquals(1, scalarInt(database,
                     "SELECT response_length_enabled FROM app_settings WHERE id = 1"));
             assertEquals(1, scalarInt(database,
@@ -176,7 +180,9 @@ class DatabaseMigrationTest
                     scalarText(database, "SELECT ollama_url FROM app_settings WHERE id = 1"));
             assertEquals("schema-two-model",
                     scalarText(database, "SELECT selected_model FROM app_settings WHERE id = 1"));
-            assertEquals(24576, scalarInt(database, "SELECT context_limit FROM app_settings WHERE id = 1"));
+            assertEquals(24576, scalarInt(database,
+                    "SELECT context_limit FROM model_settings WHERE model_name = 'schema-two-model'"));
+            assertEquals(49, scalarInt(database, "SELECT min_story_percent FROM app_settings WHERE id = 1"));
             assertEquals("SchemaTwoWorkflow",
                     scalarText(database, "SELECT comfy_workflow FROM app_settings WHERE id = 1"));
             assertFalse(columns(database, "app_settings").contains("use_ollama_templates"));
@@ -188,6 +194,33 @@ class DatabaseMigrationTest
                     "SELECT top_k_enabled FROM model_settings WHERE model_name = 'schema-two-model'"));
             assertEquals(7, enabledModelOptionCount(database, "schema-two-model"));
             assertEquals(AppVersion.DATABASE_SCHEMA, userVersion(database));
+        }
+    }
+
+    @Test
+    void normalizesAnUnreleasedProvisionalSchemaThreeDatabase() throws Exception
+    {
+        AppPaths paths = paths("provisional-schema-three");
+        createFixture(paths.databaseFile(), "/db/0.2.0-schema-2.sql");
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + paths.databaseFile());
+             Statement statement = connection.createStatement())
+        {
+            statement.execute("PRAGMA user_version = 3");
+        }
+
+        try (Database database = Database.open(paths))
+        {
+            Database.StartupReport report = database.startupReport();
+            assertEquals(3, report.migration().sourceSchema());
+            assertEquals(3, report.migration().targetSchema());
+            assertTrue(Files.isRegularFile(report.migration().backup().orElseThrow()));
+            assertFalse(columns(database, "app_settings").contains("context_limit"));
+            assertFalse(columns(database, "app_settings").contains("min_story_window"));
+            assertEquals(49, scalarInt(database, "SELECT min_story_percent FROM app_settings WHERE id = 1"));
+            assertEquals(24576, scalarInt(database,
+                    "SELECT context_limit FROM model_settings WHERE model_name = 'schema-two-model'"));
+            assertEquals(1, scalarInt(database,
+                    "SELECT prompt_token_scale FROM model_settings WHERE model_name = 'schema-two-model'"));
         }
     }
 

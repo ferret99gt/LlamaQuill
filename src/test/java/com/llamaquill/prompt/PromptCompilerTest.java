@@ -242,7 +242,7 @@ class PromptCompilerTest
             int minStoryWindow)
     {
         return new GenerationSettings(
-                contextLimit,
+                GenerationSettings.DEFAULT_MODEL, GenerationSettings.DEFAULT_OLLAMA_HOST, contextLimit, 1.0,
                 responseLengthEnabled, responseLength,
                 false, 0.8,
                 false, 200,

@@ -12,6 +12,7 @@ import com.llamaquill.model.Story;
 import com.llamaquill.model.StoryCard;
 import com.llamaquill.prompt.PromptCompilation;
 import com.llamaquill.prompt.PromptCompiler;
+import com.llamaquill.serviceClients.OllamaChatResult;
 import com.llamaquill.serviceClients.OllamaClient;
 import com.llamaquill.util.Ids;
 import com.llamaquill.util.Timestamps;
@@ -57,23 +58,27 @@ public final class GenerationCoordinator
         }
 
         PromptCompilation compilation = promptCompiler.compile(story, currentBlocks, currentCards, settings);
-        String cleaned = generateContinuationWithFallback(compilation, settings);
-        if (cleaned.isBlank())
+        GeneratedText generated = generateContinuationWithFallback(compilation, settings);
+        if (generated.text().isBlank())
         {
-            return new ContinueResult(story, null, compilation.estimatedTokens(), ResultStatus.EMPTY);
+            return new ContinueResult(story, null, compilation.estimatedTokens(), ResultStatus.EMPTY,
+                    generated.response());
         }
 
         return database.transaction(connection ->
         {
             if (!blockRepository.isCurrentHead(story.id(), expectedHeadId))
             {
-                return new ContinueResult(story, null, compilation.estimatedTokens(), ResultStatus.STALE);
+                return new ContinueResult(story, null, compilation.estimatedTokens(), ResultStatus.STALE,
+                        generated.response());
             }
             int position = blockRepository.nextPosition(story.id());
-            Block block = new Block(Ids.newId(), story.id(), Role.ASSISTANT, cleaned, Timestamps.now(), position);
+            Block block = new Block(Ids.newId(), story.id(), Role.ASSISTANT,
+                    generated.text(), Timestamps.now(), position);
             blockRepository.insert(block);
             Story updatedStory = touchStory(story);
-            return new ContinueResult(updatedStory, block, compilation.estimatedTokens(), ResultStatus.APPLIED);
+            return new ContinueResult(updatedStory, block, compilation.estimatedTokens(), ResultStatus.APPLIED,
+                    generated.response());
         });
     }
 
@@ -90,16 +95,17 @@ public final class GenerationCoordinator
         List<StoryCard> currentCards = storyCardRepository.listForStory(story.id());
 
         PromptCompilation compilation = promptCompiler.compile(story, promptBlocks, currentCards, settings);
-        String cleaned = generateContinuationWithFallback(compilation, settings);
-        if (cleaned.isBlank())
+        GeneratedText generated = generateContinuationWithFallback(compilation, settings);
+        if (generated.text().isBlank())
         {
-            return new RetryResult(null, compilation.estimatedTokens(), ResultStatus.EMPTY);
+            return new RetryResult(null, compilation.estimatedTokens(), ResultStatus.EMPTY, generated.response());
         }
 
-        Block updated = new Block(head.id(), head.storyId(), Role.ASSISTANT, cleaned, Timestamps.now(), head.position());
+        Block updated = new Block(head.id(), head.storyId(), Role.ASSISTANT,
+                generated.text(), Timestamps.now(), head.position());
         boolean applied = database.transaction(connection -> blockRepository.replaceHeadIfCurrent(updated));
         return new RetryResult(applied ? updated : null, compilation.estimatedTokens(),
-                applied ? ResultStatus.APPLIED : ResultStatus.STALE);
+                applied ? ResultStatus.APPLIED : ResultStatus.STALE, generated.response());
     }
 
     public TurnResult takeTurn(Story story, String userText, GenerationSettings settings,
@@ -133,32 +139,34 @@ public final class GenerationCoordinator
         });
         if (seedResult == null)
         {
-            return new TurnResult(story, false, 0, ResultStatus.STALE);
+            return new TurnResult(story, false, 0, ResultStatus.STALE, null);
         }
 
         currentBlocks = blockRepository.listForStory(story.id());
         currentCards = storyCardRepository.listForStory(story.id());
 
         PromptCompilation compilation = promptCompiler.compile(story, currentBlocks, currentCards, settings);
-        String response = generateResponse(compilation, settings);
-        String cleaned = normalizeOutput(response);
+        OllamaChatResult response = generateResponse(compilation, settings);
+        String cleaned = normalizeOutput(response.content());
         if (cleaned.isBlank())
         {
-            return new TurnResult(seedResult.updatedStory(), false, compilation.estimatedTokens(), ResultStatus.EMPTY);
+            return new TurnResult(seedResult.updatedStory(), false, compilation.estimatedTokens(),
+                    ResultStatus.EMPTY, response);
         }
 
         return database.transaction(connection ->
         {
             if (!blockRepository.isCurrentHead(story.id(), seedResult.seedBlock().id()))
             {
-                return new TurnResult(seedResult.updatedStory(), false, compilation.estimatedTokens(), ResultStatus.STALE);
+                return new TurnResult(seedResult.updatedStory(), false, compilation.estimatedTokens(),
+                        ResultStatus.STALE, response);
             }
             int assistantPosition = blockRepository.nextPosition(story.id());
             Block assistantBlock = new Block(Ids.newId(), story.id(), Role.ASSISTANT, cleaned, Timestamps.now(),
                     assistantPosition);
             blockRepository.insert(assistantBlock);
             Story updatedStory = touchStory(seedResult.updatedStory());
-            return new TurnResult(updatedStory, true, compilation.estimatedTokens(), ResultStatus.APPLIED);
+            return new TurnResult(updatedStory, true, compilation.estimatedTokens(), ResultStatus.APPLIED, response);
         });
     }
 
@@ -167,38 +175,40 @@ public final class GenerationCoordinator
         return storyRepository.touch(story.id(), Timestamps.now());
     }
 
-    private String generateContinuationWithFallback(PromptCompilation compilation, GenerationSettings settings)
+    private GeneratedText generateContinuationWithFallback(PromptCompilation compilation, GenerationSettings settings)
             throws IOException, InterruptedException
     {
-        String cleaned = normalizeOutput(generateResponse(compilation, settings));
+        OllamaChatResult response = generateResponse(compilation, settings);
+        String cleaned = normalizeOutput(response.content());
         if (!cleaned.isBlank())
         {
-            return cleaned;
+            return new GeneratedText(cleaned, response);
         }
 
-        cleaned = normalizeOutput(generateResponseWithAssistantSuffix(compilation, settings, " "));
+        response = generateResponseWithAssistantSuffix(compilation, settings, " ");
+        cleaned = normalizeOutput(response.content());
         if (!cleaned.isBlank())
         {
-            System.out.println("Continuation fallback succeeded with trailing space.");
-            return " " + cleaned;
+            return new GeneratedText(" " + cleaned, response);
         }
 
-        cleaned = normalizeOutput(generateResponseWithAssistantSuffix(compilation, settings, "\n"));
+        response = generateResponseWithAssistantSuffix(compilation, settings, "\n");
+        cleaned = normalizeOutput(response.content());
         if (!cleaned.isBlank())
         {
-            System.out.println("Continuation fallback succeeded with trailing newline.");
-            return "\n" + cleaned;
+            return new GeneratedText("\n" + cleaned, response);
         }
-        return cleaned;
+        return new GeneratedText("", response);
     }
 
-    private String generateResponse(PromptCompilation compilation, GenerationSettings settings)
+    private OllamaChatResult generateResponse(PromptCompilation compilation, GenerationSettings settings)
             throws IOException, InterruptedException
     {
         return ollamaClient.chat(compilation.messages(), settings);
     }
 
-    private String generateResponseWithAssistantSuffix(PromptCompilation compilation, GenerationSettings settings,
+    private OllamaChatResult generateResponseWithAssistantSuffix(PromptCompilation compilation,
+            GenerationSettings settings,
             String suffix) throws IOException, InterruptedException
     {
         return ollamaClient.chat(withAssistantSuffix(compilation.messages(), suffix), settings);
@@ -255,15 +265,22 @@ public final class GenerationCoordinator
     {
     }
 
-    public record ContinueResult(Story updatedStory, Block block, int estimatedPromptTokens, ResultStatus status)
+    private record GeneratedText(String text, OllamaChatResult response)
     {
     }
 
-    public record RetryResult(Block updatedBlock, int estimatedPromptTokens, ResultStatus status)
+    public record ContinueResult(Story updatedStory, Block block, int estimatedPromptTokens, ResultStatus status,
+            OllamaChatResult ollamaResponse)
     {
     }
 
-    public record TurnResult(Story updatedStory, boolean generated, int estimatedPromptTokens, ResultStatus status)
+    public record RetryResult(Block updatedBlock, int estimatedPromptTokens, ResultStatus status,
+            OllamaChatResult ollamaResponse)
+    {
+    }
+
+    public record TurnResult(Story updatedStory, boolean generated, int estimatedPromptTokens, ResultStatus status,
+            OllamaChatResult ollamaResponse)
     {
     }
 }
