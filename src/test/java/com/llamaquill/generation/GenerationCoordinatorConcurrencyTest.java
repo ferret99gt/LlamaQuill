@@ -23,17 +23,113 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 class GenerationCoordinatorConcurrencyTest
 {
     @TempDir
     Path temporaryDirectory;
+
+    @Test
+    void terminalStreamTextIsPersistedCompletelyAndExactlyOnce() throws Exception
+    {
+        Path root = temporaryDirectory.resolve("streaming-terminal-persistence");
+        try (Database database = Database.open(AppPaths.forDirectories(root.resolve("data"), root.resolve("legacy"))))
+        {
+            StoryRepository stories = new StoryRepository(database);
+            BlockRepository blocks = new BlockRepository(database);
+            StoryCardRepository cards = new StoryCardRepository(database);
+            List<String> responseChunks = List.of(
+                    " The first streamed segment",
+                    " continues through the second segment",
+                    " and ends only after this terminal segment.");
+            ChunkingOllamaClient ollama = new ChunkingOllamaClient(responseChunks);
+            GenerationCoordinator coordinator = new GenerationCoordinator(database, blocks, stories, cards,
+                    new PromptCompiler(), ollama);
+            String now = Timestamps.now();
+            Story story = new Story("story-a", "story-a", "System", "", "", now, now);
+            stories.insert(story);
+            blocks.insert(new Block("head", story.id(), Role.ASSISTANT, "Existing prose.", now, 1));
+            StringBuilder displayed = new StringBuilder();
+
+            GenerationCoordinator.ContinueResult result = coordinator.continueStory(
+                    story,
+                    GenerationSettings.defaults(),
+                    null,
+                    new GenerationCoordinator.GenerationObserver()
+                    {
+                        @Override
+                        public void onGeneratedText(String chunk)
+                        {
+                            displayed.append(chunk);
+                        }
+                    });
+
+            String expected = String.join("", responseChunks);
+            List<Block> persisted = blocks.listForStory(story.id());
+            assertEquals(GenerationCoordinator.ResultStatus.APPLIED, result.status());
+            assertEquals(expected, displayed.toString());
+            assertEquals(expected, result.block().text());
+            assertEquals(2, persisted.size());
+            assertEquals(expected, persisted.getLast().text());
+        }
+    }
+
+    @Test
+    void continuationFallbackResetsTheDraftAndIncludesItsExactGeneratedPrefix() throws Exception
+    {
+        Path root = temporaryDirectory.resolve("streaming-fallback");
+        try (Database database = Database.open(AppPaths.forDirectories(root.resolve("data"), root.resolve("legacy"))))
+        {
+            StoryRepository stories = new StoryRepository(database);
+            BlockRepository blocks = new BlockRepository(database);
+            StoryCardRepository cards = new StoryCardRepository(database);
+            ScriptedOllamaClient ollama = new ScriptedOllamaClient("", "door");
+            GenerationCoordinator coordinator = new GenerationCoordinator(database, blocks, stories, cards,
+                    new PromptCompiler(), ollama);
+            String now = Timestamps.now();
+            Story story = new Story("story-a", "story-a", "System", "", "", now, now);
+            stories.insert(story);
+            blocks.insert(new Block("head", story.id(), Role.ASSISTANT, "Open the", now, 1));
+            List<String> attempts = new ArrayList<>();
+            List<String> chunks = new ArrayList<>();
+
+            GenerationCoordinator.ContinueResult result = coordinator.continueStory(
+                    story,
+                    GenerationSettings.defaults(),
+                    null,
+                    new GenerationCoordinator.GenerationObserver()
+                    {
+                        @Override
+                        public void onAttemptStarted(String generatedPrefix)
+                        {
+                            attempts.add(generatedPrefix);
+                        }
+
+                        @Override
+                        public void onGeneratedText(String chunk)
+                        {
+                            chunks.add(chunk);
+                        }
+                    });
+
+            assertEquals(GenerationCoordinator.ResultStatus.APPLIED, result.status());
+            assertEquals(List.of("", " "), attempts);
+            assertEquals(List.of("door"), chunks);
+            assertEquals(" door", result.block().text());
+            assertEquals("Open the door",
+                    blocks.listForStory(story.id()).stream().map(Block::text).reduce("", String::concat));
+        }
+    }
 
     @Test
     void continueRejectsAResultWhenTheExpectedHeadChangedDuringGeneration() throws Exception
@@ -116,13 +212,30 @@ class GenerationCoordinatorConcurrencyTest
         {
             Story story = fixture.createStory("story-a");
             fixture.insertBlock(story, "original-head", Role.ASSISTANT, "Original", 1);
+            AtomicReference<Block> observedSeed = new AtomicReference<>();
+            AtomicReference<String> observedText = new AtomicReference<>("");
 
             Future<GenerationCoordinator.TurnResult> future = executor.submit(
-                    () -> fixture.coordinator.takeTurn(story, "User action", GenerationSettings.defaults(), null));
+                    () -> fixture.coordinator.takeTurn(story, "User action", GenerationSettings.defaults(), null,
+                            new GenerationCoordinator.GenerationObserver()
+                            {
+                                @Override
+                                public void onSeedCommitted(Block seedBlock)
+                                {
+                                    observedSeed.set(seedBlock);
+                                }
+
+                                @Override
+                                public void onGeneratedText(String chunk)
+                                {
+                                    observedText.updateAndGet(current -> current + chunk);
+                                }
+                            }));
             fixture.ollama.awaitRequest();
             List<Block> afterSeed = fixture.blocks.listForStory(story.id());
             Block seed = afterSeed.getLast();
             assertEquals(Role.USER, seed.role());
+            assertEquals(seed.id(), observedSeed.get().id());
             fixture.insertBlock(story, "intervening-head", Role.USER, "Changed", seed.position() + 1);
             fixture.ollama.complete("Generated response");
 
@@ -131,6 +244,7 @@ class GenerationCoordinatorConcurrencyTest
             assertFalse(result.generated());
             assertEquals(3, fixture.blocks.listForStory(story.id()).size());
             assertTrue(fixture.blocks.listForStory(story.id()).stream().anyMatch(block -> block.id().equals(seed.id())));
+            assertEquals("Generated response", observedText.get());
         }
     }
 
@@ -192,10 +306,13 @@ class GenerationCoordinatorConcurrencyTest
         private volatile String response;
 
         @Override
-        public OllamaChatResult chat(List<ChatMessage> messages, GenerationSettings settings)
+        public OllamaChatResult chat(List<ChatMessage> messages, GenerationSettings settings,
+                Consumer<String> generatedChunkConsumer)
                 throws IOException, InterruptedException
         {
-            return new OllamaChatResult(settings.modelName(), respond(), 10, 5, "stop",
+            String generated = respond();
+            generatedChunkConsumer.accept(generated);
+            return new OllamaChatResult(settings.modelName(), generated, 10, 5, "stop",
                     1, 0, 1, 1, 0);
         }
 
@@ -218,6 +335,49 @@ class GenerationCoordinatorConcurrencyTest
         {
             this.response = response;
             completed.countDown();
+        }
+    }
+
+    private static final class ScriptedOllamaClient extends OllamaClient
+    {
+        private final ArrayDeque<String> responses;
+
+        private ScriptedOllamaClient(String... responses)
+        {
+            this.responses = new ArrayDeque<>(List.of(responses));
+        }
+
+        @Override
+        public OllamaChatResult chat(List<ChatMessage> messages, GenerationSettings settings,
+                Consumer<String> generatedChunkConsumer)
+        {
+            String generated = responses.removeFirst();
+            if (!generated.isEmpty())
+            {
+                generatedChunkConsumer.accept(generated);
+            }
+            return new OllamaChatResult(settings.modelName(), generated, 10, generated.length(), "stop",
+                    1, 0, 1, 1, 0);
+        }
+    }
+
+    private static final class ChunkingOllamaClient extends OllamaClient
+    {
+        private final List<String> chunks;
+
+        private ChunkingOllamaClient(List<String> chunks)
+        {
+            this.chunks = List.copyOf(chunks);
+        }
+
+        @Override
+        public OllamaChatResult chat(List<ChatMessage> messages, GenerationSettings settings,
+                Consumer<String> generatedChunkConsumer)
+        {
+            chunks.forEach(generatedChunkConsumer);
+            String generated = String.join("", chunks);
+            return new OllamaChatResult(settings.modelName(), generated, 10, generated.length(), "stop",
+                    1, 0, 1, 1, 0);
         }
     }
 }

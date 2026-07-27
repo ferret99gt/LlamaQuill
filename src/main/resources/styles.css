@@ -224,6 +224,11 @@
   -fx-padding: 0;
 }
 
+.story-list .list-cell:filled:selected,
+.story-list .list-cell:filled:selected:hover {
+  -fx-background-color: #202020;
+}
+
 .list-cell:filled:selected,
 .list-cell:filled:selected:hover {
   -fx-background-color: #353535;
@@ -280,6 +285,18 @@
 .text-area .scroll-pane .viewport,
 .text-area .scroll-pane .content {
   -fx-background-color: #202020;
+}
+
+.story-block-editor .scroll-bar:vertical,
+.story-block-editor .scroll-bar:horizontal {
+  -fx-opacity: 0;
+  -fx-pref-width: 0;
+  -fx-min-width: 0;
+  -fx-max-width: 0;
+  -fx-pref-height: 0;
+  -fx-min-height: 0;
+  -fx-max-height: 0;
+  -fx-padding: 0;
 }
 
 .story-list .scroll-bar:horizontal {

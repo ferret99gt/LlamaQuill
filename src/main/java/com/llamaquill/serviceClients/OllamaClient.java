@@ -21,6 +21,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Consumer;
 
 public class OllamaClient implements AutoCloseable
 {
@@ -124,18 +125,27 @@ public class OllamaClient implements AutoCloseable
     public OllamaChatResult chat(List<ChatMessage> messages, GenerationSettings settings)
             throws IOException, InterruptedException
     {
+        return chat(messages, settings, ignored -> { });
+    }
+
+    public OllamaChatResult chat(List<ChatMessage> messages, GenerationSettings settings,
+            Consumer<String> generatedChunkConsumer)
+            throws IOException, InterruptedException
+    {
         if (settings == null)
         {
             throw new IllegalArgumentException("Generation settings are required.");
         }
         String requestedModel = requireModel(settings.modelName());
         List<ChatMessage> normalizedMessages = normalizeChatMessages(messages);
-        OllamaChatResult response = executeStreaming(settings.ollamaHost(), "/api/chat", requestedModel,
-                buildChatPayloadFromNormalized(normalizedMessages, settings));
-        return removeReturnedAssistantPrefill(response, normalizedMessages);
+        AssistantPrefillFilter prefillFilter = new AssistantPrefillFilter(normalizedMessages,
+                generatedChunkConsumer == null ? ignored -> { } : generatedChunkConsumer);
+        return executeStreaming(settings.ollamaHost(), "/api/chat", requestedModel,
+                buildChatPayloadFromNormalized(normalizedMessages, settings), prefillFilter);
     }
 
-    private OllamaChatResult executeStreaming(String baseHost, String path, String requestedModel, String payload)
+    private OllamaChatResult executeStreaming(String baseHost, String path, String requestedModel, String payload,
+            AssistantPrefillFilter prefillFilter)
             throws IOException, InterruptedException
     {
         String endpoint = OllamaEndpoint.resolve(baseHost, path).toString();
@@ -181,7 +191,8 @@ public class OllamaClient implements AutoCloseable
                 }
 
                 ChatStreamEvent event = parseChatStreamEvent(line, lineNumber, endpoint);
-                content.append(event.content());
+                String generated = prefillFilter.accept(event.content());
+                content.append(generated);
                 if (event.done())
                 {
                     terminalEvent = event.json();
@@ -196,6 +207,7 @@ public class OllamaClient implements AutoCloseable
                     endpoint, -1, "");
         }
 
+        content.append(prefillFilter.finish());
         return new OllamaChatResult(
                 terminalEvent.optString("model", requestedModel),
                 content.toString(),
@@ -206,7 +218,7 @@ public class OllamaClient implements AutoCloseable
                 longMetadata(terminalEvent, "load_duration"),
                 longMetadata(terminalEvent, "prompt_eval_duration"),
                 longMetadata(terminalEvent, "eval_duration"),
-                0);
+                prefillFilter.removedCharacters());
     }
 
     String buildChatPayload(List<ChatMessage> messages, GenerationSettings settings)
@@ -237,40 +249,6 @@ public class OllamaClient implements AutoCloseable
         payload.put("stream", true);
         payload.put("options", buildOptions(settings));
         return payload.toString();
-    }
-
-    private static OllamaChatResult removeReturnedAssistantPrefill(OllamaChatResult response,
-            List<ChatMessage> messages)
-    {
-        if (response == null || messages.isEmpty())
-        {
-            return response;
-        }
-        ChatMessage lastMessage = messages.getLast();
-        if (!"assistant".equals(lastMessage.role()) || lastMessage.content().isEmpty())
-        {
-            return response;
-        }
-
-        PrefixRemoval removal = removeExactPrefix(response.content(), lastMessage.content());
-        if (removal.removedCharacters() == 0)
-        {
-            return response;
-        }
-        return response.withContent(removal.content(), removal.removedCharacters());
-    }
-
-    private static PrefixRemoval removeExactPrefix(String response, String assistantPrefix)
-    {
-        String content = response == null ? "" : response;
-        for (String prefix : exactPrefixVariants(assistantPrefix))
-        {
-            if (!prefix.isEmpty() && content.startsWith(prefix))
-            {
-                return new PrefixRemoval(content.substring(prefix.length()), prefix.length());
-            }
-        }
-        return new PrefixRemoval(content, 0);
     }
 
     private static List<String> exactPrefixVariants(String value)
@@ -692,7 +670,99 @@ public class OllamaClient implements AutoCloseable
     {
     }
 
-    private record PrefixRemoval(String content, int removedCharacters)
+    private static final class AssistantPrefillFilter
     {
+        private final List<String> prefixes;
+        private final Consumer<String> generatedChunkConsumer;
+        private final StringBuilder undecided = new StringBuilder();
+        private boolean decided;
+        private int removedCharacters;
+
+        private AssistantPrefillFilter(List<ChatMessage> messages, Consumer<String> generatedChunkConsumer)
+        {
+            this.generatedChunkConsumer = generatedChunkConsumer;
+            if (messages == null || messages.isEmpty())
+            {
+                prefixes = List.of();
+                decided = true;
+                return;
+            }
+            ChatMessage lastMessage = messages.getLast();
+            if (!"assistant".equals(lastMessage.role()) || lastMessage.content().isEmpty())
+            {
+                prefixes = List.of();
+                decided = true;
+                return;
+            }
+            prefixes = exactPrefixVariants(lastMessage.content());
+            decided = prefixes.isEmpty();
+        }
+
+        private String accept(String chunk)
+        {
+            if (chunk == null || chunk.isEmpty())
+            {
+                return "";
+            }
+            if (decided)
+            {
+                generatedChunkConsumer.accept(chunk);
+                return chunk;
+            }
+
+            undecided.append(chunk);
+            String pending = undecided.toString();
+            for (String prefix : prefixes)
+            {
+                if (prefix.startsWith(pending))
+                {
+                    return "";
+                }
+            }
+
+            for (String prefix : prefixes)
+            {
+                if (pending.startsWith(prefix))
+                {
+                    removedCharacters = prefix.length();
+                    return release(pending.substring(prefix.length()));
+                }
+            }
+            return release(pending);
+        }
+
+        private String finish()
+        {
+            if (decided)
+            {
+                return "";
+            }
+            String pending = undecided.toString();
+            for (String prefix : prefixes)
+            {
+                if (pending.startsWith(prefix))
+                {
+                    removedCharacters = prefix.length();
+                    return release(pending.substring(prefix.length()));
+                }
+            }
+            return release(pending);
+        }
+
+        private String release(String generated)
+        {
+            decided = true;
+            undecided.setLength(0);
+            if (!generated.isEmpty())
+            {
+                generatedChunkConsumer.accept(generated);
+            }
+            return generated;
+        }
+
+        private int removedCharacters()
+        {
+            return removedCharacters;
+        }
     }
 }

@@ -46,8 +46,16 @@ public final class GenerationCoordinator
     public ContinueResult continueStory(Story story, GenerationSettings settings, AutoCardsRunner autoCardsRunner)
             throws Exception
     {
+        return continueStory(story, settings, autoCardsRunner, GenerationObserver.NOOP);
+    }
+
+    public ContinueResult continueStory(Story story, GenerationSettings settings, AutoCardsRunner autoCardsRunner,
+            GenerationObserver observer)
+            throws Exception
+    {
         Objects.requireNonNull(story, "story");
         Objects.requireNonNull(settings, "settings");
+        GenerationObserver activeObserver = observer == null ? GenerationObserver.NOOP : observer;
 
         List<Block> currentBlocks = blockRepository.listForStory(story.id());
         String expectedHeadId = headId(currentBlocks);
@@ -58,7 +66,7 @@ public final class GenerationCoordinator
         }
 
         PromptCompilation compilation = promptCompiler.compile(story, currentBlocks, currentCards, settings);
-        GeneratedText generated = generateContinuationWithFallback(compilation, settings);
+        GeneratedText generated = generateContinuationWithFallback(compilation, settings, activeObserver);
         if (generated.text().isBlank())
         {
             return new ContinueResult(story, null, compilation.estimatedTokens(), ResultStatus.EMPTY,
@@ -85,17 +93,25 @@ public final class GenerationCoordinator
     public RetryResult retryAssistantHead(Story story, List<Block> blocks, Block head, GenerationSettings settings)
             throws IOException, InterruptedException, SQLException
     {
+        return retryAssistantHead(story, blocks, head, settings, GenerationObserver.NOOP);
+    }
+
+    public RetryResult retryAssistantHead(Story story, List<Block> blocks, Block head, GenerationSettings settings,
+            GenerationObserver observer)
+            throws IOException, InterruptedException, SQLException
+    {
         Objects.requireNonNull(story, "story");
         Objects.requireNonNull(blocks, "blocks");
         Objects.requireNonNull(head, "head");
         Objects.requireNonNull(settings, "settings");
+        GenerationObserver activeObserver = observer == null ? GenerationObserver.NOOP : observer;
 
         List<Block> promptBlocks = new ArrayList<>(blocks);
         promptBlocks.removeLast();
         List<StoryCard> currentCards = storyCardRepository.listForStory(story.id());
 
         PromptCompilation compilation = promptCompiler.compile(story, promptBlocks, currentCards, settings);
-        GeneratedText generated = generateContinuationWithFallback(compilation, settings);
+        GeneratedText generated = generateContinuationWithFallback(compilation, settings, activeObserver);
         if (generated.text().isBlank())
         {
             return new RetryResult(null, compilation.estimatedTokens(), ResultStatus.EMPTY, generated.response());
@@ -112,9 +128,17 @@ public final class GenerationCoordinator
             AutoCardsRunner autoCardsRunner)
             throws Exception
     {
+        return takeTurn(story, userText, settings, autoCardsRunner, GenerationObserver.NOOP);
+    }
+
+    public TurnResult takeTurn(Story story, String userText, GenerationSettings settings,
+            AutoCardsRunner autoCardsRunner, GenerationObserver observer)
+            throws Exception
+    {
         Objects.requireNonNull(story, "story");
         Objects.requireNonNull(userText, "userText");
         Objects.requireNonNull(settings, "settings");
+        GenerationObserver activeObserver = observer == null ? GenerationObserver.NOOP : observer;
 
         List<Block> currentBlocks = blockRepository.listForStory(story.id());
         String expectedHeadId = headId(currentBlocks);
@@ -141,12 +165,14 @@ public final class GenerationCoordinator
         {
             return new TurnResult(story, false, 0, ResultStatus.STALE, null);
         }
+        activeObserver.onSeedCommitted(seedResult.seedBlock());
 
         currentBlocks = blockRepository.listForStory(story.id());
         currentCards = storyCardRepository.listForStory(story.id());
 
         PromptCompilation compilation = promptCompiler.compile(story, currentBlocks, currentCards, settings);
-        OllamaChatResult response = generateResponse(compilation, settings);
+        activeObserver.onAttemptStarted("");
+        OllamaChatResult response = generateResponse(compilation, settings, activeObserver);
         String cleaned = normalizeOutput(response.content());
         if (cleaned.isBlank())
         {
@@ -175,24 +201,28 @@ public final class GenerationCoordinator
         return storyRepository.touch(story.id(), Timestamps.now());
     }
 
-    private GeneratedText generateContinuationWithFallback(PromptCompilation compilation, GenerationSettings settings)
+    private GeneratedText generateContinuationWithFallback(PromptCompilation compilation, GenerationSettings settings,
+            GenerationObserver observer)
             throws IOException, InterruptedException
     {
-        OllamaChatResult response = generateResponse(compilation, settings);
+        observer.onAttemptStarted("");
+        OllamaChatResult response = generateResponse(compilation, settings, observer);
         String cleaned = normalizeOutput(response.content());
         if (!cleaned.isBlank())
         {
             return new GeneratedText(cleaned, response);
         }
 
-        response = generateResponseWithAssistantSuffix(compilation, settings, " ");
+        observer.onAttemptStarted(" ");
+        response = generateResponseWithAssistantSuffix(compilation, settings, " ", observer);
         cleaned = normalizeOutput(response.content());
         if (!cleaned.isBlank())
         {
             return new GeneratedText(" " + cleaned, response);
         }
 
-        response = generateResponseWithAssistantSuffix(compilation, settings, "\n");
+        observer.onAttemptStarted("\n");
+        response = generateResponseWithAssistantSuffix(compilation, settings, "\n", observer);
         cleaned = normalizeOutput(response.content());
         if (!cleaned.isBlank())
         {
@@ -201,17 +231,34 @@ public final class GenerationCoordinator
         return new GeneratedText("", response);
     }
 
-    private OllamaChatResult generateResponse(PromptCompilation compilation, GenerationSettings settings)
+    private OllamaChatResult generateResponse(PromptCompilation compilation, GenerationSettings settings,
+            GenerationObserver observer)
             throws IOException, InterruptedException
     {
-        return ollamaClient.chat(compilation.messages(), settings);
+        StreamingOutputNormalizer normalizer = new StreamingOutputNormalizer(observer);
+        try
+        {
+            return ollamaClient.chat(compilation.messages(), settings, normalizer::accept);
+        }
+        finally
+        {
+            normalizer.finish();
+        }
     }
 
     private OllamaChatResult generateResponseWithAssistantSuffix(PromptCompilation compilation,
             GenerationSettings settings,
-            String suffix) throws IOException, InterruptedException
+            String suffix, GenerationObserver observer) throws IOException, InterruptedException
     {
-        return ollamaClient.chat(withAssistantSuffix(compilation.messages(), suffix), settings);
+        StreamingOutputNormalizer normalizer = new StreamingOutputNormalizer(observer);
+        try
+        {
+            return ollamaClient.chat(withAssistantSuffix(compilation.messages(), suffix), settings, normalizer::accept);
+        }
+        finally
+        {
+            normalizer.finish();
+        }
     }
 
     private static List<ChatMessage> withAssistantSuffix(List<ChatMessage> messages, String suffix)
@@ -254,6 +301,23 @@ public final class GenerationCoordinator
         boolean run(List<Block> currentBlocks, List<StoryCard> currentCards) throws Exception;
     }
 
+    public interface GenerationObserver
+    {
+        GenerationObserver NOOP = new GenerationObserver() { };
+
+        default void onSeedCommitted(Block seedBlock)
+        {
+        }
+
+        default void onAttemptStarted(String generatedPrefix)
+        {
+        }
+
+        default void onGeneratedText(String chunk)
+        {
+        }
+    }
+
     public enum ResultStatus
     {
         APPLIED,
@@ -267,6 +331,45 @@ public final class GenerationCoordinator
 
     private record GeneratedText(String text, OllamaChatResult response)
     {
+    }
+
+    private static final class StreamingOutputNormalizer
+    {
+        private final GenerationObserver observer;
+        private boolean pendingCarriageReturn;
+
+        private StreamingOutputNormalizer(GenerationObserver observer)
+        {
+            this.observer = observer;
+        }
+
+        private void accept(String chunk)
+        {
+            if (chunk == null || chunk.isEmpty())
+            {
+                return;
+            }
+            String combined = pendingCarriageReturn ? "\r" + chunk : chunk;
+            pendingCarriageReturn = combined.endsWith("\r");
+            if (pendingCarriageReturn)
+            {
+                combined = combined.substring(0, combined.length() - 1);
+            }
+            String normalized = normalizeOutput(combined);
+            if (!normalized.isEmpty())
+            {
+                observer.onGeneratedText(normalized);
+            }
+        }
+
+        private void finish()
+        {
+            if (pendingCarriageReturn)
+            {
+                pendingCarriageReturn = false;
+                observer.onGeneratedText("\n");
+            }
+        }
     }
 
     public record ContinueResult(Story updatedStory, Block block, int estimatedPromptTokens, ResultStatus status,

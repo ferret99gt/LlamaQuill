@@ -2750,6 +2750,11 @@ public class App extends Application
             showSeeDialog(image == null ? null : image.prompt(), head);
             return;
         }
+        if (head.role() == Role.USER)
+        {
+            runContinue();
+            return;
+        }
         if (head.role() != Role.ASSISTANT)
         {
             showInfo("The last block is not retryable.");
@@ -2771,10 +2776,12 @@ public class App extends Application
         }
         setStoryActionButtonsBusy(true);
         statusLabel.setText("Generating...");
+        long streamingToken = storyPaneController.startStreaming(StoryPaneController.StreamingMode.RETRY);
+        GenerationCoordinator.GenerationObserver observer = streamingObserver(streamingToken);
         submitStoryTask(session, "Retry", () ->
                 {
                     return generationCoordinator.retryAssistantHead(context.story(), blockSnapshot, head,
-                            operationSettings);
+                            operationSettings, observer);
                 },
                 result ->
                 {
@@ -2783,6 +2790,7 @@ public class App extends Application
                     {
                         if (result.status() == GenerationCoordinator.ResultStatus.STALE)
                         {
+                            storyPaneController.cancelStreaming(streamingToken);
                             if (canApplyToActiveSession(session))
                             {
                                 statusLabel.setText("Retry was stale; the story was not changed.");
@@ -2791,6 +2799,7 @@ public class App extends Application
                         }
                         if (result.status() == GenerationCoordinator.ResultStatus.EMPTY)
                         {
+                            storyPaneController.cancelStreaming(streamingToken);
                             if (canApplyToActiveSession(session))
                             {
                                 statusLabel.setText("Last generation was empty.");
@@ -2799,6 +2808,7 @@ public class App extends Application
                         }
                         if (canApplyToActiveSession(session))
                         {
+                            storyPaneController.endStreaming(streamingToken);
                             reloadActiveStoryIfCompatible(session, context.story(), true);
                             retryHistory.add(activeSession, new TextRetryHistoryEntry(result.updatedBlock().text()));
                             statusLabel.setText("Ready");
@@ -2816,6 +2826,7 @@ public class App extends Application
                 },
                 error ->
                 {
+                    storyPaneController.cancelStreaming(streamingToken);
                     restoreStoryActionButtonsState();
                     statusLabel.setText("Error: " + taskErrorMessage(error));
                     showError("Ollama generation failed", error);
@@ -3074,11 +3085,14 @@ public class App extends Application
         clearRetryHistory();
         setStoryActionButtonsBusy(true);
         statusLabel.setText("Generating...");
+        long streamingToken = storyPaneController.startStreaming(StoryPaneController.StreamingMode.APPEND);
+        GenerationCoordinator.GenerationObserver observer = streamingObserver(streamingToken);
         submitStoryTask(context.session(), "Continue", () ->
                 {
                     return generationCoordinator.continueStory(context.story(), operationSettings,
                             (currentBlocks, currentCards) ->
-                                    runAutoCardsForGeneration(context, currentBlocks, currentCards));
+                                    runAutoCardsForGeneration(context, currentBlocks, currentCards),
+                            observer);
                 },
                 result ->
                 {
@@ -3087,6 +3101,7 @@ public class App extends Application
                     {
                         if (result.status() == GenerationCoordinator.ResultStatus.STALE)
                         {
+                            storyPaneController.cancelStreaming(streamingToken);
                             if (canApplyToActiveSession(context.session()))
                             {
                                 statusLabel.setText("Generation was stale; the story was not changed.");
@@ -3095,12 +3110,14 @@ public class App extends Application
                         }
                         if (result.status() == GenerationCoordinator.ResultStatus.EMPTY)
                         {
+                            storyPaneController.cancelStreaming(streamingToken);
                             if (canApplyToActiveSession(context.session()))
                             {
                                 statusLabel.setText("Last generation was empty.");
                             }
                             return;
                         }
+                        storyPaneController.endStreaming(streamingToken);
                         reloadActiveStoryIfCompatible(context.session(), result.updatedStory(), true);
                         if (activeStory != null && activeStory.id().equals(context.story().id()))
                         {
@@ -3118,6 +3135,7 @@ public class App extends Application
                 },
                 error ->
                 {
+                    storyPaneController.cancelStreaming(streamingToken);
                     restoreStoryActionButtonsState();
                     statusLabel.setText("Error: " + taskErrorMessage(error));
                     showError("Ollama generation failed", error);
@@ -3135,11 +3153,14 @@ public class App extends Application
         GenerationSettings operationSettings = buildGenerationSettings();
         setStoryActionButtonsBusy(true);
         statusLabel.setText("Generating...");
+        long streamingToken = storyPaneController.startStreaming(StoryPaneController.StreamingMode.TURN);
+        GenerationCoordinator.GenerationObserver observer = streamingObserver(streamingToken);
         submitStoryTask(context.session(), "Take A Turn", () ->
                 {
                     return generationCoordinator.takeTurn(context.story(), userText, operationSettings,
                             (currentBlocks, currentCards) ->
-                                    runAutoCardsForGeneration(context, currentBlocks, currentCards));
+                                    runAutoCardsForGeneration(context, currentBlocks, currentCards),
+                            observer);
                 },
                 result ->
                 {
@@ -3148,12 +3169,15 @@ public class App extends Application
                         recordOllamaResponse(result.estimatedPromptTokens(), result.ollamaResponse());
                         if (result.status() == GenerationCoordinator.ResultStatus.STALE)
                         {
+                            storyPaneController.cancelStreaming(streamingToken);
                             if (canApplyToActiveSession(context.session()))
                             {
                                 statusLabel.setText("Generation was stale; no response was applied.");
                             }
+                            reloadActiveStoryIfCompatible(context.session(), result.updatedStory(), true);
                             return;
                         }
+                        storyPaneController.endStreaming(streamingToken);
                         reloadActiveStoryIfCompatible(context.session(), result.updatedStory(), true);
                         if (activeStory != null && activeStory.id().equals(context.story().id()))
                         {
@@ -3171,6 +3195,7 @@ public class App extends Application
                 },
                 error ->
                 {
+                    storyPaneController.cancelStreaming(streamingToken);
                     try
                     {
                         reloadActiveStoryIfCompatible(context.session(), null, true);
@@ -3183,6 +3208,30 @@ public class App extends Application
                     statusLabel.setText("Error: " + taskErrorMessage(error));
                     showError("Ollama generation failed", error);
                 });
+    }
+
+    private GenerationCoordinator.GenerationObserver streamingObserver(long streamingToken)
+    {
+        return new GenerationCoordinator.GenerationObserver()
+        {
+            @Override
+            public void onSeedCommitted(Block seedBlock)
+            {
+                storyPaneController.queueStreamingSeed(streamingToken, seedBlock);
+            }
+
+            @Override
+            public void onAttemptStarted(String generatedPrefix)
+            {
+                storyPaneController.queueStreamingAttempt(streamingToken, generatedPrefix);
+            }
+
+            @Override
+            public void onGeneratedText(String chunk)
+            {
+                storyPaneController.queueStreamingText(streamingToken, chunk);
+            }
+        };
     }
 
     private Slider buildIntSlider(int min, int max, int value, int step)

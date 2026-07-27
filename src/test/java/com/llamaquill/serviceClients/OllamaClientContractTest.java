@@ -19,6 +19,7 @@ import java.net.http.HttpHeaders;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -112,14 +113,17 @@ class OllamaClientContractTest
                 {"message":{"role":"assistant","content":"Author's Note: Keep the tense consistent.\\n\\nYou lift"},"done":false}
                 {"message":{"role":"assistant","content":" the sword."},"done":true,"prompt_eval_count":100,"eval_count":3}
                 """;
+        List<String> streamed = new ArrayList<>();
 
         OllamaChatResult result = client.chat(
                 List.of(
                         new ChatMessage("assistant", firstBlock),
                         new ChatMessage("assistant", secondBlock)),
-                GenerationSettings.defaults());
+                GenerationSettings.defaults(),
+                streamed::add);
 
         assertEquals(" sword.", result.content());
+        assertEquals(List.of(" sword."), streamed);
         assertEquals(combinedPrefill.length(), result.strippedAssistantPrefixCharacters());
         assertTrue(result.diagnosticSummary().contains("Assistant prefill removed"));
     }
@@ -131,13 +135,36 @@ class OllamaClientContractTest
         client.streamBody = """
                 {"message":{"role":"assistant","content":" sword."},"done":true}
                 """;
+        List<String> streamed = new ArrayList<>();
 
         OllamaChatResult result = client.chat(
                 List.of(new ChatMessage("assistant", "You lift the")),
-                GenerationSettings.defaults());
+                GenerationSettings.defaults(),
+                streamed::add);
 
         assertEquals(" sword.", result.content());
+        assertEquals(List.of(" sword."), streamed);
         assertEquals(0, result.strippedAssistantPrefixCharacters());
+    }
+
+    @Test
+    void releasesUserEndedResponseChunksWithoutWaitingForTheTerminalEvent() throws Exception
+    {
+        StubOllamaClient client = new StubOllamaClient();
+        client.streamBody = """
+                {"message":{"role":"assistant","content":"One"},"done":false}
+                {"message":{"role":"assistant","content":" two"},"done":false}
+                {"message":{"role":"assistant","content":" three."},"done":true}
+                """;
+        List<String> streamed = new ArrayList<>();
+
+        OllamaChatResult result = client.chat(
+                List.of(new ChatMessage("user", "Continue.")),
+                GenerationSettings.defaults(),
+                streamed::add);
+
+        assertEquals("One two three.", result.content());
+        assertEquals(List.of("One", " two", " three."), streamed);
     }
 
     @Test
@@ -182,12 +209,15 @@ class OllamaClientContractTest
                 {"message":{"role":"assistant","content":"partial"},"done":false}
                 {"error":{"message":"runner crashed"}}
                 """;
+        List<String> streamed = new ArrayList<>();
 
         IOException error = assertThrows(IOException.class, () -> client.chat(
                 List.of(new ChatMessage("user", "Continue.")),
-                GenerationSettings.defaults()));
+                GenerationSettings.defaults(),
+                streamed::add));
 
         assertEquals("Ollama stream error on line 2: runner crashed", error.getMessage());
+        assertEquals(List.of("partial"), streamed);
     }
 
     @Test
