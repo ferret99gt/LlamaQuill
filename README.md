@@ -81,6 +81,12 @@ To run the same clean-build and repeated Windows app-image checks used by CI:
 ./scripts/verify.ps1
 ```
 
+To build the app release image:
+
+```powershell
+mvn -DskipTests -Prelease package
+```
+
 ## Local data and migrations
 
 The default Windows data directory is `%LOCALAPPDATA%\LlamaQuill`, with the database stored as
