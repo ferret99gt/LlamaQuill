@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.llamaquill.model.ChatMessage;
 import com.llamaquill.model.GenerationSettings;
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
 
@@ -44,6 +45,28 @@ class OllamaClientOptionsTest
         assertEquals(0.0, options.getDouble("frequency_penalty"));
         assertEquals(0.0, options.getDouble("repeat_penalty"));
         assertEquals(150, options.getInt("num_predict"));
+    }
+
+    @Test
+    void coalescesConsecutiveAssistantMessagesBeforeSerialization()
+    {
+        OllamaClient client = new OllamaClient("http://localhost:11434", "test-model");
+        JSONArray messages = new JSONObject(client.buildChatPayload(
+                List.of(
+                        new ChatMessage("system", "Write prose."),
+                        new ChatMessage("assistant", "First"),
+                        new ChatMessage("assistant", " continuation."),
+                        new ChatMessage("user", "Go on."),
+                        new ChatMessage("assistant", "Second"),
+                        new ChatMessage("assistant", " continuation.")),
+                settings(false))).getJSONArray("messages");
+
+        assertEquals(4, messages.length());
+        assertEquals("assistant", messages.getJSONObject(1).getString("role"));
+        assertEquals("First continuation.", messages.getJSONObject(1).getString("content"));
+        assertEquals("user", messages.getJSONObject(2).getString("role"));
+        assertEquals("assistant", messages.getJSONObject(3).getString("role"));
+        assertEquals("Second continuation.", messages.getJSONObject(3).getString("content"));
     }
 
     private static GenerationSettings settings(boolean enabled)

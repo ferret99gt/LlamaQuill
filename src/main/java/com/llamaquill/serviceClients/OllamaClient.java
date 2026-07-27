@@ -131,12 +131,8 @@ public class OllamaClient
         sb.append("\"model\":\"").append(Json.escape(model)).append("\"");
         sb.append(",\"messages\":[");
         boolean first = true;
-        for (ChatMessage message : messages == null ? List.<ChatMessage>of() : messages)
+        for (ChatMessage message : normalizeChatMessages(messages))
         {
-            if (message == null || message.role().isBlank() || message.content().isBlank())
-            {
-                continue;
-            }
             if (!first)
             {
                 sb.append(',');
@@ -153,6 +149,31 @@ public class OllamaClient
         appendOptions(sb, settings);
         sb.append('}');
         return sb.toString();
+    }
+
+    private static List<ChatMessage> normalizeChatMessages(List<ChatMessage> messages)
+    {
+        List<ChatMessage> normalized = new ArrayList<>();
+        for (ChatMessage message : messages == null ? List.<ChatMessage>of() : messages)
+        {
+            if (message == null || message.role().isBlank() || message.content().isBlank())
+            {
+                continue;
+            }
+
+            // llama.cpp's assistant-prefill path rejects multiple trailing assistant
+            // messages before the model template has an opportunity to render them.
+            if ("assistant".equals(message.role()) && !normalized.isEmpty()
+                    && "assistant".equals(normalized.getLast().role()))
+            {
+                ChatMessage previous = normalized.getLast();
+                normalized.set(normalized.size() - 1,
+                        new ChatMessage(previous.role(), previous.content() + message.content()));
+                continue;
+            }
+            normalized.add(message);
+        }
+        return normalized;
     }
 
     private void appendOptions(StringBuilder sb, GenerationSettings settings)

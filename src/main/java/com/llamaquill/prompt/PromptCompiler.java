@@ -22,7 +22,6 @@ public class PromptCompiler
     private static final double TOKEN_ESTIMATE_MULTIPLIER = 1.0;
     private static final int RESPONSE_SAFETY_BAND_MULTIPLIER = 2;
     private static final boolean PREFIX_USER_LINES = true;
-    private static final int ASSISTANT_TAIL_MERGE = 3;
     private ToIntFunction<String> tokenEstimator = PromptCompiler::estimateTokensHeuristic;
 
     public void setTokenEstimator(ToIntFunction<String> tokenEstimator)
@@ -294,36 +293,16 @@ public class PromptCompiler
                 continue;
             }
 
-            List<Block> assistantRun = new ArrayList<>();
+            StringBuilder assistantText = new StringBuilder();
             while (index < window.size() && window.get(index).role() == Role.ASSISTANT)
             {
-                assistantRun.add(window.get(index));
+                appendContinuous(assistantText, normalizeBlockText(window.get(index)));
                 index++;
             }
 
-            int mergeCount = Math.max(1, ASSISTANT_TAIL_MERGE);
-            int splitIndex = Math.max(0, assistantRun.size() - mergeCount);
-            for (int i = 0; i < splitIndex; i++)
+            if (assistantText.length() > 0)
             {
-                messages.add(new Message(Role.ASSISTANT, normalizeBlockText(assistantRun.get(i))));
-            }
-
-            StringBuilder tail = new StringBuilder();
-            for (int i = splitIndex; i < assistantRun.size(); i++)
-            {
-                String text = normalizeBlockText(assistantRun.get(i));
-                if (tail.length() == 0)
-                {
-                    tail.append(text);
-                }
-                else
-                {
-                    appendContinuous(tail, text);
-                }
-            }
-            if (tail.length() > 0)
-            {
-                messages.add(new Message(Role.ASSISTANT, tail.toString()));
+                messages.add(new Message(Role.ASSISTANT, assistantText.toString()));
             }
         }
         return messages;
