@@ -1,6 +1,7 @@
 # LlamaQuill
 
 LlamaQuill is a local-first JavaFX desktop client for AI-assisted story writing.
+The current application and database migration version is `0.2.0`.
 
 It is built around:
 - `Ollama` for text generation
@@ -69,8 +70,27 @@ The workflow dropdown in the app scans that folder and exposes available workflo
 From the project root:
 
 ```powershell
-mvn -DskipTests package
+mvn clean verify
 ```
+
+To run the same clean-build and repeated Windows app-image checks used by CI:
+
+```powershell
+./scripts/verify.ps1
+```
+
+## Local data and migrations
+
+The default Windows data directory is `%LOCALAPPDATA%\LlamaQuill`, with the database stored as
+`llamaquill.db`. Set the `LLAMAQUILL_DATA_DIR` environment variable or the
+`llamaquill.dataDir` Java system property to use an explicit portable or test location.
+
+Version `0.2.0` treats an unversioned database as `0.1.0`. On first launch it:
+
+- copies a legacy `./data/llamaquill.db` into the stable data directory when no stable database exists;
+- leaves the original legacy database untouched;
+- creates a timestamped pre-migration backup under the stable `backups` directory;
+- migrates the database to schema version 2 and records the application version in `schema_migrations`.
 
 ## Notes
 

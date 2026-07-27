@@ -1,6 +1,7 @@
 package com.llamaquill.imports;
 
 import com.llamaquill.db.BlockRepository;
+import com.llamaquill.db.Database;
 import com.llamaquill.db.StoryCardRepository;
 import com.llamaquill.db.StoryRepository;
 import com.llamaquill.model.Block;
@@ -20,6 +21,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -28,14 +30,16 @@ import java.util.zip.ZipFile;
 
 public final class AIDungeonImports
 {
+    private final Database database;
     private final StoryRepository storyRepository;
     private final BlockRepository blockRepository;
     private final StoryCardRepository cardRepository;
     private final String defaultSystemPrompt;
 
-    public AIDungeonImports(StoryRepository storyRepository, BlockRepository blockRepository,
+    public AIDungeonImports(Database database, StoryRepository storyRepository, BlockRepository blockRepository,
             StoryCardRepository cardRepository, String defaultSystemPrompt)
     {
+        this.database = database;
         this.storyRepository = storyRepository;
         this.blockRepository = blockRepository;
         this.cardRepository = cardRepository;
@@ -47,20 +51,7 @@ public final class AIDungeonImports
         String raw = Files.readString(path, StandardCharsets.UTF_8);
         JSONArray array = new JSONArray(raw);
 
-        List<StoryCard> existing = cardRepository.listForStory(storyId);
-        Map<String, StoryCard> byTitle = new HashMap<>();
-        for (StoryCard card : existing)
-        {
-            byTitle.put(card.title(), card);
-        }
-
-        if (replaceExisting)
-        {
-            cardRepository.deleteForStory(storyId);
-            byTitle.clear();
-        }
-
-        int imported = 0;
+        List<CardImport> imports = new ArrayList<>();
         for (int i = 0; i < array.length(); i++)
         {
             JSONObject obj = array.optJSONObject(i);
@@ -75,21 +66,47 @@ public final class AIDungeonImports
             {
                 continue;
             }
-
-            StoryCard existingCard = byTitle.get(title);
-            if (existingCard != null)
-            {
-                StoryCard updated = new StoryCard(existingCard.id(), existingCard.storyId(), title, triggers, content, false);
-                cardRepository.update(updated);
-            }
-            else
-            {
-                StoryCard created = new StoryCard(Ids.newId(), storyId, title, triggers, content, false);
-                cardRepository.insert(created);
-            }
-            imported++;
+            imports.add(new CardImport(title, triggers, content));
         }
-        return imported;
+
+        return database.transaction(connection ->
+        {
+            List<StoryCard> existing = cardRepository.listForStory(storyId);
+            Map<String, StoryCard> byTitle = new HashMap<>();
+            for (StoryCard card : existing)
+            {
+                byTitle.put(normalizeTitle(card.title()), card);
+            }
+
+            if (replaceExisting)
+            {
+                cardRepository.deleteForStory(storyId);
+                byTitle.clear();
+            }
+
+            int imported = 0;
+            for (CardImport cardImport : imports)
+            {
+                String key = normalizeTitle(cardImport.title());
+                StoryCard existingCard = byTitle.get(key);
+                if (existingCard != null)
+                {
+                    StoryCard updated = new StoryCard(existingCard.id(), existingCard.storyId(), cardImport.title(),
+                            cardImport.triggers(), cardImport.content(), existingCard.pinned());
+                    cardRepository.update(updated);
+                    byTitle.put(key, updated);
+                }
+                else
+                {
+                    StoryCard created = new StoryCard(Ids.newId(), storyId, cardImport.title(),
+                            cardImport.triggers(), cardImport.content(), false);
+                    cardRepository.insert(created);
+                    byTitle.put(key, created);
+                }
+                imported++;
+            }
+            return imported;
+        });
     }
 
     public Story importAdventure(Path path) throws Exception
@@ -121,15 +138,9 @@ public final class AIDungeonImports
 
             String now = Timestamps.now();
             Story story = new Story(Ids.newId(), title, systemPrompt, plotEssentials, authorNote, now, now);
-            storyRepository.insert(story);
-
             List<StoryCard> cards = parseAdventureStoryCards(state, story.id());
-            for (StoryCard card : cards)
-            {
-                cardRepository.insert(card);
-            }
-
             List<ActionChunk> actionChunks = loadAdventureActions(zipFile);
+            List<Block> importedBlocks = new ArrayList<>();
             int position = 1;
             for (ActionChunk chunk : actionChunks)
             {
@@ -146,11 +157,23 @@ public final class AIDungeonImports
                         continue;
                     }
                     Block block = new Block(Ids.newId(), story.id(), mapped.role(), text, Timestamps.now(), position++);
-                    blockRepository.insert(block);
+                    importedBlocks.add(block);
                 }
             }
 
-            return story;
+            return database.transaction(connection ->
+            {
+                storyRepository.insert(story);
+                for (StoryCard card : cards)
+                {
+                    cardRepository.insert(card);
+                }
+                for (Block block : importedBlocks)
+                {
+                    blockRepository.insert(block);
+                }
+                return story;
+            });
         }
     }
 
@@ -236,7 +259,7 @@ public final class AIDungeonImports
             String triggers = readStoryCardTriggers(obj);
             boolean pinned = obj.optBoolean("pinned", false);
             StoryCard card = new StoryCard(Ids.newId(), storyId, title, triggers, content, pinned);
-            byTitle.put(title.toLowerCase(), card);
+            byTitle.put(normalizeTitle(title), card);
         }
         return new ArrayList<>(byTitle.values());
     }
@@ -355,7 +378,7 @@ public final class AIDungeonImports
 
     private AdventureAction mapAdventureAction(JSONObject action)
     {
-        String type = action.optString("type", "").trim().toLowerCase();
+        String type = action.optString("type", "").trim().toLowerCase(Locale.ROOT);
         String rawText = action.optString("text", "");
         if (rawText.isBlank())
         {
@@ -380,7 +403,7 @@ public final class AIDungeonImports
         }
         if (isSay)
         {
-            String lower = normalized.toLowerCase();
+            String lower = normalized.toLowerCase(Locale.ROOT);
             if (!lower.startsWith("you say"))
             {
                 String payload = normalized;
@@ -398,7 +421,7 @@ public final class AIDungeonImports
         }
         else
         {
-            String lower = normalized.toLowerCase();
+            String lower = normalized.toLowerCase(Locale.ROOT);
             if (!lower.startsWith("you "))
             {
                 normalized = "You " + normalized;
@@ -421,5 +444,14 @@ public final class AIDungeonImports
 
     private record AdventureAction(Role role, String text)
     {
+    }
+
+    private record CardImport(String title, String triggers, String content)
+    {
+    }
+
+    private static String normalizeTitle(String title)
+    {
+        return title.trim().toLowerCase(Locale.ROOT);
     }
 }

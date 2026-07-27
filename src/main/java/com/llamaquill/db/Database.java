@@ -1,188 +1,352 @@
 package com.llamaquill.db;
 
+import com.llamaquill.AppVersion;
+
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
-public final class Database
+public final class Database implements AutoCloseable
 {
-    private static final String DATA_DIR = "data";
-    private static final String DB_FILE = "llamaquill.db";
+    private static final DateTimeFormatter BACKUP_TIMESTAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS");
 
-    private Database()
+    private final AppPaths paths;
+    private final String jdbcUrl;
+    private final ThreadLocal<Connection> transactionConnection = new ThreadLocal<>();
+    private final Set<Connection> openConnections = ConcurrentHashMap.newKeySet();
+    private final AtomicBoolean closed = new AtomicBoolean();
+    private StartupReport startupReport;
+
+    private Database(AppPaths paths)
     {
+        this.paths = Objects.requireNonNull(paths, "paths");
+        jdbcUrl = "jdbc:sqlite:" + paths.databaseFile();
     }
 
-    public static Connection open() throws SQLException
+    public static Database open() throws SQLException
     {
-        ensureDataDir();
-        var url = "jdbc:sqlite:./" + DATA_DIR + "/" + DB_FILE;
-        var connection = DriverManager.getConnection(url);
-        try (Statement stmt = connection.createStatement())
-        {
-            stmt.execute("PRAGMA foreign_keys = ON");
-        }
-        return connection;
+        return open(AppPaths.resolve());
     }
 
-    public static void initialize(Connection connection) throws SQLException
+    public static Database open(AppPaths paths) throws SQLException
     {
-        try (Statement stmt = connection.createStatement())
-        {
-            stmt.execute("""
-                    CREATE TABLE IF NOT EXISTS stories (
-                        id TEXT PRIMARY KEY,
-                        title TEXT NOT NULL,
-                        system_prompt TEXT NOT NULL,
-                        plot_essentials TEXT NOT NULL,
-                        author_note TEXT NOT NULL,
-                        created_at TEXT NOT NULL,
-                        updated_at TEXT NOT NULL
-                    )
-                    """);
-
-            stmt.execute("""
-                    CREATE TABLE IF NOT EXISTS blocks (
-                        id TEXT PRIMARY KEY,
-                        story_id TEXT NOT NULL,
-                        role TEXT NOT NULL CHECK (role IN ('assistant','user','image')),
-                        text TEXT NOT NULL,
-                        created_at TEXT NOT NULL,
-                        position INTEGER NOT NULL,
-                        FOREIGN KEY (story_id) REFERENCES stories(id) ON DELETE CASCADE
-                    )
-                    """);
-
-            stmt.execute("""
-                    CREATE TABLE IF NOT EXISTS images (
-                        id TEXT PRIMARY KEY,
-                        story_id TEXT NOT NULL,
-                        prompt TEXT NOT NULL,
-                        mime_type TEXT NOT NULL,
-                        width INTEGER NOT NULL,
-                        height INTEGER NOT NULL,
-                        workflow_json TEXT NOT NULL,
-                        image_bytes BLOB NOT NULL,
-                        created_at TEXT NOT NULL,
-                        FOREIGN KEY (story_id) REFERENCES stories(id) ON DELETE CASCADE
-                    )
-                    """);
-
-            stmt.execute("""
-                    CREATE TABLE IF NOT EXISTS story_cards (
-                        id TEXT PRIMARY KEY,
-                        story_id TEXT NOT NULL,
-                        title TEXT NOT NULL,
-                        triggers TEXT NOT NULL,
-                        content TEXT NOT NULL,
-                        pinned INTEGER NOT NULL CHECK (pinned IN (0,1)),
-                        FOREIGN KEY (story_id) REFERENCES stories(id) ON DELETE CASCADE
-                    )
-                    """);
-
-            stmt.execute("""
-                    CREATE TABLE IF NOT EXISTS app_settings (
-                        id INTEGER PRIMARY KEY CHECK (id = 1),
-                        ollama_url TEXT NOT NULL,
-                        comfyui_url TEXT NOT NULL DEFAULT 'http://localhost:8000',
-                        selected_model TEXT NOT NULL,
-                        use_ollama_templates INTEGER NOT NULL DEFAULT 0 CHECK (use_ollama_templates IN (0,1)),
-                        context_limit INTEGER NOT NULL,
-                        response_length INTEGER NOT NULL,
-                        min_story_window INTEGER NOT NULL,
-                        story_card_lookback INTEGER NOT NULL,
-                        an_placement INTEGER NOT NULL,
-                        comfy_workflow TEXT NOT NULL DEFAULT 'LlamaQuillChromaHD',
-                        comfy_width INTEGER NOT NULL DEFAULT 720,
-                        comfy_height INTEGER NOT NULL DEFAULT 720,
-                        comfy_batch_size INTEGER NOT NULL DEFAULT 4
-                    )
-                    """);
-
-            stmt.execute("""
-                    CREATE TABLE IF NOT EXISTS model_settings (
-                        model_name TEXT PRIMARY KEY,
-                        active INTEGER NOT NULL CHECK (active IN (0,1)),
-                        temperature REAL NOT NULL,
-                        top_k INTEGER NOT NULL,
-                        top_p REAL NOT NULL,
-                        min_p REAL NOT NULL,
-                        presence_penalty REAL NOT NULL,
-                        frequency_penalty REAL NOT NULL,
-                        repetition_penalty REAL NOT NULL
-                    )
-                    """);
-
-            stmt.execute("""
-                    CREATE TABLE IF NOT EXISTS app_auto_cards (
-                        id INTEGER PRIMARY KEY CHECK (id = 1),
-                        cooldown_turns INTEGER NOT NULL,
-                        max_cards_per_run INTEGER NOT NULL,
-                        candidate_window INTEGER NOT NULL,
-                        card_length_limit INTEGER NOT NULL,
-                        summarize_instead_of_trim INTEGER NOT NULL CHECK (summarize_instead_of_trim IN (0,1)),
-                        use_bulleted_lists INTEGER NOT NULL CHECK (use_bulleted_lists IN (0,1)),
-                        candidate_selection_mode TEXT NOT NULL,
-                        context_mode TEXT NOT NULL
-                    )
-                    """);
-
-            stmt.execute("""
-                    CREATE TABLE IF NOT EXISTS story_auto_cards (
-                        story_id TEXT PRIMARY KEY,
-                        enabled INTEGER NOT NULL CHECK (enabled IN (0,1)),
-                        update_existing INTEGER NOT NULL CHECK (update_existing IN (0,1)),
-                        create_new INTEGER NOT NULL CHECK (create_new IN (0,1)),
-                        pin_new INTEGER NOT NULL CHECK (pin_new IN (0,1)),
-                        preview_first INTEGER NOT NULL CHECK (preview_first IN (0,1)),
-                        FOREIGN KEY (story_id) REFERENCES stories(id) ON DELETE CASCADE
-                    )
-                    """);
-
-            stmt.execute("""
-                    CREATE TABLE IF NOT EXISTS model_auto_cards (
-                        model_name TEXT PRIMARY KEY,
-                        create_prompt TEXT NOT NULL,
-                        update_prompt TEXT NOT NULL,
-                        summarize_prompt TEXT NOT NULL,
-                        max_tokens_create INTEGER NOT NULL,
-                        max_tokens_update INTEGER NOT NULL,
-                        max_tokens_summarize INTEGER NOT NULL,
-                        FOREIGN KEY (model_name) REFERENCES model_settings(model_name) ON DELETE CASCADE
-                    )
-                    """);
-
-            stmt.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_blocks_story_position
-                    ON blocks(story_id, position)
-                    """);
-
-            stmt.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_cards_story_pinned
-                    ON story_cards(story_id, pinned)
-                    """);
-
-            stmt.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_images_story_created
-                    ON images(story_id, created_at)
-                    """);
-
-        }
-    }
-
-    private static void ensureDataDir()
-    {
+        Objects.requireNonNull(paths, "paths");
+        AppPaths.Preparation preparation;
         try
         {
-            Files.createDirectories(Path.of(DATA_DIR));
+            preparation = paths.prepare();
         }
         catch (IOException e)
         {
-            throw new IllegalStateException("Failed to create data directory", e);
+            throw new SQLException("Failed to prepare the LlamaQuill data directory: " + paths.dataDirectory(), e);
+        }
+
+        Database database = new Database(paths);
+        try
+        {
+            DatabaseMigrator.MigrationReport migration = database.withConnection(
+                    connection -> DatabaseMigrator.migrate(connection, paths));
+            database.startupReport = new StartupReport(preparation, migration);
+            return database;
+        }
+        catch (SQLException | RuntimeException e)
+        {
+            database.closeAfterFailedOpen(e);
+            throw e;
+        }
+    }
+
+    public AppPaths paths()
+    {
+        return paths;
+    }
+
+    public StartupReport startupReport()
+    {
+        return startupReport;
+    }
+
+    public Path createBackup() throws SQLException
+    {
+        String timestamp = BACKUP_TIMESTAMP.format(LocalDateTime.now(ZoneOffset.UTC));
+        Path backup = paths.backupDirectory().resolve(
+                "llamaquill-manual-" + AppVersion.CURRENT + "-" + timestamp + ".db");
+        useConnection(connection ->
+        {
+            try (PreparedStatement statement = connection.prepareStatement("VACUUM INTO ?"))
+            {
+                statement.setString(1, backup.toString());
+                statement.execute();
+            }
+        });
+        return backup;
+    }
+
+    public Diagnostics diagnostics() throws SQLException
+    {
+        return withConnection(connection ->
+        {
+            int schemaVersion = scalarInt(connection, "PRAGMA user_version");
+            String integrity = scalarText(connection, "PRAGMA integrity_check");
+            String journalMode = scalarText(connection, "PRAGMA journal_mode");
+            int foreignKeyViolations;
+            try (Statement statement = connection.createStatement();
+                 ResultSet result = statement.executeQuery("PRAGMA foreign_key_check"))
+            {
+                foreignKeyViolations = 0;
+                while (result.next())
+                {
+                    foreignKeyViolations++;
+                }
+            }
+            int orphanImages = scalarInt(connection, """
+                    SELECT COUNT(*)
+                    FROM images image
+                    LEFT JOIN blocks block ON block.role = 'image' AND block.text = image.id
+                    WHERE block.id IS NULL
+                    """);
+            int brokenImageBlocks = scalarInt(connection, """
+                    SELECT COUNT(*)
+                    FROM blocks block
+                    LEFT JOIN images image ON image.id = block.text
+                    WHERE block.role = 'image' AND image.id IS NULL
+                    """);
+            return new Diagnostics(paths.databaseFile(), schemaVersion, integrity, journalMode, foreignKeyViolations,
+                    orphanImages, brokenImageBlocks);
+        });
+    }
+
+    public <T> T withConnection(SqlWork<T> work) throws SQLException
+    {
+        Objects.requireNonNull(work, "work");
+        Connection current = transactionConnection.get();
+        if (current != null)
+        {
+            return work.execute(current);
+        }
+
+        Connection connection = openConnection();
+        try
+        {
+            return work.execute(connection);
+        }
+        finally
+        {
+            closeConnection(connection);
+        }
+    }
+
+    public void useConnection(SqlAction action) throws SQLException
+    {
+        Objects.requireNonNull(action, "action");
+        withConnection(connection ->
+        {
+            action.execute(connection);
+            return null;
+        });
+    }
+
+    public <T> T transaction(SqlWork<T> work) throws SQLException
+    {
+        Objects.requireNonNull(work, "work");
+        Connection current = transactionConnection.get();
+        if (current != null)
+        {
+            return work.execute(current);
+        }
+
+        Connection connection = openConnection();
+        boolean oldAutoCommit = connection.getAutoCommit();
+        try
+        {
+            connection.setAutoCommit(false);
+            transactionConnection.set(connection);
+            T result = work.execute(connection);
+            connection.commit();
+            return result;
+        }
+        catch (SQLException | RuntimeException | Error e)
+        {
+            rollback(connection, e);
+            throw e;
+        }
+        finally
+        {
+            transactionConnection.remove();
+            try
+            {
+                connection.setAutoCommit(oldAutoCommit);
+            }
+            finally
+            {
+                closeConnection(connection);
+            }
+        }
+    }
+
+    public void inTransaction(SqlAction action) throws SQLException
+    {
+        Objects.requireNonNull(action, "action");
+        transaction(connection ->
+        {
+            action.execute(connection);
+            return null;
+        });
+    }
+
+    private Connection openConnection() throws SQLException
+    {
+        if (closed.get())
+        {
+            throw new SQLException("Database is closed.");
+        }
+
+        Connection connection = DriverManager.getConnection(jdbcUrl);
+        boolean configured = false;
+        try
+        {
+            try (Statement statement = connection.createStatement())
+            {
+                statement.execute("PRAGMA foreign_keys = ON");
+                statement.execute("PRAGMA busy_timeout = 5000");
+            }
+            openConnections.add(connection);
+            configured = true;
+            return connection;
+        }
+        finally
+        {
+            if (!configured)
+            {
+                connection.close();
+            }
+        }
+    }
+
+    private void closeConnection(Connection connection) throws SQLException
+    {
+        openConnections.remove(connection);
+        connection.close();
+    }
+
+    private static void rollback(Connection connection, Throwable failure)
+    {
+        try
+        {
+            connection.rollback();
+        }
+        catch (SQLException rollbackFailure)
+        {
+            failure.addSuppressed(rollbackFailure);
+        }
+    }
+
+    private static int scalarInt(Connection connection, String sql) throws SQLException
+    {
+        try (Statement statement = connection.createStatement();
+             ResultSet result = statement.executeQuery(sql))
+        {
+            return result.next() ? result.getInt(1) : 0;
+        }
+    }
+
+    private static String scalarText(Connection connection, String sql) throws SQLException
+    {
+        try (Statement statement = connection.createStatement();
+             ResultSet result = statement.executeQuery(sql))
+        {
+            return result.next() ? result.getString(1) : "";
+        }
+    }
+
+    private void closeAfterFailedOpen(Throwable failure)
+    {
+        try
+        {
+            close();
+        }
+        catch (SQLException closeFailure)
+        {
+            failure.addSuppressed(closeFailure);
+        }
+    }
+
+    @Override
+    public void close() throws SQLException
+    {
+        if (!closed.compareAndSet(false, true))
+        {
+            return;
+        }
+
+        SQLException failure = null;
+        for (Connection connection : openConnections)
+        {
+            try
+            {
+                connection.close();
+            }
+            catch (SQLException e)
+            {
+                if (failure == null)
+                {
+                    failure = e;
+                }
+                else
+                {
+                    failure.addSuppressed(e);
+                }
+            }
+        }
+        openConnections.clear();
+        transactionConnection.remove();
+        if (failure != null)
+        {
+            throw failure;
+        }
+    }
+
+    @FunctionalInterface
+    public interface SqlWork<T>
+    {
+        T execute(Connection connection) throws SQLException;
+    }
+
+    @FunctionalInterface
+    public interface SqlAction
+    {
+        void execute(Connection connection) throws SQLException;
+    }
+
+    public record StartupReport(AppPaths.Preparation pathPreparation,
+            DatabaseMigrator.MigrationReport migration)
+    {
+        public StartupReport
+        {
+            pathPreparation = Objects.requireNonNull(pathPreparation, "pathPreparation");
+            migration = Objects.requireNonNull(migration, "migration");
+        }
+    }
+
+    public record Diagnostics(Path databaseFile, int schemaVersion, String integrityResult,
+            String journalMode, int foreignKeyViolations, int orphanImages, int brokenImageBlocks)
+    {
+        public boolean healthy()
+        {
+            return "ok".equalsIgnoreCase(integrityResult) && foreignKeyViolations == 0
+                    && orphanImages == 0 && brokenImageBlocks == 0;
         }
     }
 }

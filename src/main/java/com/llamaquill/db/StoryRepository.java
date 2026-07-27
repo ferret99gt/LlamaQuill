@@ -2,7 +2,6 @@ package com.llamaquill.db;
 
 import com.llamaquill.model.Story;
 
-import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -12,117 +11,157 @@ import java.util.Optional;
 
 public class StoryRepository
 {
-    private final Connection connection;
+    private final Database database;
 
-    public StoryRepository(Connection connection)
+    public StoryRepository(Database database)
     {
-        this.connection = connection;
+        this.database = database;
     }
 
     public void insert(Story story) throws SQLException
     {
-        try (PreparedStatement stmt = connection.prepareStatement("""
-                INSERT INTO stories (
-                    id, title, system_prompt, plot_essentials, author_note, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                """))
+        database.useConnection(connection ->
         {
-            stmt.setString(1, story.id());
-            stmt.setString(2, story.title());
-            stmt.setString(3, story.systemPrompt());
-            stmt.setString(4, story.plotEssentials());
-            stmt.setString(5, story.authorNote());
-            stmt.setString(6, story.createdAt());
-            stmt.setString(7, story.updatedAt());
-            stmt.executeUpdate();
-        }
+            try (PreparedStatement stmt = connection.prepareStatement("""
+                    INSERT INTO stories (
+                        id, title, system_prompt, plot_essentials, author_note, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """))
+            {
+                stmt.setString(1, story.id());
+                stmt.setString(2, story.title());
+                stmt.setString(3, story.systemPrompt());
+                stmt.setString(4, story.plotEssentials());
+                stmt.setString(5, story.authorNote());
+                stmt.setString(6, story.createdAt());
+                stmt.setString(7, story.updatedAt());
+                stmt.executeUpdate();
+            }
+        });
     }
 
     public void update(Story story) throws SQLException
     {
-        try (PreparedStatement stmt = connection.prepareStatement(
-                """
-                        UPDATE stories
-                        SET title = ?, system_prompt = ?, plot_essentials = ?, author_note = ?, updated_at = ?
-                        WHERE id = ?
-                        """))
+        database.useConnection(connection ->
         {
-            stmt.setString(1, story.title());
-            stmt.setString(2, story.systemPrompt());
-            stmt.setString(3, story.plotEssentials());
-            stmt.setString(4, story.authorNote());
-            stmt.setString(5, story.updatedAt());
-            stmt.setString(6, story.id());
-            stmt.executeUpdate();
-        }
+            try (PreparedStatement stmt = connection.prepareStatement(
+                    """
+                            UPDATE stories
+                            SET title = ?, system_prompt = ?, plot_essentials = ?, author_note = ?, updated_at = ?
+                            WHERE id = ?
+                            """))
+            {
+                stmt.setString(1, story.title());
+                stmt.setString(2, story.systemPrompt());
+                stmt.setString(3, story.plotEssentials());
+                stmt.setString(4, story.authorNote());
+                stmt.setString(5, story.updatedAt());
+                stmt.setString(6, story.id());
+                stmt.executeUpdate();
+            }
+        });
     }
 
     public void updateTitle(String storyId, String title, String updatedAt) throws SQLException
     {
-        try (PreparedStatement stmt = connection.prepareStatement(
-                """
-                        UPDATE stories
-                        SET title = ?, updated_at = ?
-                        WHERE id = ?
-                        """))
+        database.useConnection(connection ->
         {
-            stmt.setString(1, title);
-            stmt.setString(2, updatedAt);
-            stmt.setString(3, storyId);
-            stmt.executeUpdate();
-        }
+            try (PreparedStatement stmt = connection.prepareStatement(
+                    """
+                            UPDATE stories
+                            SET title = ?, updated_at = ?
+                            WHERE id = ?
+                            """))
+            {
+                stmt.setString(1, title);
+                stmt.setString(2, updatedAt);
+                stmt.setString(3, storyId);
+                stmt.executeUpdate();
+            }
+        });
+    }
+
+    public Story touch(String storyId, String updatedAt) throws SQLException
+    {
+        return database.transaction(connection ->
+        {
+            try (PreparedStatement stmt = connection.prepareStatement("""
+                    UPDATE stories
+                    SET updated_at = ?
+                    WHERE id = ?
+                    """))
+            {
+                stmt.setString(1, updatedAt);
+                stmt.setString(2, storyId);
+                if (stmt.executeUpdate() != 1)
+                {
+                    throw new SQLException("Story no longer exists: " + storyId);
+                }
+            }
+            return findById(storyId).orElseThrow(
+                    () -> new SQLException("Story no longer exists: " + storyId));
+        });
     }
 
     public Optional<Story> findById(String id) throws SQLException
     {
-        try (PreparedStatement stmt = connection.prepareStatement(
-                """
-                        SELECT id, title, system_prompt, plot_essentials, author_note, created_at, updated_at
-                        FROM stories WHERE id = ?
-                        """))
+        return database.withConnection(connection ->
         {
-            stmt.setString(1, id);
-            try (ResultSet rs = stmt.executeQuery())
+            try (PreparedStatement stmt = connection.prepareStatement(
+                    """
+                            SELECT id, title, system_prompt, plot_essentials, author_note, created_at, updated_at
+                            FROM stories WHERE id = ?
+                            """))
             {
-                if (!rs.next())
+                stmt.setString(1, id);
+                try (ResultSet rs = stmt.executeQuery())
                 {
-                    return Optional.empty();
+                    if (!rs.next())
+                    {
+                        return Optional.empty();
+                    }
+                    return Optional.of(mapStory(rs));
                 }
-                return Optional.of(mapStory(rs));
             }
-        }
+        });
     }
 
     public List<Story> listAll() throws SQLException
     {
-        try (PreparedStatement stmt = connection.prepareStatement(
-                """
-                        SELECT id, title, system_prompt, plot_essentials, author_note, created_at, updated_at
-                        FROM stories
-                        ORDER BY updated_at DESC
-                        """))
+        return database.withConnection(connection ->
         {
-            try (ResultSet rs = stmt.executeQuery())
+            try (PreparedStatement stmt = connection.prepareStatement(
+                    """
+                            SELECT id, title, system_prompt, plot_essentials, author_note, created_at, updated_at
+                            FROM stories
+                            ORDER BY updated_at DESC
+                            """))
             {
-                List<Story> stories = new ArrayList<>();
-                while (rs.next())
+                try (ResultSet rs = stmt.executeQuery())
                 {
-                    stories.add(mapStory(rs));
+                    List<Story> stories = new ArrayList<>();
+                    while (rs.next())
+                    {
+                        stories.add(mapStory(rs));
+                    }
+                    return stories;
                 }
-                return stories;
             }
-        }
+        });
     }
 
     public void delete(String id) throws SQLException
     {
-        try (PreparedStatement stmt = connection.prepareStatement("""
-                DELETE FROM stories WHERE id = ?
-                """))
+        database.useConnection(connection ->
         {
-            stmt.setString(1, id);
-            stmt.executeUpdate();
-        }
+            try (PreparedStatement stmt = connection.prepareStatement("""
+                    DELETE FROM stories WHERE id = ?
+                    """))
+            {
+                stmt.setString(1, id);
+                stmt.executeUpdate();
+            }
+        });
     }
 
     private Story mapStory(ResultSet rs) throws SQLException

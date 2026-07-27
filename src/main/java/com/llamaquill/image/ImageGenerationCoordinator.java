@@ -3,6 +3,7 @@ package com.llamaquill.image;
 import com.llamaquill.autocards.AutoCards;
 import com.llamaquill.autocards.AutoCardsService;
 import com.llamaquill.db.BlockRepository;
+import com.llamaquill.db.Database;
 import com.llamaquill.db.ImageRepository;
 import com.llamaquill.db.StoryCardRepository;
 import com.llamaquill.db.StoryRepository;
@@ -33,6 +34,7 @@ import java.util.Optional;
 
 public final class ImageGenerationCoordinator
 {
+    private final Database database;
     private final ImageRepository imageRepository;
     private final BlockRepository blockRepository;
     private final StoryRepository storyRepository;
@@ -42,10 +44,11 @@ public final class ImageGenerationCoordinator
     private final Map<String, StoryImage> storyImageCache = new HashMap<>();
     private final Map<String, String> workflowTemplateCache = new HashMap<>();
 
-    public ImageGenerationCoordinator(ImageRepository imageRepository, BlockRepository blockRepository,
+    public ImageGenerationCoordinator(Database database, ImageRepository imageRepository, BlockRepository blockRepository,
             StoryRepository storyRepository, StoryCardRepository storyCardRepository, AutoCardsService autoCardsService,
             ComfyUiClient comfyUiClient)
     {
+        this.database = Objects.requireNonNull(database, "database");
         this.imageRepository = Objects.requireNonNull(imageRepository, "imageRepository");
         this.blockRepository = Objects.requireNonNull(blockRepository, "blockRepository");
         this.storyRepository = Objects.requireNonNull(storyRepository, "storyRepository");
@@ -103,34 +106,50 @@ public final class ImageGenerationCoordinator
                 appSettings.comfyWidth(), appSettings.comfyHeight(), appSettings.comfyBatchSize());
     }
 
-    public ImageMutationResult insertOrReplaceImage(Story story, PendingImage pending, String promptText, Block replaceImageBlock)
+    public ImageMutationResult insertOrReplaceImage(Story story, String expectedHeadId, PendingImage pending, String promptText,
+            Block replaceImageBlock)
             throws SQLException
     {
         Objects.requireNonNull(story, "story");
         Objects.requireNonNull(pending, "pending");
 
         StoryImage storyImage = createStoryImage(story.id(), promptText, pending.mimeType(), pending.workflowJson(), pending.bytes());
-        imageRepository.insert(storyImage);
-        storyImageCache.put(storyImage.id(), storyImage);
-
         boolean replacingImage = replaceImageBlock != null && replaceImageBlock.role() == Role.IMAGE;
-        if (replacingImage)
+        String oldImageId = replacingImage ? replaceImageBlock.text() : null;
+        ImageMutationResult result = database.transaction(connection ->
         {
-            String oldImageId = replaceImageBlock.text();
-            Block updated = new Block(replaceImageBlock.id(), replaceImageBlock.storyId(), Role.IMAGE, storyImage.id(),
-                    Timestamps.now(), replaceImageBlock.position());
-            blockRepository.replaceHead(updated);
-            deleteImageById(oldImageId);
-        }
-        else
-        {
-            int position = blockRepository.nextPosition(story.id());
-            Block imageBlock = new Block(Ids.newId(), story.id(), Role.IMAGE, storyImage.id(), Timestamps.now(), position);
-            blockRepository.insert(imageBlock);
-        }
+            if (!blockRepository.isCurrentHead(story.id(), expectedHeadId))
+            {
+                return new ImageMutationResult(story, null, false, true);
+            }
+            imageRepository.insert(storyImage);
+            if (replacingImage)
+            {
+                Block updated = new Block(replaceImageBlock.id(), replaceImageBlock.storyId(), Role.IMAGE, storyImage.id(),
+                        Timestamps.now(), replaceImageBlock.position());
+                blockRepository.replaceHead(updated);
+                imageRepository.deleteById(oldImageId);
+            }
+            else
+            {
+                int position = blockRepository.nextPosition(story.id());
+                Block imageBlock = new Block(Ids.newId(), story.id(), Role.IMAGE, storyImage.id(), Timestamps.now(), position);
+                blockRepository.insert(imageBlock);
+            }
 
-        Story updatedStory = touchStory(story);
-        return new ImageMutationResult(updatedStory, storyImage, replacingImage);
+            Story updatedStory = touchStory(story);
+            return new ImageMutationResult(updatedStory, storyImage, replacingImage, false);
+        });
+        if (result.stale())
+        {
+            return result;
+        }
+        storyImageCache.put(storyImage.id(), storyImage);
+        if (oldImageId != null)
+        {
+            storyImageCache.remove(oldImageId);
+        }
+        return result;
     }
 
     public ImageMutationResult replaceImageFromRetryHistory(Story story, Block headBlock, String prompt, byte[] bytes,
@@ -140,17 +159,28 @@ public final class ImageGenerationCoordinator
         Objects.requireNonNull(headBlock, "headBlock");
 
         StoryImage storyImage = createStoryImage(story.id(), prompt, mimeType, workflowJson, bytes);
-        imageRepository.insert(storyImage);
-        storyImageCache.put(storyImage.id(), storyImage);
-
         String oldImageId = headBlock.text();
-        Block updated = new Block(headBlock.id(), headBlock.storyId(), Role.IMAGE, storyImage.id(), Timestamps.now(),
-                headBlock.position());
-        blockRepository.replaceHead(updated);
-        deleteImageById(oldImageId);
-
-        Story updatedStory = touchStory(story);
-        return new ImageMutationResult(updatedStory, storyImage, true);
+        ImageMutationResult result = database.transaction(connection ->
+        {
+            if (!blockRepository.isCurrentHead(story.id(), headBlock.id()))
+            {
+                return new ImageMutationResult(story, null, false, true);
+            }
+            imageRepository.insert(storyImage);
+            Block updated = new Block(headBlock.id(), headBlock.storyId(), Role.IMAGE, storyImage.id(), Timestamps.now(),
+                    headBlock.position());
+            blockRepository.replaceHead(updated);
+            imageRepository.deleteById(oldImageId);
+            Story updatedStory = touchStory(story);
+            return new ImageMutationResult(updatedStory, storyImage, true, false);
+        });
+        if (result.stale())
+        {
+            return result;
+        }
+        storyImageCache.put(storyImage.id(), storyImage);
+        storyImageCache.remove(oldImageId);
+        return result;
     }
 
     public StoryImage loadStoryImage(String imageId) throws SQLException
@@ -229,11 +259,7 @@ public final class ImageGenerationCoordinator
 
     private Story touchStory(Story story) throws SQLException
     {
-        String now = Timestamps.now();
-        Story updated = new Story(story.id(), story.title(), story.systemPrompt(), story.plotEssentials(),
-                story.authorNote(), story.createdAt(), now);
-        storyRepository.update(updated);
-        return updated;
+        return storyRepository.touch(story.id(), Timestamps.now());
     }
 
     private static String buildAutoCardsExcerpt(List<Block> currentBlocks, int window)
@@ -258,7 +284,7 @@ public final class ImageGenerationCoordinator
     {
     }
 
-    public record ImageMutationResult(Story updatedStory, StoryImage storyImage, boolean replaced)
+    public record ImageMutationResult(Story updatedStory, StoryImage storyImage, boolean replaced, boolean stale)
     {
     }
 }

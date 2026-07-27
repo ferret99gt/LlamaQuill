@@ -2,7 +2,6 @@ package com.llamaquill.db;
 
 import com.llamaquill.model.AppAutoCardsSettings;
 
-import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -12,72 +11,78 @@ public class AppAutoCardsRepository
 {
     private static final int SETTINGS_ID = 1;
 
-    private final Connection connection;
+    private final Database database;
 
-    public AppAutoCardsRepository(Connection connection)
+    public AppAutoCardsRepository(Database database)
     {
-        this.connection = connection;
+        this.database = database;
     }
 
     public Optional<AppAutoCardsSettings> load() throws SQLException
     {
-        try (PreparedStatement stmt = connection.prepareStatement("""
-                SELECT cooldown_turns, max_cards_per_run,
-                       candidate_window, card_length_limit, summarize_instead_of_trim, use_bulleted_lists,
-                       candidate_selection_mode, context_mode
-                FROM app_auto_cards
-                WHERE id = ?
-                """))
+        return database.withConnection(connection ->
         {
-            stmt.setInt(1, SETTINGS_ID);
-            try (ResultSet rs = stmt.executeQuery())
+            try (PreparedStatement stmt = connection.prepareStatement("""
+                    SELECT cooldown_turns, max_cards_per_run,
+                           candidate_window, card_length_limit, summarize_instead_of_trim, use_bulleted_lists,
+                           candidate_selection_mode, context_mode
+                    FROM app_auto_cards
+                    WHERE id = ?
+                    """))
             {
-                if (!rs.next())
+                stmt.setInt(1, SETTINGS_ID);
+                try (ResultSet rs = stmt.executeQuery())
                 {
-                    return Optional.empty();
+                    if (!rs.next())
+                    {
+                        return Optional.empty();
+                    }
+                    return Optional.of(new AppAutoCardsSettings(
+                            rs.getInt("cooldown_turns"),
+                            rs.getInt("max_cards_per_run"),
+                            rs.getInt("candidate_window"),
+                            rs.getInt("card_length_limit"),
+                            rs.getInt("summarize_instead_of_trim") == 1,
+                            rs.getInt("use_bulleted_lists") == 1,
+                            rs.getString("candidate_selection_mode"),
+                            rs.getString("context_mode")));
                 }
-                return Optional.of(new AppAutoCardsSettings(
-                        rs.getInt("cooldown_turns"),
-                        rs.getInt("max_cards_per_run"),
-                        rs.getInt("candidate_window"),
-                        rs.getInt("card_length_limit"),
-                        rs.getInt("summarize_instead_of_trim") == 1,
-                        rs.getInt("use_bulleted_lists") == 1,
-                        rs.getString("candidate_selection_mode"),
-                        rs.getString("context_mode")));
             }
-        }
+        });
     }
 
     public void save(AppAutoCardsSettings settings) throws SQLException
     {
-        try (PreparedStatement stmt = connection.prepareStatement("""
-                INSERT INTO app_auto_cards (
-                    id, cooldown_turns, max_cards_per_run,
-                    candidate_window, card_length_limit, summarize_instead_of_trim, use_bulleted_lists,
-                    candidate_selection_mode, context_mode
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    cooldown_turns = excluded.cooldown_turns,
-                    max_cards_per_run = excluded.max_cards_per_run,
-                    candidate_window = excluded.candidate_window,
-                    card_length_limit = excluded.card_length_limit,
-                    summarize_instead_of_trim = excluded.summarize_instead_of_trim,
-                    use_bulleted_lists = excluded.use_bulleted_lists,
-                    candidate_selection_mode = excluded.candidate_selection_mode,
-                    context_mode = excluded.context_mode
-                """))
+        database.useConnection(connection ->
         {
-            stmt.setInt(1, SETTINGS_ID);
-            stmt.setInt(2, settings.cooldownTurns());
-            stmt.setInt(3, settings.maxCardsPerRun());
-            stmt.setInt(4, settings.candidateWindow());
-            stmt.setInt(5, settings.cardLengthLimit());
-            stmt.setInt(6, settings.summarizeInsteadOfTrim() ? 1 : 0);
-            stmt.setInt(7, settings.useBulletedLists() ? 1 : 0);
-            stmt.setString(8, settings.candidateSelectionMode());
-            stmt.setString(9, settings.contextMode());
-            stmt.executeUpdate();
-        }
+            try (PreparedStatement stmt = connection.prepareStatement("""
+                    INSERT INTO app_auto_cards (
+                        id, cooldown_turns, max_cards_per_run,
+                        candidate_window, card_length_limit, summarize_instead_of_trim, use_bulleted_lists,
+                        candidate_selection_mode, context_mode
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        cooldown_turns = excluded.cooldown_turns,
+                        max_cards_per_run = excluded.max_cards_per_run,
+                        candidate_window = excluded.candidate_window,
+                        card_length_limit = excluded.card_length_limit,
+                        summarize_instead_of_trim = excluded.summarize_instead_of_trim,
+                        use_bulleted_lists = excluded.use_bulleted_lists,
+                        candidate_selection_mode = excluded.candidate_selection_mode,
+                        context_mode = excluded.context_mode
+                    """))
+            {
+                stmt.setInt(1, SETTINGS_ID);
+                stmt.setInt(2, settings.cooldownTurns());
+                stmt.setInt(3, settings.maxCardsPerRun());
+                stmt.setInt(4, settings.candidateWindow());
+                stmt.setInt(5, settings.cardLengthLimit());
+                stmt.setInt(6, settings.summarizeInsteadOfTrim() ? 1 : 0);
+                stmt.setInt(7, settings.useBulletedLists() ? 1 : 0);
+                stmt.setString(8, settings.candidateSelectionMode());
+                stmt.setString(9, settings.contextMode());
+                stmt.executeUpdate();
+            }
+        });
     }
 }
