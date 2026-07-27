@@ -129,8 +129,10 @@ public class OllamaClient implements AutoCloseable
             throw new IllegalArgumentException("Generation settings are required.");
         }
         String requestedModel = requireModel(settings.modelName());
-        return executeStreaming(settings.ollamaHost(), "/api/chat", requestedModel,
-                buildChatPayload(messages, settings));
+        List<ChatMessage> normalizedMessages = normalizeChatMessages(messages);
+        OllamaChatResult response = executeStreaming(settings.ollamaHost(), "/api/chat", requestedModel,
+                buildChatPayloadFromNormalized(normalizedMessages, settings));
+        return removeReturnedAssistantPrefill(response, normalizedMessages);
     }
 
     private OllamaChatResult executeStreaming(String baseHost, String path, String requestedModel, String payload)
@@ -203,16 +205,22 @@ public class OllamaClient implements AutoCloseable
                 longMetadata(terminalEvent, "total_duration"),
                 longMetadata(terminalEvent, "load_duration"),
                 longMetadata(terminalEvent, "prompt_eval_duration"),
-                longMetadata(terminalEvent, "eval_duration"));
+                longMetadata(terminalEvent, "eval_duration"),
+                0);
     }
 
     String buildChatPayload(List<ChatMessage> messages, GenerationSettings settings)
+    {
+        return buildChatPayloadFromNormalized(normalizeChatMessages(messages), settings);
+    }
+
+    private String buildChatPayloadFromNormalized(List<ChatMessage> normalizedMessages, GenerationSettings settings)
     {
         JSONObject payload = new JSONObject();
         payload.put("model", requireModel(settings.modelName()));
 
         JSONArray messageArray = new JSONArray();
-        for (ChatMessage message : normalizeChatMessages(messages))
+        for (ChatMessage message : normalizedMessages)
         {
             JSONObject serialized = new JSONObject();
             serialized.put("role", message.role());
@@ -229,6 +237,68 @@ public class OllamaClient implements AutoCloseable
         payload.put("stream", true);
         payload.put("options", buildOptions(settings));
         return payload.toString();
+    }
+
+    private static OllamaChatResult removeReturnedAssistantPrefill(OllamaChatResult response,
+            List<ChatMessage> messages)
+    {
+        if (response == null || messages.isEmpty())
+        {
+            return response;
+        }
+        ChatMessage lastMessage = messages.getLast();
+        if (!"assistant".equals(lastMessage.role()) || lastMessage.content().isEmpty())
+        {
+            return response;
+        }
+
+        PrefixRemoval removal = removeExactPrefix(response.content(), lastMessage.content());
+        if (removal.removedCharacters() == 0)
+        {
+            return response;
+        }
+        return response.withContent(removal.content(), removal.removedCharacters());
+    }
+
+    private static PrefixRemoval removeExactPrefix(String response, String assistantPrefix)
+    {
+        String content = response == null ? "" : response;
+        for (String prefix : exactPrefixVariants(assistantPrefix))
+        {
+            if (!prefix.isEmpty() && content.startsWith(prefix))
+            {
+                return new PrefixRemoval(content.substring(prefix.length()), prefix.length());
+            }
+        }
+        return new PrefixRemoval(content, 0);
+    }
+
+    private static List<String> exactPrefixVariants(String value)
+    {
+        String original = value == null ? "" : value;
+        String trimmed = original.trim();
+        String normalized = normalizeLineEndings(original);
+        String normalizedTrimmed = normalized.trim();
+        List<String> variants = new ArrayList<>(4);
+        addPrefixVariant(variants, original);
+        addPrefixVariant(variants, trimmed);
+        addPrefixVariant(variants, normalized);
+        addPrefixVariant(variants, normalizedTrimmed);
+        variants.sort((left, right) -> Integer.compare(right.length(), left.length()));
+        return variants;
+    }
+
+    private static void addPrefixVariant(List<String> variants, String value)
+    {
+        if (value != null && !value.isEmpty() && !variants.contains(value))
+        {
+            variants.add(value);
+        }
+    }
+
+    private static String normalizeLineEndings(String value)
+    {
+        return value.replace("\r\n", "\n").replace('\r', '\n');
     }
 
     private static List<ChatMessage> normalizeChatMessages(List<ChatMessage> messages)
@@ -619,6 +689,10 @@ public class OllamaClient implements AutoCloseable
     }
 
     private record ChatStreamEvent(String content, boolean done, JSONObject json)
+    {
+    }
+
+    private record PrefixRemoval(String content, int removedCharacters)
     {
     }
 }

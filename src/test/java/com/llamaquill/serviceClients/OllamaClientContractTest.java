@@ -95,9 +95,83 @@ class OllamaClientContractTest
         assertEquals(500_000_000L, result.loadDurationNanos());
         assertEquals(750_000_000L, result.promptEvalDurationNanos());
         assertEquals(1_250_000_000L, result.evalDurationNanos());
+        assertEquals(0, result.strippedAssistantPrefixCharacters());
         assertEquals("POST", client.lastStreamRequest.method());
         assertEquals("/api/chat", client.lastStreamRequest.uri().getPath());
         assertEquals("application/json", client.lastStreamRequest.headers().firstValue("Content-Type").orElseThrow());
+    }
+
+    @Test
+    void removesAnExactReturnedAssistantPrefillAndPreservesOnlyTheGeneratedSuffix() throws Exception
+    {
+        StubOllamaClient client = new StubOllamaClient();
+        String firstBlock = "Author's Note: Keep the tense consistent.\n\nYou lift";
+        String secondBlock = " the";
+        String combinedPrefill = firstBlock + secondBlock;
+        client.streamBody = """
+                {"message":{"role":"assistant","content":"Author's Note: Keep the tense consistent.\\n\\nYou lift"},"done":false}
+                {"message":{"role":"assistant","content":" the sword."},"done":true,"prompt_eval_count":100,"eval_count":3}
+                """;
+
+        OllamaChatResult result = client.chat(
+                List.of(
+                        new ChatMessage("assistant", firstBlock),
+                        new ChatMessage("assistant", secondBlock)),
+                GenerationSettings.defaults());
+
+        assertEquals(" sword.", result.content());
+        assertEquals(combinedPrefill.length(), result.strippedAssistantPrefixCharacters());
+        assertTrue(result.diagnosticSummary().contains("Assistant prefill removed"));
+    }
+
+    @Test
+    void leavesSuffixOnlyAssistantResponsesUntouched() throws Exception
+    {
+        StubOllamaClient client = new StubOllamaClient();
+        client.streamBody = """
+                {"message":{"role":"assistant","content":" sword."},"done":true}
+                """;
+
+        OllamaChatResult result = client.chat(
+                List.of(new ChatMessage("assistant", "You lift the")),
+                GenerationSettings.defaults());
+
+        assertEquals(" sword.", result.content());
+        assertEquals(0, result.strippedAssistantPrefixCharacters());
+    }
+
+    @Test
+    void recognizesTemplateTrimmedAssistantPrefill()
+            throws Exception
+    {
+        StubOllamaClient client = new StubOllamaClient();
+        client.streamBody = """
+                {"message":{"role":"assistant","content":"You wait. Then the bell rings."},"done":true}
+                """;
+
+        OllamaChatResult result = client.chat(
+                List.of(new ChatMessage("assistant", "\r\nYou wait.\r\n")),
+                GenerationSettings.defaults());
+
+        assertEquals(" Then the bell rings.", result.content());
+        assertEquals("You wait.".length(), result.strippedAssistantPrefixCharacters());
+    }
+
+    @Test
+    void neverStripsContentBasedOnAUserMessage()
+            throws Exception
+    {
+        StubOllamaClient client = new StubOllamaClient();
+        client.streamBody = """
+                {"message":{"role":"assistant","content":"Repeat this exactly, then answer."},"done":true}
+                """;
+
+        OllamaChatResult result = client.chat(
+                List.of(new ChatMessage("user", "Repeat this exactly, then answer.")),
+                GenerationSettings.defaults());
+
+        assertEquals("Repeat this exactly, then answer.", result.content());
+        assertEquals(0, result.strippedAssistantPrefixCharacters());
     }
 
     @Test

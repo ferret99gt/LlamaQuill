@@ -195,7 +195,8 @@ class GenerationCoordinatorConcurrencyTest
         public OllamaChatResult chat(List<ChatMessage> messages, GenerationSettings settings)
                 throws IOException, InterruptedException
         {
-            return new OllamaChatResult(settings.modelName(), respond(), 10, 5, "stop", 1, 0, 1, 1);
+            return new OllamaChatResult(settings.modelName(), respond(), 10, 5, "stop",
+                    1, 0, 1, 1, 0);
         }
 
         private String respond() throws InterruptedException

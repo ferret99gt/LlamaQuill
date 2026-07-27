@@ -6,7 +6,8 @@ import java.util.Locale;
 public record OllamaChatResult(String model, String content,
         int promptEvalCount, int evalCount, String doneReason,
         long totalDurationNanos, long loadDurationNanos,
-        long promptEvalDurationNanos, long evalDurationNanos)
+        long promptEvalDurationNanos, long evalDurationNanos,
+        int strippedAssistantPrefixCharacters)
 {
     public OllamaChatResult
     {
@@ -19,6 +20,7 @@ public record OllamaChatResult(String model, String content,
         loadDurationNanos = Math.max(-1L, loadDurationNanos);
         promptEvalDurationNanos = Math.max(-1L, promptEvalDurationNanos);
         evalDurationNanos = Math.max(-1L, evalDurationNanos);
+        strippedAssistantPrefixCharacters = Math.max(0, strippedAssistantPrefixCharacters);
     }
 
     public String diagnosticSummary()
@@ -50,7 +52,21 @@ public record OllamaChatResult(String model, String content,
         {
             append(summary, "Generation", formatDuration(evalDurationNanos));
         }
+        if (strippedAssistantPrefixCharacters > 0)
+        {
+            append(summary, "Assistant prefill removed",
+                    strippedAssistantPrefixCharacters + " characters");
+        }
         return summary.toString();
+    }
+
+    public OllamaChatResult withContent(String updatedContent, int strippedPrefixCharacters)
+    {
+        return new OllamaChatResult(model, updatedContent,
+                promptEvalCount, evalCount, doneReason,
+                totalDurationNanos, loadDurationNanos,
+                promptEvalDurationNanos, evalDurationNanos,
+                strippedPrefixCharacters);
     }
 
     private static void appendCount(StringBuilder target, String label, int value)
