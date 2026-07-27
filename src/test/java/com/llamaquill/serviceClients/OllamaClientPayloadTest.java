@@ -13,7 +13,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 import java.util.Set;
 
-class OllamaClientOptionsTest
+class OllamaClientPayloadTest
 {
     @Test
     void omitsDisabledModelOptionsSoOllamaDefaultsCanApply()
@@ -67,6 +67,22 @@ class OllamaClientOptionsTest
         assertEquals("user", messages.getJSONObject(2).getString("role"));
         assertEquals("assistant", messages.getJSONObject(3).getString("role"));
         assertEquals("Second continuation.", messages.getJSONObject(3).getString("content"));
+    }
+
+    @Test
+    void serializesMessageContentWithoutHandWrittenEscaping()
+    {
+        String content = "Quotes: \"hello\"; slash: \\\\; lines:\r\nnext\t\u2603\u0001";
+        OllamaClient client = new OllamaClient("http://localhost:11434", "model/with:\"quotes\"");
+
+        JSONObject payload = new JSONObject(client.buildChatPayload(
+                List.of(new ChatMessage("user", content)),
+                settings(false)));
+
+        assertEquals("model/with:\"quotes\"", payload.getString("model"));
+        assertEquals(content, payload.getJSONArray("messages").getJSONObject(0).getString("content"));
+        assertFalse(payload.getBoolean("think"));
+        assertTrue(payload.getBoolean("stream"));
     }
 
     private static GenerationSettings settings(boolean enabled)

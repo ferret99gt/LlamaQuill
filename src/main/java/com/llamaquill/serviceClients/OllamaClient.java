@@ -2,9 +2,13 @@ package com.llamaquill.serviceClients;
 
 import com.llamaquill.model.ChatMessage;
 import com.llamaquill.model.GenerationSettings;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -19,6 +23,8 @@ public class OllamaClient
 {
     public static final String DEFAULT_HOST = "http://localhost:11434";
     public static final String DEFAULT_MODEL = "hf.co/LatitudeGames/Muse-12B-GGUF:BF16";
+    private static final int MAX_ERROR_BODY_BYTES = 4096;
+    private static final int MAX_ERROR_MESSAGE_CHARS = 1000;
 
     private final HttpClient client;
     private String host;
@@ -66,89 +72,96 @@ public class OllamaClient
     {
         HttpRequest request = HttpRequest.newBuilder().uri(URI.create(host + "/api/tags")).timeout(Duration.ofSeconds(10)).GET()
                 .build();
-        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> response = sendString(request);
         if (response.statusCode() < 200 || response.statusCode() >= 300)
         {
-            throw new IOException("Ollama returned status " + response.statusCode());
+            throw httpError("/api/tags", response.statusCode(), response.body());
         }
-        return Json.extractStringArray(response.body(), "name");
+        return parseModelList(response.body());
     }
 
     public String chat(List<ChatMessage> messages, GenerationSettings settings) throws IOException, InterruptedException
     {
-        return executeStreaming("/api/chat", buildChatPayload(messages, settings), "content");
+        return executeStreaming("/api/chat", buildChatPayload(messages, settings));
     }
 
-    private String executeStreaming(String path, String payload, String fieldName) throws IOException, InterruptedException
+    private String executeStreaming(String path, String payload) throws IOException, InterruptedException
     {
         lastPromptEvalCount = -1;
         HttpRequest request = HttpRequest.newBuilder().uri(URI.create(host + path)).timeout(Duration.ofMinutes(2))
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8)).build();
 
-        HttpResponse<java.io.InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+        HttpResponse<InputStream> response = sendStream(request);
         if (response.statusCode() < 200 || response.statusCode() >= 300)
         {
-            throw new IOException("Ollama returned status " + response.statusCode());
+            try (InputStream body = response.body())
+            {
+                throw httpError(path, response.statusCode(), readErrorBody(body));
+            }
+        }
+        if (response.body() == null)
+        {
+            throw new IOException("Ollama returned an empty response body for " + path);
         }
 
         StringBuilder sb = new StringBuilder();
-        String doneLine = null;
+        JSONObject terminalEvent = null;
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(response.body(), StandardCharsets.UTF_8)))
         {
             String line;
+            int lineNumber = 0;
             while ((line = reader.readLine()) != null)
             {
-                String chunk = Json.extractStringField(line, fieldName);
-                if (chunk != null)
+                lineNumber++;
+                if (line.isBlank())
                 {
-                    sb.append(chunk);
+                    continue;
                 }
-                if (Json.isDone(line))
+
+                ChatStreamEvent event = parseChatStreamEvent(line, lineNumber);
+                sb.append(event.content());
+                if (event.done())
                 {
-                    doneLine = line;
+                    terminalEvent = event.json();
                     break;
                 }
             }
         }
-        if (doneLine != null)
+
+        if (terminalEvent == null)
         {
-            Integer promptEvalCount = Json.extractIntField(doneLine, "prompt_eval_count");
-            if (promptEvalCount != null && promptEvalCount > 0)
-            {
-                lastPromptEvalCount = promptEvalCount;
-            }
-            System.out.println("Ollama final response:");
-            System.out.println(doneLine);
+            throw new IOException("Ollama stream for " + path + " ended before a terminal done response");
         }
+
+        Object promptEvalCount = terminalEvent.opt("prompt_eval_count");
+        if (promptEvalCount instanceof Number number && number.intValue() > 0)
+        {
+            lastPromptEvalCount = number.intValue();
+        }
+        System.out.println("Ollama final response:");
+        System.out.println(terminalEvent);
         return sb.toString();
     }
 
     String buildChatPayload(List<ChatMessage> messages, GenerationSettings settings)
     {
-        StringBuilder sb = new StringBuilder();
-        sb.append('{');
-        sb.append("\"model\":\"").append(Json.escape(model)).append("\"");
-        sb.append(",\"messages\":[");
-        boolean first = true;
+        JSONObject payload = new JSONObject();
+        payload.put("model", model == null ? "" : model);
+
+        JSONArray messageArray = new JSONArray();
         for (ChatMessage message : normalizeChatMessages(messages))
         {
-            if (!first)
-            {
-                sb.append(',');
-            }
-            first = false;
-            sb.append('{');
-            sb.append("\"role\":\"").append(Json.escape(message.role())).append("\"");
-            sb.append(",\"content\":\"").append(Json.escape(message.content())).append("\"");
-            sb.append('}');
+            JSONObject serialized = new JSONObject();
+            serialized.put("role", message.role());
+            serialized.put("content", message.content());
+            messageArray.put(serialized);
         }
-        sb.append(']');
-        sb.append(",\"think\":false");
-        sb.append(",\"stream\":true");
-        appendOptions(sb, settings);
-        sb.append('}');
-        return sb.toString();
+        payload.put("messages", messageArray);
+        payload.put("think", false);
+        payload.put("stream", true);
+        payload.put("options", buildOptions(settings));
+        return payload.toString();
     }
 
     private static List<ChatMessage> normalizeChatMessages(List<ChatMessage> messages)
@@ -176,267 +189,202 @@ public class OllamaClient
         return normalized;
     }
 
-    private void appendOptions(StringBuilder sb, GenerationSettings settings)
+    private JSONObject buildOptions(GenerationSettings settings)
     {
-        sb.append(",\"options\":{");
-        sb.append("\"num_ctx\":").append(settings.contextLimit());
+        JSONObject options = new JSONObject();
+        options.put("num_ctx", settings.contextLimit());
         if (settings.temperatureEnabled())
         {
-            sb.append(",\"temperature\":").append(settings.temperature());
+            options.put("temperature", settings.temperature());
         }
         if (settings.topKEnabled())
         {
-            sb.append(",\"top_k\":").append(settings.topK());
+            options.put("top_k", settings.topK());
         }
         if (settings.topPEnabled())
         {
-            sb.append(",\"top_p\":").append(settings.topP());
+            options.put("top_p", settings.topP());
         }
         if (settings.minPEnabled())
         {
-            sb.append(",\"min_p\":").append(settings.minP());
+            options.put("min_p", settings.minP());
         }
         if (settings.presencePenaltyEnabled())
         {
-            sb.append(",\"presence_penalty\":").append(settings.presencePenalty());
+            options.put("presence_penalty", settings.presencePenalty());
         }
         if (settings.frequencyPenaltyEnabled())
         {
-            sb.append(",\"frequency_penalty\":").append(settings.frequencyPenalty());
+            options.put("frequency_penalty", settings.frequencyPenalty());
         }
         if (settings.repetitionPenaltyEnabled())
         {
-            sb.append(",\"repeat_penalty\":").append(settings.repetitionPenalty());
+            options.put("repeat_penalty", settings.repetitionPenalty());
         }
         if (settings.responseLengthEnabled())
         {
-            sb.append(",\"num_predict\":").append(settings.responseLength());
+            options.put("num_predict", settings.responseLength());
         }
-        sb.append('}');
+        return options;
     }
 
-    private static final class Json
+    HttpResponse<String> sendString(HttpRequest request) throws IOException, InterruptedException
     {
-        private Json()
+        return client.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+    }
+
+    HttpResponse<InputStream> sendStream(HttpRequest request) throws IOException, InterruptedException
+    {
+        return client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+    }
+
+    private static List<String> parseModelList(String body) throws IOException
+    {
+        JSONObject root = parseObject(body, "Ollama /api/tags response");
+        JSONArray models = root.optJSONArray("models");
+        if (models == null)
         {
+            throw new IOException("Invalid Ollama /api/tags response: missing models array");
         }
 
-        static String escape(String value)
+        List<String> names = new ArrayList<>(models.length());
+        for (int i = 0; i < models.length(); i++)
         {
-            if (value == null)
+            JSONObject entry = models.optJSONObject(i);
+            if (entry == null)
             {
-                return "";
+                throw new IOException("Invalid Ollama /api/tags response: models[" + i + "] is not an object");
             }
-            StringBuilder sb = new StringBuilder(value.length() + 16);
-            for (int i = 0; i < value.length(); i++)
+            Object nameValue = entry.opt("name");
+            if (!(nameValue instanceof String name) || name.isBlank())
             {
-                char c = value.charAt(i);
-                switch (c)
-                {
-                case '"' -> sb.append("\\\"");
-                case '\\' -> sb.append("\\\\");
-                case '\n' -> sb.append("\\n");
-                case '\r' -> sb.append("\\r");
-                case '\t' -> sb.append("\\t");
-                default -> sb.append(c);
-                }
+                throw new IOException("Invalid Ollama /api/tags response: models[" + i + "] has no name");
             }
-            return sb.toString();
+            names.add(name);
+        }
+        return List.copyOf(names);
+    }
+
+    private static ChatStreamEvent parseChatStreamEvent(String line, int lineNumber) throws IOException
+    {
+        JSONObject event = parseObject(line, "Ollama stream line " + lineNumber);
+        String error = extractErrorMessage(event);
+        if (!error.isBlank())
+        {
+            throw new IOException("Ollama stream error on line " + lineNumber + ": " + error);
         }
 
-        static String extractStringField(String jsonLine, String field)
+        Object doneValue = event.opt("done");
+        if (!(doneValue instanceof Boolean done))
         {
-            String key = "\"" + field + "\"";
-            int idx = jsonLine.indexOf(key);
-            if (idx < 0)
-            {
-                return null;
-            }
-            int colon = jsonLine.indexOf(':', idx + key.length());
-            if (colon < 0)
-            {
-                return null;
-            }
-            int start = jsonLine.indexOf('"', colon + 1);
-            if (start < 0)
-            {
-                return null;
-            }
-            int i = start + 1;
-            StringBuilder sb = new StringBuilder();
-            boolean escaping = false;
-            while (i < jsonLine.length())
-            {
-                char c = jsonLine.charAt(i++);
-                if (escaping)
-                {
-                    switch (c)
-                    {
-                    case 'n' -> sb.append('\n');
-                    case 'r' -> sb.append('\r');
-                    case 't' -> sb.append('\t');
-                    case '"' -> sb.append('"');
-                    case '\\' -> sb.append('\\');
-                    case 'u' -> {
-                        if (i + 3 < jsonLine.length())
-                        {
-                            String hex = jsonLine.substring(i, i + 4);
-                            try
-                            {
-                                sb.append((char) Integer.parseInt(hex, 16));
-                            }
-                            catch (NumberFormatException ignored)
-                            {
-                                sb.append("\\u").append(hex);
-                            }
-                            i += 4;
-                        }
-                    }
-                    default -> sb.append(c);
-                    }
-                    escaping = false;
-                    continue;
-                }
-                if (c == '\\')
-                {
-                    escaping = true;
-                    continue;
-                }
-                if (c == '"')
-                {
-                    break;
-                }
-                sb.append(c);
-            }
-            return sb.toString();
+            throw new IOException("Invalid Ollama stream line " + lineNumber + ": missing boolean done field");
         }
 
-        static boolean isDone(String jsonLine)
+        String content = "";
+        JSONObject message = event.optJSONObject("message");
+        if (message == null)
         {
-            return jsonLine.contains("\"done\":true");
+            if (!done)
+            {
+                throw new IOException("Invalid Ollama stream line " + lineNumber + ": missing message object");
+            }
         }
+        else
+        {
+            Object contentValue = message.opt("content");
+            if (contentValue == null || contentValue == JSONObject.NULL)
+            {
+                if (!done)
+                {
+                    throw new IOException("Invalid Ollama stream line " + lineNumber + ": missing message content");
+                }
+            }
+            else if (contentValue instanceof String text)
+            {
+                content = text;
+            }
+            else
+            {
+                throw new IOException("Invalid Ollama stream line " + lineNumber + ": message content is not text");
+            }
+        }
+        return new ChatStreamEvent(content, done, event);
+    }
 
-        static Integer extractIntField(String jsonLine, String field)
+    private static JSONObject parseObject(String body, String context) throws IOException
+    {
+        try
         {
-            if (jsonLine == null || jsonLine.isBlank() || field == null || field.isBlank())
-            {
-                return null;
-            }
-            String key = "\"" + field + "\"";
-            int idx = jsonLine.indexOf(key);
-            if (idx < 0)
-            {
-                return null;
-            }
-            int colon = jsonLine.indexOf(':', idx + key.length());
-            if (colon < 0)
-            {
-                return null;
-            }
-            int i = colon + 1;
-            while (i < jsonLine.length() && Character.isWhitespace(jsonLine.charAt(i)))
-            {
-                i++;
-            }
-            int start = i;
-            if (i < jsonLine.length() && (jsonLine.charAt(i) == '-' || jsonLine.charAt(i) == '+'))
-            {
-                i++;
-            }
-            while (i < jsonLine.length() && Character.isDigit(jsonLine.charAt(i)))
-            {
-                i++;
-            }
-            if (i <= start)
-            {
-                return null;
-            }
-            try
-            {
-                return Integer.parseInt(jsonLine.substring(start, i));
-            }
-            catch (NumberFormatException e)
-            {
-                return null;
-            }
+            return new JSONObject(body == null ? "" : body);
         }
+        catch (JSONException e)
+        {
+            throw new IOException("Invalid " + context + " JSON: " + e.getMessage(), e);
+        }
+    }
 
-        static List<String> extractStringArray(String json, String fieldName)
+    private static IOException httpError(String path, int statusCode, String body)
+    {
+        String detail = extractErrorMessage(body);
+        String suffix = detail.isBlank() ? "" : ": " + truncate(detail, MAX_ERROR_MESSAGE_CHARS);
+        return new IOException("Ollama returned status " + statusCode + " for " + path + suffix);
+    }
+
+    private static String extractErrorMessage(String body)
+    {
+        if (body == null || body.isBlank())
         {
-            List<String> results = new ArrayList<>();
-            if (json == null || json.isEmpty())
-            {
-                return results;
-            }
-            String key = "\"" + fieldName + "\"";
-            int idx = 0;
-            while (idx < json.length())
-            {
-                int keyIndex = json.indexOf(key, idx);
-                if (keyIndex < 0)
-                {
-                    break;
-                }
-                int colon = json.indexOf(':', keyIndex + key.length());
-                if (colon < 0)
-                {
-                    break;
-                }
-                int start = json.indexOf('"', colon + 1);
-                if (start < 0)
-                {
-                    break;
-                }
-                int i = start + 1;
-                StringBuilder sb = new StringBuilder();
-                boolean escaping = false;
-                while (i < json.length())
-                {
-                    char c = json.charAt(i++);
-                    if (escaping)
-                    {
-                        switch (c)
-                        {
-                        case 'n' -> sb.append('\n');
-                        case 'r' -> sb.append('\r');
-                        case 't' -> sb.append('\t');
-                        case '"' -> sb.append('"');
-                        case '\\' -> sb.append('\\');
-                        case 'u' -> {
-                            if (i + 3 < json.length())
-                            {
-                                String hex = json.substring(i, i + 4);
-                                try
-                                {
-                                    sb.append((char) Integer.parseInt(hex, 16));
-                                }
-                                catch (NumberFormatException ignored)
-                                {
-                                    sb.append("\\u").append(hex);
-                                }
-                                i += 4;
-                            }
-                        }
-                        default -> sb.append(c);
-                        }
-                        escaping = false;
-                        continue;
-                    }
-                    if (c == '\\')
-                    {
-                        escaping = true;
-                        continue;
-                    }
-                    if (c == '"')
-                    {
-                        break;
-                    }
-                    sb.append(c);
-                }
-                results.add(sb.toString());
-                idx = i;
-            }
-            return results;
+            return "";
         }
+        try
+        {
+            return extractErrorMessage(new JSONObject(body));
+        }
+        catch (JSONException ignored)
+        {
+            return truncate(body.trim(), MAX_ERROR_MESSAGE_CHARS);
+        }
+    }
+
+    private static String extractErrorMessage(JSONObject json)
+    {
+        Object error = json.opt("error");
+        if (error instanceof String text)
+        {
+            return text.trim();
+        }
+        if (error instanceof JSONObject detail)
+        {
+            String message = detail.optString("message", "").trim();
+            return message.isBlank() ? detail.toString() : message;
+        }
+        Object message = json.opt("message");
+        return message instanceof String text ? text.trim() : "";
+    }
+
+    private static String readErrorBody(InputStream body) throws IOException
+    {
+        if (body == null)
+        {
+            return "";
+        }
+        byte[] bytes = body.readNBytes(MAX_ERROR_BODY_BYTES + 1);
+        boolean truncated = bytes.length > MAX_ERROR_BODY_BYTES;
+        int length = truncated ? MAX_ERROR_BODY_BYTES : bytes.length;
+        String text = new String(bytes, 0, length, StandardCharsets.UTF_8);
+        return truncated ? text + "..." : text;
+    }
+
+    private static String truncate(String value, int maxChars)
+    {
+        if (value == null || value.length() <= maxChars)
+        {
+            return value == null ? "" : value;
+        }
+        return value.substring(0, maxChars) + "...";
+    }
+
+    private record ChatStreamEvent(String content, boolean done, JSONObject json)
+    {
     }
 }
