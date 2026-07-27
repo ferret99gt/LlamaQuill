@@ -372,7 +372,7 @@ public class App extends Application
 
         var scene = new Scene(root, 1280, 720);
         scene.getStylesheets().add(getClass().getResource("/styles.css").toExternalForm());
-        stage.setTitle("LlamaQuill");
+        stage.setTitle(AppVersion.displayName());
         stage.setScene(scene);
         stage.show();
     }

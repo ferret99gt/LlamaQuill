@@ -1,4 +1,4 @@
-﻿package com.llamaquill.model;
+package com.llamaquill.model;
 
 public record GenerationSettings(int contextLimit, int responseLength, double temperature, int topK, double topP, double minP,
         double presencePenalty, double frequencyPenalty, double repetitionPenalty, int minStoryWindow, int storyCardLookback,

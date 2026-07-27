@@ -1,4 +1,4 @@
-﻿package com.llamaquill.db;
+package com.llamaquill.db;
 
 import java.io.IOException;
 import java.nio.file.Files;

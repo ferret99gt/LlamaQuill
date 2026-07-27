@@ -1,4 +1,4 @@
-﻿package com.llamaquill.util;
+package com.llamaquill.util;
 
 import java.util.UUID;
 

@@ -1,4 +1,4 @@
-﻿module com.llamaquill
+module com.llamaquill
 {
     requires javafx.controls;
     requires transitive javafx.graphics;

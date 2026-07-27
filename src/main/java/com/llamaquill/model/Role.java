@@ -1,4 +1,4 @@
-﻿package com.llamaquill.model;
+package com.llamaquill.model;
 
 public enum Role
 {

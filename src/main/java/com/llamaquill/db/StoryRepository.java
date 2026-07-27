@@ -1,4 +1,4 @@
-﻿package com.llamaquill.db;
+package com.llamaquill.db;
 
 import com.llamaquill.model.Story;
 

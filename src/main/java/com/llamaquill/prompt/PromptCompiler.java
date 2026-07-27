@@ -1,4 +1,4 @@
-﻿package com.llamaquill.prompt;
+package com.llamaquill.prompt;
 
 import com.llamaquill.model.Block;
 import com.llamaquill.model.ChatMessage;

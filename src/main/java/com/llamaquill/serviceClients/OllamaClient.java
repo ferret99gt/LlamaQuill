@@ -1,4 +1,4 @@
-﻿package com.llamaquill.serviceClients;
+package com.llamaquill.serviceClients;
 
 import com.llamaquill.model.ChatMessage;
 import com.llamaquill.model.GenerationSettings;
