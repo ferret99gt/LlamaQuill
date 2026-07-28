@@ -55,8 +55,8 @@ class PromptCompilerTest
 
         PromptBudget budget = compilation.contextReport().budget();
         assertEquals(200, budget.responseReserve());
-        assertEquals(PromptBudget.ESTIMATION_SAFETY_RESERVE, budget.estimationSafetyReserve());
-        assertEquals(760, budget.inputLimit());
+        assertEquals(134, budget.estimationSafetyReserve());
+        assertEquals(690, budget.inputLimit());
     }
 
     @Test
@@ -70,7 +70,28 @@ class PromptCompilerTest
 
         PromptBudget budget = compilation.contextReport().budget();
         assertEquals(75, budget.responseReserve());
-        assertEquals(885, budget.inputLimit());
+        assertEquals(145, budget.estimationSafetyReserve());
+        assertEquals(804, budget.inputLimit());
+    }
+
+    @Test
+    void reservesProportionalHeadroomForColdModelTokenEstimates()
+    {
+        PromptCompilation compilation = new PromptCompiler().compile(
+                story("", "", ""),
+                List.of(block("1", Role.ASSISTANT, "Story.")),
+                List.of(),
+                settings(16_384, false, 17, 100));
+
+        PromptBudget budget = compilation.contextReport().budget();
+        int worstAllowedActualInput = (int) Math.ceil(
+                budget.inputLimit() * (1.0 + PromptBudget.TOKEN_ESTIMATION_UNDERSHOOT_ALLOWANCE))
+                + PromptBudget.FIXED_ESTIMATION_SAFETY_RESERVE;
+
+        assertEquals(200, budget.responseReserve());
+        assertEquals(1_530, budget.estimationSafetyReserve());
+        assertEquals(14_654, budget.inputLimit());
+        assertTrue(worstAllowedActualInput + budget.responseReserve() <= budget.contextLimit());
     }
 
     @Test

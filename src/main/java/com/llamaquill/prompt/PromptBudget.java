@@ -11,7 +11,8 @@ public record PromptBudget(int contextLimit, int responseReserve, int estimation
         int requestedProtectedStoryTokens, int protectedStoryTokens)
 {
     public static final int DEFAULT_RESPONSE_RESERVE = 200;
-    public static final int ESTIMATION_SAFETY_RESERVE = 64;
+    public static final int FIXED_ESTIMATION_SAFETY_RESERVE = 64;
+    public static final double TOKEN_ESTIMATION_UNDERSHOOT_ALLOWANCE = 0.10;
 
     public PromptBudget
     {
@@ -40,12 +41,31 @@ public record PromptBudget(int contextLimit, int responseReserve, int estimation
                 : DEFAULT_RESPONSE_RESERVE;
         int responseReserve = Math.min(contextLimit, requestedResponseReserve);
         int remainingAfterResponse = contextLimit - responseReserve;
-        int safetyReserve = Math.min(ESTIMATION_SAFETY_RESERVE, remainingAfterResponse);
-        int inputLimit = remainingAfterResponse - safetyReserve;
+        int inputLimit = safeEstimatedInputLimit(remainingAfterResponse);
+        int safetyReserve = remainingAfterResponse - inputLimit;
         int requestedProtectedStoryTokens = Math.max(0, settings.minStoryWindow());
         int protectedStoryTokens = Math.min(requestedProtectedStoryTokens, inputLimit);
 
         return new PromptBudget(contextLimit, responseReserve, safetyReserve, inputLimit,
                 requestedProtectedStoryTokens, protectedStoryTokens);
+    }
+
+    private static int safeEstimatedInputLimit(int availableInputTokens)
+    {
+        if (availableInputTokens <= FIXED_ESTIMATION_SAFETY_RESERVE)
+        {
+            return 0;
+        }
+
+        /*
+         * PromptCompiler estimates model tokens without access to Ollama's
+         * tokenizer or rendered chat template. Protect against both a fixed
+         * framing cost and an estimate that is proportionally optimistic. The
+         * allowance is divided out rather than merely subtracted so an actual
+         * token count up to 10% above the estimate still fits.
+         */
+        double usableAfterFixedReserve = availableInputTokens - FIXED_ESTIMATION_SAFETY_RESERVE;
+        return (int) Math.floor(
+                usableAfterFixedReserve / (1.0 + TOKEN_ESTIMATION_UNDERSHOOT_ALLOWANCE));
     }
 }
