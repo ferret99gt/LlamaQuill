@@ -156,6 +156,38 @@ class StoryPaneControllerTest
     }
 
     @Test
+    void explicitFlushCommitsAFocusedEditorBeforeShutdownOrStorySwitch() throws Exception
+    {
+        AtomicReference<String> persisted = new AtomicReference<>();
+        EditorFixture fixture = createFixture(
+                List.of(new Block("assistant", "story", Role.ASSISTANT, "Before.", "", 0)),
+                (blockId, text, onSuccess, onFailure) ->
+                {
+                    persisted.set(blockId + ":" + text);
+                    onSuccess.run();
+                });
+        try
+        {
+            runOnFxThread(() -> fireClick(findText(fixture.root(), "Before.")));
+            runOnFxThread(() ->
+            {
+                TextArea editor = assertVisibleEditor(fixture.root(), "Before.");
+                editor.setText("After.");
+                fixture.controller().commitActiveEdit();
+            });
+            runOnFxThread(() ->
+            {
+                assertTrue(fixture.root().lookupAll(".story-block-editor").isEmpty());
+                assertTrue("assistant:After.".equals(persisted.get()));
+            });
+        }
+        finally
+        {
+            runOnFxThread(fixture.stage()::close);
+        }
+    }
+
+    @Test
     void longEditorExpandsWithoutAnInternalScrollBar() throws Exception
     {
         String longText = ("The editor should expose every wrapped line without creating its own scrolling region. ")
@@ -358,6 +390,12 @@ class StoryPaneControllerTest
 
     private EditorFixture createFixture(List<Block> blocks) throws Exception
     {
+        return createFixture(blocks, (blockId, text, onSuccess, onFailure) -> onSuccess.run());
+    }
+
+    private EditorFixture createFixture(List<Block> blocks, StoryPaneController.BlockTextPersister persister)
+            throws Exception
+    {
         AtomicReference<EditorFixture> result = new AtomicReference<>();
         runOnFxThread(() ->
         {
@@ -367,7 +405,7 @@ class StoryPaneControllerTest
                     ignored -> null,
                     ignored -> { },
                     (block, forceScroll) -> true,
-                    (blockId, text, onSuccess, onFailure) -> onSuccess.run(),
+                    persister,
                     (message, error) ->
                     {
                         throw new AssertionError(message, error);
@@ -386,7 +424,7 @@ class StoryPaneControllerTest
             root.resize(800, 600);
             root.applyCss();
             root.layout();
-            result.set(new EditorFixture(root, stage));
+            result.set(new EditorFixture(root, stage, controller));
         });
         return result.get();
     }
@@ -543,7 +581,7 @@ class StoryPaneControllerTest
         }
     }
 
-    private record EditorFixture(BorderPane root, Stage stage)
+    private record EditorFixture(BorderPane root, Stage stage, StoryPaneController controller)
     {
     }
 }

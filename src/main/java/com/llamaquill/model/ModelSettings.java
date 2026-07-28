@@ -52,6 +52,11 @@ public record ModelSettings(String modelName, boolean active, int contextLimit, 
                 false, defaults.repetitionPenalty());
     }
 
+    public Builder toBuilder()
+    {
+        return new Builder(this);
+    }
+
     private static int clamp(int value, int minimum, int maximum)
     {
         return Math.max(minimum, Math.min(maximum, value));
@@ -61,5 +66,191 @@ public record ModelSettings(String modelName, boolean active, int contextLimit, 
     {
         double finite = Double.isFinite(value) ? value : fallback;
         return Math.max(minimum, Math.min(maximum, finite));
+    }
+
+    public static final class Builder
+    {
+        private String modelName;
+        private boolean active;
+        private int contextLimit;
+        private double promptTokenScale;
+        private boolean temperatureEnabled;
+        private double temperature;
+        private boolean topKEnabled;
+        private int topK;
+        private boolean topPEnabled;
+        private double topP;
+        private boolean minPEnabled;
+        private double minP;
+        private boolean typicalPEnabled;
+        private double typicalP;
+        private boolean presencePenaltyEnabled;
+        private double presencePenalty;
+        private boolean frequencyPenaltyEnabled;
+        private double frequencyPenalty;
+        private boolean repeatLastNEnabled;
+        private int repeatLastN;
+        private boolean repetitionPenaltyEnabled;
+        private double repetitionPenalty;
+
+        private Builder(ModelSettings settings)
+        {
+            modelName = settings.modelName();
+            active = settings.active();
+            contextLimit = settings.contextLimit();
+            promptTokenScale = settings.promptTokenScale();
+            temperatureEnabled = settings.temperatureEnabled();
+            temperature = settings.temperature();
+            topKEnabled = settings.topKEnabled();
+            topK = settings.topK();
+            topPEnabled = settings.topPEnabled();
+            topP = settings.topP();
+            minPEnabled = settings.minPEnabled();
+            minP = settings.minP();
+            typicalPEnabled = settings.typicalPEnabled();
+            typicalP = settings.typicalP();
+            presencePenaltyEnabled = settings.presencePenaltyEnabled();
+            presencePenalty = settings.presencePenalty();
+            frequencyPenaltyEnabled = settings.frequencyPenaltyEnabled();
+            frequencyPenalty = settings.frequencyPenalty();
+            repeatLastNEnabled = settings.repeatLastNEnabled();
+            repeatLastN = settings.repeatLastN();
+            repetitionPenaltyEnabled = settings.repetitionPenaltyEnabled();
+            repetitionPenalty = settings.repetitionPenalty();
+        }
+
+        public Builder contextLimit(int value)
+        {
+            contextLimit = value;
+            return this;
+        }
+
+        public Builder promptTokenScale(double value)
+        {
+            promptTokenScale = value;
+            return this;
+        }
+
+        public Builder temperatureEnabled(boolean value)
+        {
+            temperatureEnabled = value;
+            return this;
+        }
+
+        public Builder temperature(double value)
+        {
+            temperature = value;
+            return this;
+        }
+
+        public Builder topKEnabled(boolean value)
+        {
+            topKEnabled = value;
+            return this;
+        }
+
+        public Builder topK(int value)
+        {
+            topK = value;
+            return this;
+        }
+
+        public Builder topPEnabled(boolean value)
+        {
+            topPEnabled = value;
+            return this;
+        }
+
+        public Builder topP(double value)
+        {
+            topP = value;
+            return this;
+        }
+
+        public Builder minPEnabled(boolean value)
+        {
+            minPEnabled = value;
+            return this;
+        }
+
+        public Builder minP(double value)
+        {
+            minP = value;
+            return this;
+        }
+
+        public Builder typicalPEnabled(boolean value)
+        {
+            typicalPEnabled = value;
+            return this;
+        }
+
+        public Builder typicalP(double value)
+        {
+            typicalP = value;
+            return this;
+        }
+
+        public Builder presencePenaltyEnabled(boolean value)
+        {
+            presencePenaltyEnabled = value;
+            return this;
+        }
+
+        public Builder presencePenalty(double value)
+        {
+            presencePenalty = value;
+            return this;
+        }
+
+        public Builder frequencyPenaltyEnabled(boolean value)
+        {
+            frequencyPenaltyEnabled = value;
+            return this;
+        }
+
+        public Builder frequencyPenalty(double value)
+        {
+            frequencyPenalty = value;
+            return this;
+        }
+
+        public Builder repeatLastNEnabled(boolean value)
+        {
+            repeatLastNEnabled = value;
+            return this;
+        }
+
+        public Builder repeatLastN(int value)
+        {
+            repeatLastN = value;
+            return this;
+        }
+
+        public Builder repetitionPenaltyEnabled(boolean value)
+        {
+            repetitionPenaltyEnabled = value;
+            return this;
+        }
+
+        public Builder repetitionPenalty(double value)
+        {
+            repetitionPenalty = value;
+            return this;
+        }
+
+        public ModelSettings build()
+        {
+            return new ModelSettings(modelName, active, contextLimit, promptTokenScale,
+                    temperatureEnabled, temperature,
+                    topKEnabled, topK,
+                    topPEnabled, topP,
+                    minPEnabled, minP,
+                    typicalPEnabled, typicalP,
+                    presencePenaltyEnabled, presencePenalty,
+                    frequencyPenaltyEnabled, frequencyPenalty,
+                    repeatLastNEnabled, repeatLastN,
+                    repetitionPenaltyEnabled, repetitionPenalty);
+        }
     }
 }

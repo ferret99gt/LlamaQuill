@@ -52,6 +52,7 @@ class SettingsValidationTest
         original = SettingsCoordinator.withRepeatLastNEnabled(original, true);
         original = SettingsCoordinator.withRepeatLastN(original, -1);
 
+        assertEquals(original, original.toBuilder().build());
         ModelSettings updated = SettingsCoordinator.withTemperature(original, 0.0);
 
         assertEquals(131072, updated.contextLimit());
@@ -92,6 +93,7 @@ class SettingsValidationTest
         assertEquals(4096, settings.comfyHeight());
         assertEquals(1, settings.comfyBatchSize());
         assertEquals(AppSettings.MAX_OLLAMA_KEEP_ALIVE_MINUTES, settings.ollamaKeepAliveMinutes());
+        assertEquals(settings, settings.toBuilder().build());
         assertEquals(AppSettings.MAX_OLLAMA_KEEP_ALIVE_MINUTES,
                 SettingsCoordinator.withComfyWidth(settings, 800).ollamaKeepAliveMinutes());
     }

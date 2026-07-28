@@ -188,6 +188,14 @@ public final class StoryPaneController
         turnInputPane.clear();
     }
 
+    public void commitActiveEdit()
+    {
+        if (activeAssistantEditId != null)
+        {
+            commitBlockEdit(blockEditor.getText());
+        }
+    }
+
     public void renderBlocks(List<Block> blocks, boolean forceScroll)
     {
         stopStreamingState();

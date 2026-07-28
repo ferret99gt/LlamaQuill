@@ -61,4 +61,129 @@ public record AppSettings(String ollamaUrl, String comfyUiUrl, String selectedMo
                 DEFAULT_COMFY_WIDTH, DEFAULT_COMFY_HEIGHT, DEFAULT_COMFY_BATCH_SIZE,
                 DEFAULT_OLLAMA_KEEP_ALIVE_MINUTES);
     }
+
+    public Builder toBuilder()
+    {
+        return new Builder(this);
+    }
+
+    public static final class Builder
+    {
+        private String ollamaUrl;
+        private String comfyUiUrl;
+        private String selectedModel;
+        private boolean responseLengthEnabled;
+        private int responseLength;
+        private int minStoryPercent;
+        private int storyCardLookback;
+        private int anPlacement;
+        private String comfyWorkflow;
+        private int comfyWidth;
+        private int comfyHeight;
+        private int comfyBatchSize;
+        private int ollamaKeepAliveMinutes;
+
+        private Builder(AppSettings settings)
+        {
+            ollamaUrl = settings.ollamaUrl();
+            comfyUiUrl = settings.comfyUiUrl();
+            selectedModel = settings.selectedModel();
+            responseLengthEnabled = settings.responseLengthEnabled();
+            responseLength = settings.responseLength();
+            minStoryPercent = settings.minStoryPercent();
+            storyCardLookback = settings.storyCardLookback();
+            anPlacement = settings.anPlacement();
+            comfyWorkflow = settings.comfyWorkflow();
+            comfyWidth = settings.comfyWidth();
+            comfyHeight = settings.comfyHeight();
+            comfyBatchSize = settings.comfyBatchSize();
+            ollamaKeepAliveMinutes = settings.ollamaKeepAliveMinutes();
+        }
+
+        public Builder ollamaUrl(String value)
+        {
+            ollamaUrl = value;
+            return this;
+        }
+
+        public Builder comfyUiUrl(String value)
+        {
+            comfyUiUrl = value;
+            return this;
+        }
+
+        public Builder selectedModel(String value)
+        {
+            selectedModel = value;
+            return this;
+        }
+
+        public Builder responseLengthEnabled(boolean value)
+        {
+            responseLengthEnabled = value;
+            return this;
+        }
+
+        public Builder responseLength(int value)
+        {
+            responseLength = value;
+            return this;
+        }
+
+        public Builder minStoryPercent(int value)
+        {
+            minStoryPercent = value;
+            return this;
+        }
+
+        public Builder storyCardLookback(int value)
+        {
+            storyCardLookback = value;
+            return this;
+        }
+
+        public Builder anPlacement(int value)
+        {
+            anPlacement = value;
+            return this;
+        }
+
+        public Builder comfyWorkflow(String value)
+        {
+            comfyWorkflow = value;
+            return this;
+        }
+
+        public Builder comfyWidth(int value)
+        {
+            comfyWidth = value;
+            return this;
+        }
+
+        public Builder comfyHeight(int value)
+        {
+            comfyHeight = value;
+            return this;
+        }
+
+        public Builder comfyBatchSize(int value)
+        {
+            comfyBatchSize = value;
+            return this;
+        }
+
+        public Builder ollamaKeepAliveMinutes(int value)
+        {
+            ollamaKeepAliveMinutes = value;
+            return this;
+        }
+
+        public AppSettings build()
+        {
+            return new AppSettings(ollamaUrl, comfyUiUrl, selectedModel,
+                    responseLengthEnabled, responseLength, minStoryPercent,
+                    storyCardLookback, anPlacement, comfyWorkflow,
+                    comfyWidth, comfyHeight, comfyBatchSize, ollamaKeepAliveMinutes);
+        }
+    }
 }

@@ -17,6 +17,7 @@ import com.llamaquill.model.StoryImage;
 import com.llamaquill.prompt.PromptAuxiliaryInput;
 import com.llamaquill.serviceClients.ComfyUiClient;
 import com.llamaquill.util.Ids;
+import com.llamaquill.util.BoundedLruCache;
 import com.llamaquill.util.Timestamps;
 import javafx.scene.image.Image;
 
@@ -25,14 +26,15 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
 public final class ImageGenerationCoordinator
 {
+    private static final int MAX_CACHED_STORY_IMAGES = 8;
+    private static final int MAX_CACHED_WORKFLOW_TEMPLATES = 16;
+
     private final Database database;
     private final ImageRepository imageRepository;
     private final BlockRepository blockRepository;
@@ -40,8 +42,10 @@ public final class ImageGenerationCoordinator
     private final StoryCardRepository storyCardRepository;
     private final AuxiliaryGenerationService auxiliaryGenerationService;
     private final ComfyUiClient comfyUiClient;
-    private final Map<String, StoryImage> storyImageCache = new HashMap<>();
-    private final Map<String, String> workflowTemplateCache = new HashMap<>();
+    private final BoundedLruCache<String, StoryImage> storyImageCache =
+            new BoundedLruCache<>(MAX_CACHED_STORY_IMAGES);
+    private final BoundedLruCache<String, String> workflowTemplateCache =
+            new BoundedLruCache<>(MAX_CACHED_WORKFLOW_TEMPLATES);
 
     public ImageGenerationCoordinator(Database database, ImageRepository imageRepository, BlockRepository blockRepository,
             StoryRepository storyRepository, StoryCardRepository storyCardRepository,

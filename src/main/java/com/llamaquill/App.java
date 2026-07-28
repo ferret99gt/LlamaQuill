@@ -35,6 +35,7 @@ import com.llamaquill.retry.RetryHistoryDialog;
 import com.llamaquill.session.StoryOperationRegistry;
 import com.llamaquill.session.StoryRetryHistory;
 import com.llamaquill.session.StorySession;
+import com.llamaquill.session.StoryWorkspace;
 import com.llamaquill.settings.SettingsCoordinator;
 import com.llamaquill.stories.StoryDialogs;
 import com.llamaquill.storycards.StoryCardDialogs;
@@ -140,10 +141,7 @@ public class App extends Application
     private GenerationSettings settings;
     private ExecutorService executor;
 
-    private Story activeStory;
-    private List<Block> blocks = new ArrayList<>();
-    private StorySession activeSession;
-    private long storySessionRevision;
+    private final StoryWorkspace storyWorkspace = new StoryWorkspace();
     private final StoryOperationRegistry storyOperations = new StoryOperationRegistry();
     private final Set<Task<?>> backgroundTasks = ConcurrentHashMap.newKeySet();
 
@@ -219,6 +217,8 @@ public class App extends Application
     private Label contextLimitValueLabel;
     private boolean updatingModelControls;
     private boolean modelRefreshInProgress;
+    private boolean updatingStoryDetails;
+    private boolean storyDetailsDirty;
 
     private List<String> comfyWorkflowNames = new ArrayList<>();
     private static final double TOKEN_SCALE_ALPHA = 0.2;
@@ -267,6 +267,21 @@ public class App extends Application
     {
     }
 
+    private Story currentStory()
+    {
+        return storyWorkspace.story();
+    }
+
+    private StorySession currentSession()
+    {
+        return storyWorkspace.session();
+    }
+
+    private List<Block> currentBlocks()
+    {
+        return storyWorkspace.blocks();
+    }
+
     @Override
     public void start(Stage stage)
     {
@@ -306,9 +321,10 @@ public class App extends Application
             settings = buildGenerationSettings();
             executor = Executors.newSingleThreadExecutor();
 
-            activeStory = loadOrCreateStory();
-            blocks = blockRepository.listForStory(activeStory.id());
-            activateStorySession();
+            Story initialStory = loadOrCreateStory();
+            List<Block> initialBlocks = blockRepository.listForStory(initialStory.id());
+            storyWorkspace.open(initialStory, initialBlocks);
+            retryHistory.activate(currentSession());
         }
         catch (SQLException e)
         {
@@ -360,11 +376,11 @@ public class App extends Application
         root.setRight(buildRightSidebar());
         root.setBottom(statusBar);
 
-        refreshStoryList(activeStory.id());
-        refreshCardList(activeStory.id());
-        populateStoryDetails(activeStory);
+        refreshStoryList(currentStory().id());
+        refreshCardList(currentStory().id());
+        populateStoryDetails(currentStory());
         renderStoryBlocks(true);
-        setStoryDependentControlsEnabled(activeStory != null);
+        setStoryDependentControlsEnabled(currentStory() != null);
 
         var scene = new Scene(root, 1280, 720);
         scene.getStylesheets().add(getClass().getResource("/styles.css").toExternalForm());
@@ -377,6 +393,7 @@ public class App extends Application
     @Override
     public void stop()
     {
+        flushPendingEdits();
         storyOperations.cancelAll();
         for (Task<?> task : backgroundTasks)
         {
@@ -385,13 +402,17 @@ public class App extends Application
         backgroundTasks.clear();
         if (executor != null)
         {
-            executor.shutdownNow();
+            executor.shutdown();
             try
             {
-                executor.awaitTermination(3, TimeUnit.SECONDS);
+                if (!executor.awaitTermination(3, TimeUnit.SECONDS))
+                {
+                    executor.shutdownNow();
+                }
             }
             catch (InterruptedException e)
             {
+                executor.shutdownNow();
                 Thread.currentThread().interrupt();
             }
         }
@@ -818,6 +839,17 @@ public class App extends Application
 
     private void attachSaveOnBlur(TextArea area)
     {
+        area.textProperty().addListener((obs, oldValue, newValue) ->
+        {
+            if (!updatingStoryDetails && currentStory() != null)
+            {
+                storyDetailsDirty = true;
+                if (statusLabel != null && !storyOperations.hasActive(currentStory().id()))
+                {
+                    statusLabel.setText("Unsaved story details");
+                }
+            }
+        });
         area.focusedProperty().addListener((obs, oldValue, newValue) ->
         {
             if (!newValue)
@@ -1564,11 +1596,11 @@ public class App extends Application
 
     private void restoreStoryActionButtonsState()
     {
-        boolean busy = activeSession != null && storyOperations.hasActive(activeSession.storyId());
+        boolean busy = currentSession() != null && storyOperations.hasActive(currentSession().storyId());
         setStoryActionButtonsBusy(busy);
-        if (!busy && activeStory != null && retryHistoryButton != null)
+        if (!busy && currentStory() != null && retryHistoryButton != null)
         {
-            retryHistoryButton.setDisable(retryHistory.size(activeSession) < 2);
+            retryHistoryButton.setDisable(retryHistory.size(currentSession()) < 2);
         }
     }
 
@@ -1610,11 +1642,11 @@ public class App extends Application
 
     private StoryTaskContext captureStoryTaskContext()
     {
-        if (activeSession == null || activeStory == null || appSettings == null || activeModelSettings == null)
+        if (currentSession() == null || currentStory() == null || appSettings == null || activeModelSettings == null)
         {
             return null;
         }
-        return new StoryTaskContext(activeSession, activeStory, appSettings, buildGenerationSettings());
+        return new StoryTaskContext(currentSession(), currentStory(), appSettings, buildGenerationSettings());
     }
 
     private void refreshStoryList(String selectedId)
@@ -1742,7 +1774,7 @@ public class App extends Application
                     {
                         cardRepository.update(savedCard);
                     }
-                    if (activeStory != null && activeStory.id().equals(story.id()))
+                    if (currentStory() != null && currentStory().id().equals(story.id()))
                     {
                         refreshCardList(story.id());
                     }
@@ -1874,18 +1906,18 @@ public class App extends Application
                         if (result.replaced())
                         {
                             StoryImage storyImage = result.storyImage();
-                            retryHistory.add(activeSession, new ImageRetryHistoryEntry(storyImage.prompt(),
+                            retryHistory.add(currentSession(), new ImageRetryHistoryEntry(storyImage.prompt(),
                                     storyImage.imageBytes(), storyImage.mimeType(), storyImage.workflowJson()));
                             updateRetryCountLabel();
                         }
                     }
                     else
                     {
-                        refreshStoryList(activeStory == null ? null : activeStory.id());
+                        refreshStoryList(currentStory() == null ? null : currentStory().id());
                     }
                     statusLabel.setText(replaceImageBlock == null ? "Inserted image" : "Replaced image");
                 });
-        setStoryDependentControlsEnabled(activeStory != null);
+        setStoryDependentControlsEnabled(currentStory() != null);
     }
 
     private void deleteCard(StoryCard card)
@@ -1893,7 +1925,7 @@ public class App extends Application
         try
         {
             cardRepository.delete(card.id());
-            refreshCardList(activeStory.id());
+            refreshCardList(currentStory().id());
         }
         catch (SQLException e)
         {
@@ -1928,9 +1960,9 @@ public class App extends Application
             return story;
         }
         Story base = story;
-        if (activeStory != null && activeStory.id().equals(story.id()))
+        if (currentStory() != null && currentStory().id().equals(story.id()))
         {
-            base = activeStory;
+            base = currentStory();
         }
         String now = Timestamps.now();
         Story updated = new Story(story.id(), name, base.systemPrompt(), base.plotEssentials(), base.authorNote(),
@@ -1938,9 +1970,9 @@ public class App extends Application
         try
         {
             storyRepository.updateTitle(updated.id(), updated.title(), updated.updatedAt());
-            if (activeStory != null && activeStory.id().equals(updated.id()))
+            if (currentStory() != null && currentStory().id().equals(updated.id()))
             {
-                activeStory = updated;
+                storyWorkspace.updateStory(updated);
             }
             refreshStoryList(updated.id());
             return updated;
@@ -1954,31 +1986,39 @@ public class App extends Application
 
     private void saveStoryDetails()
     {
-        if (activeStory == null)
+        if (currentStory() == null)
         {
+            storyDetailsDirty = false;
             return;
         }
         String systemPrompt = systemPromptArea.getText();
         String plotEssentials = plotEssentialsArea.getText();
         String authorNote = authorNoteArea.getText();
 
-        if (systemPrompt.equals(activeStory.systemPrompt()) && plotEssentials.equals(activeStory.plotEssentials())
-                && authorNote.equals(activeStory.authorNote()))
+        if (systemPrompt.equals(currentStory().systemPrompt()) && plotEssentials.equals(currentStory().plotEssentials())
+                && authorNote.equals(currentStory().authorNote()))
         {
+            storyDetailsDirty = false;
             return;
         }
 
         String now = Timestamps.now();
-        Story updated = new Story(activeStory.id(), activeStory.title(), systemPrompt, plotEssentials, authorNote,
-                activeStory.createdAt(), now);
+        Story updated = new Story(currentStory().id(), currentStory().title(), systemPrompt, plotEssentials, authorNote,
+                currentStory().createdAt(), now);
         try
         {
             storyRepository.update(updated);
-            activeStory = updated;
-            refreshStoryList(activeStory.id());
+            storyWorkspace.updateStory(updated);
+            storyDetailsDirty = false;
+            if (statusLabel != null && !storyOperations.hasActive(updated.id()))
+            {
+                statusLabel.setText("Saved");
+            }
+            refreshStoryList(currentStory().id());
         }
         catch (SQLException e)
         {
+            storyDetailsDirty = true;
             showError("Failed to update story details", e);
         }
     }
@@ -2009,11 +2049,9 @@ public class App extends Application
         {
             storyRepository.delete(story.id());
             refreshStoryList(null);
-            if (activeStory != null && activeStory.id().equals(story.id()))
+            if (currentStory() != null && currentStory().id().equals(story.id()))
             {
-                activeStory = null;
-                blocks = new ArrayList<>();
-                activeSession = null;
+                storyWorkspace.clear();
                 renderStoryBlocks(false);
                 statusLabel.setText("Select a story");
                 populateStoryDetails(null);
@@ -2029,26 +2067,26 @@ public class App extends Application
 
     private void deleteHeadBlock()
     {
-        if (activeStory == null)
+        if (currentStory() == null)
         {
             showInfo("Select a story first.");
             return;
         }
-        if (blocks.isEmpty())
+        if (currentBlocks().isEmpty())
         {
             return;
         }
         try
         {
-            Block head = blocks.getLast();
+            Block head = currentBlocks().getLast();
             database.inTransaction(connection ->
             {
-                blockRepository.deleteHead(activeStory.id());
+                blockRepository.deleteHead(currentStory().id());
                 deleteLinkedImageIfPresent(head);
             });
-            blocks = blockRepository.listForStory(activeStory.id());
-            activeSession = activeSession.advance(blocks);
-            retryHistory.activate(activeSession);
+            List<Block> refreshedBlocks = blockRepository.listForStory(currentStory().id());
+            storyWorkspace.advance(refreshedBlocks);
+            retryHistory.activate(currentSession());
             renderStoryBlocks(true);
             clearRetryHistory();
         }
@@ -2077,11 +2115,15 @@ public class App extends Application
 
     private void loadStory(Story story, boolean updateSelection)
     {
+        if (currentStory() != null && !currentStory().id().equals(story.id()))
+        {
+            flushPendingEdits();
+        }
         try
         {
-            activeStory = story;
-            blocks = blockRepository.listForStory(story.id());
-            activateStorySession();
+            List<Block> refreshedBlocks = blockRepository.listForStory(story.id());
+            storyWorkspace.open(story, refreshedBlocks);
+            retryHistory.activate(currentSession());
             renderStoryBlocks(true);
             statusLabel.setText("Ready");
             populateStoryDetails(story);
@@ -2100,20 +2142,9 @@ public class App extends Application
         }
     }
 
-    private void activateStorySession()
-    {
-        if (activeStory == null)
-        {
-            activeSession = null;
-            return;
-        }
-        activeSession = StorySession.open(activeStory.id(), ++storySessionRevision, blocks);
-        retryHistory.activate(activeSession);
-    }
-
     private boolean canApplyToActiveSession(StorySession source)
     {
-        return activeSession != null && activeSession.canApplyResultFrom(source);
+        return storyWorkspace.canApply(source);
     }
 
     private void reloadActiveStoryIfCompatible(StorySession source, Story updatedStory, boolean forceScroll)
@@ -2121,16 +2152,16 @@ public class App extends Application
     {
         if (!canApplyToActiveSession(source))
         {
-            refreshStoryList(activeStory == null ? null : activeStory.id());
+            refreshStoryList(currentStory() == null ? null : currentStory().id());
             return;
         }
 
-        activeStory = updatedStory == null
-                ? storyRepository.findById(source.storyId()).orElse(activeStory)
+        Story refreshedStory = updatedStory == null
+                ? storyRepository.findById(source.storyId()).orElse(currentStory())
                 : updatedStory;
-        blocks = blockRepository.listForStory(source.storyId());
-        activeSession = activeSession.advance(blocks);
-        retryHistory.activate(activeSession);
+        List<Block> refreshedBlocks = blockRepository.listForStory(source.storyId());
+        storyWorkspace.advance(refreshedStory, refreshedBlocks);
+        retryHistory.activate(currentSession());
         renderStoryBlocks(forceScroll);
         refreshStoryList(source.storyId());
         refreshCardList(source.storyId());
@@ -2139,16 +2170,16 @@ public class App extends Application
 
     private void runRetry()
     {
-        if (activeStory == null)
+        if (currentStory() == null)
         {
             showInfo("Select a story first.");
             return;
         }
-        if (blocks.isEmpty())
+        if (currentBlocks().isEmpty())
         {
             return;
         }
-        Block head = blocks.getLast();
+        Block head = currentBlocks().getLast();
         if (head.role() == Role.IMAGE)
         {
             seedImageRetryHistoryIfNeeded(head);
@@ -2174,7 +2205,7 @@ public class App extends Application
             return;
         }
         StorySession session = context.session();
-        List<Block> blockSnapshot = List.copyOf(blocks);
+        List<Block> blockSnapshot = currentBlocks();
         GenerationSettings operationSettings = context.generationSettings();
         if (retryHistory.isEmpty(session))
         {
@@ -2216,7 +2247,7 @@ public class App extends Application
                         {
                             storyPaneController.endStreaming(streamingToken);
                             reloadActiveStoryIfCompatible(session, context.story(), true);
-                            retryHistory.add(activeSession, new TextRetryHistoryEntry(result.updatedBlock().text()));
+                            retryHistory.add(currentSession(), new TextRetryHistoryEntry(result.updatedBlock().text()));
                             statusLabel.setText("Ready");
                             updateRetryCountLabel();
                         }
@@ -2241,19 +2272,19 @@ public class App extends Application
 
     private void showRetryDialog()
     {
-        if (activeSession == null || retryHistory.size(activeSession) < 2)
+        if (currentSession() == null || retryHistory.size(currentSession()) < 2)
         {
             return;
         }
-        int retryIndex = retryHistory.selectedIndex(activeSession);
-        List<RetryHistoryEntry> historyEntries = retryHistory.entries(activeSession);
+        int retryIndex = retryHistory.selectedIndex(currentSession());
+        List<RetryHistoryEntry> historyEntries = retryHistory.entries(currentSession());
         if (retryIndex < 0 || retryIndex >= historyEntries.size())
         {
             retryIndex = historyEntries.size() - 1;
-            retryHistory.select(activeSession, retryIndex);
+            retryHistory.select(currentSession(), retryIndex);
         }
 
-        Block head = blocks.isEmpty() ? null : blocks.getLast();
+        Block head = currentBlocks().isEmpty() ? null : currentBlocks().getLast();
         boolean imageMode = head != null && head.role() == Role.IMAGE;
 
         List<RetryHistoryDialog.Entry> entries = new ArrayList<>(historyEntries.size());
@@ -2274,14 +2305,14 @@ public class App extends Application
         {
             return;
         }
-        retryHistory.select(activeSession, selectedIndex);
-        if (blocks.isEmpty())
+        retryHistory.select(currentSession(), selectedIndex);
+        if (currentBlocks().isEmpty())
         {
             return;
         }
 
-        Block currentHead = blocks.getLast();
-        RetryHistoryEntry chosen = retryHistory.selected(activeSession);
+        Block currentHead = currentBlocks().getLast();
+        RetryHistoryEntry chosen = retryHistory.selected(currentSession());
         if (currentHead.role() == Role.ASSISTANT && chosen instanceof TextRetryHistoryEntry textEntry)
         {
             if (!textEntry.text.equals(currentHead.text()))
@@ -2295,9 +2326,8 @@ public class App extends Application
                         statusLabel.setText("Retry selection was stale; the story was not changed.");
                         return;
                     }
-                    blocks.set(blocks.size() - 1, updated);
-                    activeSession = activeSession.advance(blocks);
-                    retryHistory.activate(activeSession);
+                    storyWorkspace.replaceHead(updated);
+                    retryHistory.activate(currentSession());
                     renderStoryBlocks(true);
                 }
                 catch (SQLException e)
@@ -2321,8 +2351,8 @@ public class App extends Application
 
     private void seedImageRetryHistoryIfNeeded(Block imageHead)
     {
-        if (activeSession == null || imageHead == null || imageHead.role() != Role.IMAGE
-                || !retryHistory.isEmpty(activeSession))
+        if (currentSession() == null || imageHead == null || imageHead.role() != Role.IMAGE
+                || !retryHistory.isEmpty(currentSession()))
         {
             return;
         }
@@ -2331,38 +2361,38 @@ public class App extends Application
         {
             return;
         }
-        retryHistory.add(activeSession,
+        retryHistory.add(currentSession(),
                 new ImageRetryHistoryEntry(image.prompt(), image.imageBytes(), image.mimeType(), image.workflowJson()));
         updateRetryCountLabel();
     }
 
     private void replaceImageBlockFromRetryHistory(Block headBlock, ImageRetryHistoryEntry imageEntry) throws SQLException
     {
-        if (activeStory == null || headBlock == null || headBlock.role() != Role.IMAGE)
+        if (currentStory() == null || headBlock == null || headBlock.role() != Role.IMAGE)
         {
             return;
         }
         ImageGenerationCoordinator.ImageMutationResult result = imageGenerationCoordinator.replaceImageFromRetryHistory(
-                activeStory, headBlock, imageEntry.prompt, imageEntry.bytes, imageEntry.mimeType, imageEntry.workflowJson);
+                currentStory(), headBlock, imageEntry.prompt, imageEntry.bytes, imageEntry.mimeType, imageEntry.workflowJson);
         if (result.stale())
         {
             statusLabel.setText("Retry selection was stale; the story was not changed.");
             return;
         }
-        StorySession source = activeSession;
+        StorySession source = currentSession();
         reloadActiveStoryIfCompatible(source, result.updatedStory(), true);
         statusLabel.setText("Applied image retry selection");
     }
 
     private void showImportCardsDialog()
     {
-        if (activeStory == null)
+        if (currentStory() == null)
         {
             showInfo("Select a story first.");
             return;
         }
 
-        String storyId = activeStory.id();
+        String storyId = currentStory().id();
         ImportDialogs.showStoryCardsImportDialog(
                 primaryStage,
                 this::showInfo,
@@ -2373,16 +2403,27 @@ public class App extends Application
 
     private void populateStoryDetails(Story story)
     {
-        if (story == null)
+        updatingStoryDetails = true;
+        try
         {
-            systemPromptArea.setText("");
-            plotEssentialsArea.setText("");
-            authorNoteArea.setText("");
-            return;
+            if (story == null)
+            {
+                systemPromptArea.setText("");
+                plotEssentialsArea.setText("");
+                authorNoteArea.setText("");
+            }
+            else
+            {
+                systemPromptArea.setText(story.systemPrompt());
+                plotEssentialsArea.setText(story.plotEssentials());
+                authorNoteArea.setText(story.authorNote());
+            }
+            storyDetailsDirty = false;
         }
-        systemPromptArea.setText(story.systemPrompt());
-        plotEssentialsArea.setText(story.plotEssentials());
-        authorNoteArea.setText(story.authorNote());
+        finally
+        {
+            updatingStoryDetails = false;
+        }
     }
 
     private void setStoryDependentControlsEnabled(boolean enabled)
@@ -2391,7 +2432,7 @@ public class App extends Application
         takeTurnButton.setDisable(!enabled);
         retryButton.setDisable(!enabled);
         deleteButton.setDisable(!enabled);
-        retryHistoryButton.setDisable(!enabled || activeSession == null || retryHistory.size(activeSession) < 2);
+        retryHistoryButton.setDisable(!enabled || currentSession() == null || retryHistory.size(currentSession()) < 2);
         seeButton.setDisable(!enabled);
         promptButton.setDisable(!enabled);
         systemPromptArea.setDisable(!enabled);
@@ -2404,7 +2445,7 @@ public class App extends Application
 
     private void submitTurn()
     {
-        if (activeStory == null)
+        if (currentStory() == null)
         {
             showInfo("Select a story first.");
             return;
@@ -2426,7 +2467,7 @@ public class App extends Application
 
     private void runContinue()
     {
-        if (activeStory == null)
+        if (currentStory() == null)
         {
             showInfo("Select a story first.");
             return;
@@ -2473,7 +2514,7 @@ public class App extends Application
                         }
                         storyPaneController.endStreaming(streamingToken);
                         reloadActiveStoryIfCompatible(context.session(), result.updatedStory(), true);
-                        if (activeStory != null && activeStory.id().equals(context.story().id()))
+                        if (currentStory() != null && currentStory().id().equals(context.story().id()))
                         {
                             statusLabel.setText("Ready");
                         }
@@ -2530,7 +2571,7 @@ public class App extends Application
                         }
                         storyPaneController.endStreaming(streamingToken);
                         reloadActiveStoryIfCompatible(context.session(), result.updatedStory(), true);
-                        if (activeStory != null && activeStory.id().equals(context.story().id()))
+                        if (currentStory() != null && currentStory().id().equals(context.story().id()))
                         {
                             statusLabel.setText(result.generated() ? "Ready" : "Last generation was empty.");
                         }
@@ -3056,16 +3097,16 @@ public class App extends Application
 
     private void clearRetryHistory()
     {
-        if (activeSession != null)
+        if (currentSession() != null)
         {
-            retryHistory.clear(activeSession);
+            retryHistory.clear(currentSession());
         }
         updateRetryCountLabel();
     }
 
     private void updateRetryCountLabel()
     {
-        int count = activeSession == null ? 0 : Math.max(0, retryHistory.size(activeSession) - 1);
+        int count = currentSession() == null ? 0 : Math.max(0, retryHistory.size(currentSession()) - 1);
         boolean hasRetries = count > 0;
         retryHistoryButton.setText(hasRetries ? String.valueOf(count) : "");
         retryHistoryButton.setVisible(hasRetries);
@@ -3097,7 +3138,7 @@ public class App extends Application
         {
             return;
         }
-        storyPaneController.renderBlocks(blocks, forceScroll);
+        storyPaneController.renderBlocks(currentBlocks(), forceScroll);
     }
 
     private StoryImage loadStoryImage(String imageId)
@@ -3148,9 +3189,9 @@ public class App extends Application
                 blockRepository.deleteById(block.id());
                 deleteLinkedImageIfPresent(block);
             });
-            blocks = blockRepository.listForStory(activeStory.id());
-            activeSession = activeSession.advance(blocks);
-            retryHistory.activate(activeSession);
+            List<Block> refreshedBlocks = blockRepository.listForStory(currentStory().id());
+            storyWorkspace.advance(refreshedBlocks);
+            retryHistory.activate(currentSession());
             renderStoryBlocks(forceScroll);
             clearRetryHistory();
             statusLabel.setText("Ready");
@@ -3174,15 +3215,29 @@ public class App extends Application
 
     private void persistBlockTextAsync(String blockId, String text, Runnable onSuccess, Consumer<Exception> onFailure)
     {
+        Block originalBlock = storyWorkspace.findBlock(blockId);
+        if (originalBlock != null && storyWorkspace.updateBlockText(blockId, originalBlock.text(), text))
+        {
+            retryHistory.activate(currentSession());
+        }
+        if (statusLabel != null)
+        {
+            statusLabel.setText("Saving...");
+        }
         if (executor == null)
         {
             try
             {
                 blockRepository.updateText(blockId, text);
                 onSuccess.run();
+                if (statusLabel != null && isCurrentStory(originalBlock))
+                {
+                    statusLabel.setText("Saved");
+                }
             }
             catch (SQLException e)
             {
+                rollbackWorkspaceBlockEdit(originalBlock, text);
                 onFailure.accept(e);
             }
             return;
@@ -3198,11 +3253,51 @@ public class App extends Application
             {
                 throw new RuntimeException(e);
             }
-        }, executor).thenRun(() -> Platform.runLater(onSuccess)).exceptionally(throwable ->
+        }, executor).thenRun(() -> Platform.runLater(() ->
         {
-            Platform.runLater(() -> onFailure.accept(asException(throwable)));
+            onSuccess.run();
+            if (statusLabel != null && isCurrentStory(originalBlock))
+            {
+                statusLabel.setText("Saved");
+            }
+        })).exceptionally(throwable ->
+        {
+            Platform.runLater(() ->
+            {
+                rollbackWorkspaceBlockEdit(originalBlock, text);
+                onFailure.accept(asException(throwable));
+            });
             return null;
         });
+    }
+
+    private void rollbackWorkspaceBlockEdit(Block originalBlock, String attemptedText)
+    {
+        if (!isCurrentStory(originalBlock))
+        {
+            return;
+        }
+        if (storyWorkspace.updateBlockText(originalBlock.id(), attemptedText, originalBlock.text()))
+        {
+            retryHistory.activate(currentSession());
+        }
+    }
+
+    private boolean isCurrentStory(Block block)
+    {
+        return block != null && currentStory() != null && currentStory().id().equals(block.storyId());
+    }
+
+    private void flushPendingEdits()
+    {
+        if (storyPaneController != null)
+        {
+            storyPaneController.commitActiveEdit();
+        }
+        if (storyDetailsDirty)
+        {
+            saveStoryDetails();
+        }
     }
 
     private Exception asException(Throwable throwable)
