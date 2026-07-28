@@ -1,120 +1,208 @@
 # LlamaQuill
 
-LlamaQuill is a local-first JavaFX desktop client for AI-assisted story writing.
-The current application and database migration version is `0.2.0`.
+LlamaQuill is a local-first Windows desktop app for AI-assisted story writing. It combines an
+AI Dungeon-inspired adventure workflow with local Ollama text generation, optional ComfyUI scene
+images, Story Cards, and a SQLite story database that remains under the user's control.
 
-It is built around:
-- `Ollama` for text generation
-- `ComfyUI Desktop` for image generation
-- a SQLite story database stored locally by the app
+Version `0.2.0` is the first formally versioned release. See the
+[user-facing changelog](CHANGELOG.md) for the upgrade highlights.
 
-LlamaQuill is intentionally a thick client. It does not run its own web server or require a browser UI.
-It is also intentionally narrow in scope: story writing, story memory, story cards, and optional scene image generation. The goal is a focused desktop tool for narrative workflow rather than a general-purpose local AI workbench.
-This codebase was developed with substantial assistance from the Codex extension in Cursor.
+## Download and run
 
-## Requirements
+1. Download `LlamaQuill-0.2.0-windows-x64.zip` from
+   [GitHub Releases](https://github.com/ferret99gt/LlamaQuill/releases).
+2. Optionally compare its SHA-256 hash with the accompanying `.sha256` file.
+3. Extract the complete `LlamaQuill` folder and run `LlamaQuill.exe` inside it.
 
-- Java 25
-- Ollama running locally
-- ComfyUI Desktop running locally (optional, for See feature)
+Keep the whole extracted folder together. The executable depends on the adjacent `app` and
+`runtime` directories; copying only `LlamaQuill.exe` will not produce a working or updated app.
+The release includes its own Microsoft OpenJDK runtime, so users do not need to install Java.
 
-Default local endpoints:
-- Ollama: `http://localhost:11434`
-- ComfyUI: `http://localhost:8000`
+The 0.2.0 build is not code-signed. Windows may therefore display a SmartScreen warning for the
+downloaded app.
 
-Both can be changed in the app's Options panel.
+Runtime requirements:
 
-## Ollama setup
+- 64-bit Windows
+- [Ollama](https://ollama.com/) running locally
+- [ComfyUI Desktop](https://www.comfy.org/download) running locally only if using **See**
 
-LlamaQuill is designed around Latitude's AI Dungeon models distributed through Hugging Face and pulled through Ollama.
+Default endpoints are `http://localhost:11434` for Ollama and `http://localhost:8000` for
+ComfyUI. Both can be changed in **Options**.
 
-Latitude model list:
-- `https://huggingface.co/LatitudeGames/models`
+## Recommended Ollama model
 
-Example pull command for Muse 12B Q8:
+[Latitude Equinox 31B](https://huggingface.co/LatitudeGames/Equinox-31B-GGUF) is the recommended
+starting point for LlamaQuill. It is a modern narrative model with strong long-context
+continuation behavior:
 
 ```powershell
-ollama pull hf.co/LatitudeGames/Muse-12B-GGUF:Q8_0
+ollama run hf.co/LatitudeGames/Equinox-31B-GGUF:Q4_K_M
 ```
 
-Any compatible chat model available through Ollama can be selected inside LlamaQuill once pulled. Latitude's models are suggested, but Ollama now owns the model-specific chat template.
+Latitude publishes Equinox, Muse, and its other AI Dungeon-oriented models in the
+[LatitudeGames Hugging Face collection](https://huggingface.co/LatitudeGames/models). Other
+Ollama chat models can work as well; LlamaQuill uses the model's Ollama chat template.
 
-Response length and model sampling controls each have an enable checkbox. Unchecked options are omitted from the Ollama request so the model's defaults can apply; the remembered response-length value remains LlamaQuill's conservative local prompt-budget reserve.
+### Choosing a GGUF quant
 
-The global **Ollama Model Keep Alive** setting keeps the selected model loaded for 5–30 minutes
-after each chat request. It defaults to Ollama's normal five minutes and can reduce reload delays
-when returning to a story after briefly switching away.
+The GGUF filename and file size are useful first estimates of memory demand. For Equinox 31B,
+`Q4_K_M` is about 18.7 GB and is the broadly safer first download; `Q6_K` is about 25.2 GB and is
+a higher-quality option for a 32 GB-class GPU with enough headroom.
+
+Do not treat the GGUF file size as total runtime memory. Leave room for the context/KV cache,
+Ollama, the display, and anything else using the GPU—especially ComfyUI. CPU/RAM offload can make
+an oversized model run, but usually increases generation latency. In practice:
+
+- prefer the largest quant that fits fully in the memory you intend to use;
+- leave several GB of headroom rather than targeting the exact VRAM capacity;
+- budget more headroom when selecting a large context window;
+- step down one quant if Ollama offloads unexpectedly or other GPU apps become constrained.
+
+Hugging Face can estimate this for you. Sign in, add your CPU/GPU or Apple Silicon and memory
+under [Saved Hardware](https://huggingface.co/settings/hardware), then review the **Hardware
+compatibility** section on a GGUF model page. Saved hardware is public by default, but Hugging
+Face provides a private visibility option.
+
+Response length and every sampling control have separate enable switches. A disabled control is
+omitted from the Ollama request so the model's own default can apply. When Response Length is
+disabled, LlamaQuill still reserves 200 estimated tokens inside its prompt budget so the model
+has space to answer.
+
+The global **Ollama Model Keep Alive** setting retains the selected model for 5–30 minutes after
+each request, reducing reload delays when returning to a story.
 
 ## ComfyUI Desktop setup
 
-LlamaQuill's "See" action expects ComfyUI Desktop to be installed and running. If you won't use See, it's optional.
+LlamaQuill's **See** action expects ComfyUI Desktop to be installed and running. It is otherwise
+optional.
 
-### Default Chroma HD workflow
+### Chroma HD
 
-For the default Chroma HD path, install the models required by ComfyUI Desktop's built-in:
-- `Chroma Text to Image`
+Open ComfyUI Desktop's built-in `Chroma Text to Image` template and let ComfyUI install the
+required models. Select `ChromaHD` in LlamaQuill.
 
-template.
+### Experimental Chroma2
 
-The simplest path is to open that template inside ComfyUI Desktop and let ComfyUI install the required models for it.
+For `Chroma2Kaleidoscope`:
 
-### Chroma2 experimental workflow
+- install the custom nodes and supporting models used by ComfyUI Desktop's
+  `Flux.2 [Klein] 4B` template;
+- the Flux.2 base-model download itself is not required by LlamaQuill's workflow;
+- download Chroma2 Kaleidoscope from
+  [lodestones/Chroma2-Kaleidoscope](https://huggingface.co/lodestones/Chroma2-Kaleidoscope).
 
-For the experimental Chroma2 workflow:
-- install the ComfyUI Desktop template/models for `Flux.2 [Klein] 4B`
-- you can skip the actual Flux.2 base model downloads
-- instead, download the Chroma2 Kaleidoscope model from:
-  - `https://huggingface.co/lodestones/Chroma2-Kaleidoscope/`
+Bundled workflow JSON files live under `src/main/resources/comfyui/` in the source tree.
 
-LlamaQuill workflow files live under:
-- `src/main/resources/comfyui/`
+## Privacy and connectivity
 
-The workflow dropdown in the app scans that folder and exposes available workflow JSON files by filename.
+Stories, Story Cards, settings, and generated/imported images are stored in the local SQLite
+database. LlamaQuill has no LlamaQuill cloud service and does not send telemetry.
 
-## Build
+Generation content is sent to the Ollama and ComfyUI endpoints configured in **Options**. The
+defaults are local loopback addresses; changing them to remote servers also changes where that
+content is sent. Importing an AI Dungeon backup can make HTTPS requests to `aidungeon.com` image
+URLs found in that backup so **See** images can be copied into the local database. Ordinary text
+imports do not require AI Dungeon access.
 
-From the project root:
+## Data, backup, migration, and restore
+
+The default Windows data directory is:
+
+```text
+%LOCALAPPDATA%\LlamaQuill
+```
+
+It contains:
+
+- `llamaquill.db` — stories, cards, settings, and image bytes;
+- `backups\` — manual and automatic pre-migration database backups;
+- temporary SQLite `-wal` and `-shm` companions while the app is running.
+
+Use **Options → Back Up Database** before a release upgrade or major experiment. **Check
+Database** reports the active path, schema, integrity, and broken image references.
+
+To restore a backup:
+
+1. Close LlamaQuill completely.
+2. Preserve the current `llamaquill.db` and any `llamaquill.db-wal` or
+   `llamaquill.db-shm` files somewhere outside the data directory.
+3. Copy the chosen backup into the data directory and name the copy `llamaquill.db`.
+4. Ensure stale `llamaquill.db-wal` and `llamaquill.db-shm` companions are not left beside the
+   restored copy, then start LlamaQuill.
+
+`LLAMAQUILL_DATA_DIR` or the `llamaquill.dataDir` Java system property can select an explicit
+portable/test location.
+
+Version 0.2.0 treats an unversioned database as the historical 0.1.0 format. On first launch it:
+
+- copies a legacy `.\data\llamaquill.db` when the stable data location has no database;
+- leaves the original legacy database untouched;
+- creates a timestamped pre-migration backup;
+- migrates transactionally to schema 4 and records application/schema history.
+
+The migration adds Story Card types, player-only notes, and global reusable generation presets.
+It removes the retired automatic AutoCards configuration. If migration fails, LlamaQuill does not
+replace the source database with a partial migration.
+
+## AI Dungeon imports
+
+**Import Adventure** accepts AI Dungeon backup ZIPs using the current `metadata.json` plus
+`actions-N.json` layout tested in July 2026. It also recognizes the older Story Card and custom
+instruction shapes covered by LlamaQuill's import fixtures. Stories, recognized actions, Story
+Cards, and supported **See** images are imported as one transaction.
+
+**Import Story Cards** accepts AI Dungeon's JSON card export (`keys` and `value`, with optional
+title/type/notes). It can merge new cards while skipping exact duplicates or replace the current
+story's cards. Unknown action/card fields are ignored. Keep the original export as a backup:
+future AI Dungeon format changes may require a LlamaQuill importer update.
+
+An adventure containing remote images requires those `aidungeon.com` image URLs to remain
+available during import. If a required image cannot be downloaded or decoded, the transaction is
+rolled back rather than creating a partial adventure.
+
+## Build from source
+
+Developer requirements:
+
+- Microsoft OpenJDK `25.0.4+7-LTS`
+- Maven `3.9.x`
+- 64-bit Windows for `jpackage` release creation
+
+Run the test suite:
 
 ```powershell
 mvn clean verify
 ```
 
-To run the same clean-build and repeated Windows app-image checks used by CI:
+Run CI-equivalent verification: two clean-separated app-image builds, packaged runtime/version
+checks, an isolated launcher/database smoke test, release ZIP inspection, and a check that the
+build did not mutate tracked source files:
 
 ```powershell
-./scripts/verify.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify.ps1
 ```
 
-To build the app release image:
+Create the release ZIP and SHA-256 file:
 
 ```powershell
-mvn -DskipTests -Prelease package
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\package-release.ps1
 ```
 
-## Local data and migrations
+Artifacts are written to `target\release\`. GitHub Actions runs the same verifier and uploads the
+ZIP/checksum as workflow artifacts. Dependabot watches Maven and GitHub Actions dependencies, and
+pull requests receive GitHub's dependency vulnerability review.
 
-The default Windows data directory is `%LOCALAPPDATA%\LlamaQuill`, with the database stored as
-`llamaquill.db`. Set the `LLAMAQUILL_DATA_DIR` environment variable or the
-`llamaquill.dataDir` Java system property to use an explicit portable or test location.
+## License
 
-Version `0.2.0` treats an unversioned database as `0.1.0`. On first launch it:
-
-- copies a legacy `./data/llamaquill.db` into the stable data directory when no stable database exists;
-- leaves the original legacy database untouched;
-- creates a timestamped pre-migration backup under the stable `backups` directory;
-- migrates the database to schema version 4 and records the application version in `schema_migrations`;
-- adds Story Card types, player-only notes, and global reusable generation-command presets;
-- removes the retired automatic AutoCards configuration tables.
-
-## Notes
-
-- LlamaQuill stores stories, cards, settings, and inserted images locally.
-- It supports AI Dungeon adventure import and story card import.
-- Story Card creation includes optional full-context AI entry generation, built-in and reusable command presets, and revision logging in player-only Notes.
-- It includes image generation through ComfyUI and one-shot story-context prompting.
-- It is deliberately targeted and opinionated. You can tune models and workflows, but the application is not trying to expose every possible backend feature or become a generic prompt lab.
+LlamaQuill is available under the [MIT License](LICENSE). This license applies to LlamaQuill's
+repository contents, not to third-party models, model weights, applications, services, trademarks,
+or other separately licensed dependencies and assets.
 
 ## Credits
 
 - AI Dungeon and Latitude Games for the model ecosystem and workflow inspiration
-- LewdLeah's Auto-Cards for ideas and reference points during LlamaQuill's earlier automatic-card experiments
+- LewdLeah's Auto-Cards for ideas and reference points during LlamaQuill's earlier
+  automatic-card experiments
+- OpenAI Codex models used extensively throughout LlamaQuill's design, implementation, testing,
+  and audit history

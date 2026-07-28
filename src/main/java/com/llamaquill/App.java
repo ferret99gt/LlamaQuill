@@ -2747,6 +2747,34 @@ public class App extends Application
 
     public static void main(String[] args)
     {
+        if (args.length == 1 && "--smoke-test".equals(args[0]))
+        {
+            int exitCode = runSmokeTest();
+            // A jpackage launcher initializes the JavaFX runtime for an Application subclass
+            // before invoking main. Force that runtime down after the non-UI smoke path.
+            System.exit(exitCode);
+            return;
+        }
         launch(args);
+    }
+
+    private static int runSmokeTest()
+    {
+        try (Database smokeDatabase = Database.open())
+        {
+            Database.Diagnostics diagnostics = smokeDatabase.diagnostics();
+            if (!diagnostics.healthy() || diagnostics.schemaVersion() != AppVersion.DATABASE_SCHEMA)
+            {
+                System.err.println("LlamaQuill smoke test failed database diagnostics: " + diagnostics);
+                return 1;
+            }
+            System.out.println(AppVersion.displayName() + " smoke test passed using " + diagnostics.databaseFile());
+            return 0;
+        }
+        catch (Exception e)
+        {
+            e.printStackTrace(System.err);
+            return 1;
+        }
     }
 }
