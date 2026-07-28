@@ -270,32 +270,54 @@ public final class AIDungeonImports
         Object instructions = state.opt("instructions");
         if (instructions instanceof JSONObject obj)
         {
-            Object custom = obj.opt("custom");
-            if (custom instanceof String customText && !customText.isBlank())
+            String selectedType = obj.optString("type", "").trim();
+            if (!selectedType.isBlank())
             {
-                return customText;
-            }
-            if (custom instanceof JSONObject customObj)
-            {
-                String[] keys = { "text", "prompt", "content", "value" };
-                for (String key : keys)
+                String selected = readInstructionText(obj.opt(selectedType));
+                if (!selected.isBlank())
                 {
-                    String value = customObj.optString(key, "").trim();
-                    if (!value.isBlank())
-                    {
-                        return value;
-                    }
+                    return selected;
                 }
+                // A selected mode with no text-bearing field represents a model-default
+                // or otherwise empty instruction choice. Do not resurrect an inactive
+                // Scenario or Custom draft merely because AI Dungeon retained it.
+                return "";
             }
-            String fallback = obj.optString("text", "").trim();
-            if (!fallback.isBlank())
+
+            String[] keys = { "custom", "scenario", "text", "prompt", "content", "value" };
+            for (String key : keys)
             {
-                return fallback;
+                String value = readInstructionText(obj.opt(key));
+                if (!value.isBlank())
+                {
+                    return value;
+                }
             }
         }
         else if (instructions instanceof String text)
         {
             return text.trim();
+        }
+        return "";
+    }
+
+    private String readInstructionText(Object value)
+    {
+        if (value instanceof String text)
+        {
+            return text.trim();
+        }
+        if (value instanceof JSONObject obj)
+        {
+            String[] keys = { "text", "prompt", "content", "value", "scenario" };
+            for (String key : keys)
+            {
+                String nested = readInstructionText(obj.opt(key));
+                if (!nested.isBlank())
+                {
+                    return nested;
+                }
+            }
         }
         return "";
     }

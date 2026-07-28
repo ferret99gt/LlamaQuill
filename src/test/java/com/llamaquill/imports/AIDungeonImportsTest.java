@@ -285,6 +285,108 @@ class AIDungeonImportsTest
     }
 
     @Test
+    void adventureImportUsesTheSelectedScenarioAiInstructions() throws Exception
+    {
+        AppPaths paths = AppPaths.forDirectories(
+                temporaryDirectory.resolve("scenario-data"), temporaryDirectory.resolve("scenario-legacy"));
+        try (Database database = Database.open(paths))
+        {
+            StoryRepository stories = new StoryRepository(database);
+            BlockRepository blocks = new BlockRepository(database);
+            StoryCardRepository cards = new StoryCardRepository(database);
+            AIDungeonImports importer = new AIDungeonImports(
+                    database, stories, blocks, cards, new ImageRepository(database), "Default system");
+
+            Path archive = writeZip("scenario-instructions.zip", Map.of(
+                    "metadata.json", """
+                            {
+                              "adventure": {"title": "Scenario Instructions"},
+                              "state": {
+                                "instructions": {
+                                  "type": "scenario",
+                                  "scenario": "AI Instructions:\\n- use second-person deep POV\\n- continue the narration",
+                                  "custom": "Inactive custom draft"
+                                }
+                              }
+                            }
+                            """));
+
+            Story imported = importer.importAdventure(archive);
+
+            assertEquals("""
+                    AI Instructions:
+                    - use second-person deep POV
+                    - continue the narration""", imported.systemPrompt());
+        }
+    }
+
+    @Test
+    void adventureImportUsesCustomInstructionsWhenCustomIsSelected() throws Exception
+    {
+        AppPaths paths = AppPaths.forDirectories(
+                temporaryDirectory.resolve("custom-data"), temporaryDirectory.resolve("custom-legacy"));
+        try (Database database = Database.open(paths))
+        {
+            StoryRepository stories = new StoryRepository(database);
+            BlockRepository blocks = new BlockRepository(database);
+            StoryCardRepository cards = new StoryCardRepository(database);
+            AIDungeonImports importer = new AIDungeonImports(
+                    database, stories, blocks, cards, new ImageRepository(database), "Default system");
+
+            Path archive = writeZip("custom-instructions.zip", Map.of(
+                    "metadata.json", """
+                            {
+                              "adventure": {"title": "Custom Instructions"},
+                              "state": {
+                                "instructions": {
+                                  "type": "custom",
+                                  "scenario": "Inactive scenario instructions",
+                                  "custom": "Live custom instructions"
+                                }
+                              }
+                            }
+                            """));
+
+            Story imported = importer.importAdventure(archive);
+
+            assertEquals("Live custom instructions", imported.systemPrompt());
+        }
+    }
+
+    @Test
+    void adventureImportDoesNotResurrectInactiveInstructionsForAnEmptySelectedMode() throws Exception
+    {
+        AppPaths paths = AppPaths.forDirectories(
+                temporaryDirectory.resolve("default-data"), temporaryDirectory.resolve("default-legacy"));
+        try (Database database = Database.open(paths))
+        {
+            StoryRepository stories = new StoryRepository(database);
+            BlockRepository blocks = new BlockRepository(database);
+            StoryCardRepository cards = new StoryCardRepository(database);
+            AIDungeonImports importer = new AIDungeonImports(
+                    database, stories, blocks, cards, new ImageRepository(database), "Default system");
+
+            Path archive = writeZip("default-instructions.zip", Map.of(
+                    "metadata.json", """
+                            {
+                              "adventure": {"title": "Model Default Instructions"},
+                              "state": {
+                                "instructions": {
+                                  "type": "model-default",
+                                  "scenario": "Inactive scenario instructions",
+                                  "custom": "Inactive custom instructions"
+                                }
+                              }
+                            }
+                            """));
+
+            Story imported = importer.importAdventure(archive);
+
+            assertEquals("Default system", imported.systemPrompt());
+        }
+    }
+
+    @Test
     void adventureImportCopiesSeeImagesIntoTheDatabaseInActionOrder() throws Exception
     {
         AppPaths paths = AppPaths.forDirectories(
