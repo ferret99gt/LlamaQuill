@@ -14,7 +14,7 @@ public final class SettingsCoordinator
         return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), modelName,
                 current.responseLengthEnabled(), current.responseLength(), current.minStoryPercent(), current.storyCardLookback(),
                 current.anPlacement(), current.comfyWorkflow(), current.comfyWidth(), current.comfyHeight(),
-                current.comfyBatchSize());
+                current.comfyBatchSize(), current.ollamaKeepAliveMinutes());
     }
 
     public static AppSettings withOllamaUrl(AppSettings current, String url)
@@ -22,7 +22,7 @@ public final class SettingsCoordinator
         return new AppSettings(url, current.comfyUiUrl(), current.selectedModel(),
                 current.responseLengthEnabled(), current.responseLength(), current.minStoryPercent(), current.storyCardLookback(),
                 current.anPlacement(), current.comfyWorkflow(), current.comfyWidth(), current.comfyHeight(),
-                current.comfyBatchSize());
+                current.comfyBatchSize(), current.ollamaKeepAliveMinutes());
     }
 
     public static AppSettings withComfyUiUrl(AppSettings current, String url)
@@ -30,7 +30,8 @@ public final class SettingsCoordinator
         return new AppSettings(current.ollamaUrl(), url, current.selectedModel(),
                 current.responseLengthEnabled(), current.responseLength(), current.minStoryPercent(),
                 current.storyCardLookback(), current.anPlacement(),
-                current.comfyWorkflow(), current.comfyWidth(), current.comfyHeight(), current.comfyBatchSize());
+                current.comfyWorkflow(), current.comfyWidth(), current.comfyHeight(), current.comfyBatchSize(),
+                current.ollamaKeepAliveMinutes());
     }
 
     public static ModelSettings withContextLimit(ModelSettings current, int value)
@@ -66,7 +67,8 @@ public final class SettingsCoordinator
         return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(),
                 current.responseLengthEnabled(), value, current.minStoryPercent(),
                 current.storyCardLookback(), current.anPlacement(),
-                current.comfyWorkflow(), current.comfyWidth(), current.comfyHeight(), current.comfyBatchSize());
+                current.comfyWorkflow(), current.comfyWidth(), current.comfyHeight(), current.comfyBatchSize(),
+                current.ollamaKeepAliveMinutes());
     }
 
     public static AppSettings withResponseLengthEnabled(AppSettings current, boolean enabled)
@@ -74,7 +76,8 @@ public final class SettingsCoordinator
         return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(),
                 enabled, current.responseLength(), current.minStoryPercent(),
                 current.storyCardLookback(), current.anPlacement(), current.comfyWorkflow(),
-                current.comfyWidth(), current.comfyHeight(), current.comfyBatchSize());
+                current.comfyWidth(), current.comfyHeight(), current.comfyBatchSize(),
+                current.ollamaKeepAliveMinutes());
     }
 
     public static AppSettings withMinStoryPercent(AppSettings current, int percent)
@@ -82,7 +85,8 @@ public final class SettingsCoordinator
         return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(),
                 current.responseLengthEnabled(), current.responseLength(), percent,
                 current.storyCardLookback(), current.anPlacement(),
-                current.comfyWorkflow(), current.comfyWidth(), current.comfyHeight(), current.comfyBatchSize());
+                current.comfyWorkflow(), current.comfyWidth(), current.comfyHeight(), current.comfyBatchSize(),
+                current.ollamaKeepAliveMinutes());
     }
 
     public static AppSettings withStoryCardLookback(AppSettings current, int value)
@@ -90,7 +94,8 @@ public final class SettingsCoordinator
         return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(),
                 current.responseLengthEnabled(), current.responseLength(), current.minStoryPercent(),
                 value, current.anPlacement(),
-                current.comfyWorkflow(), current.comfyWidth(), current.comfyHeight(), current.comfyBatchSize());
+                current.comfyWorkflow(), current.comfyWidth(), current.comfyHeight(), current.comfyBatchSize(),
+                current.ollamaKeepAliveMinutes());
     }
 
     public static AppSettings withAnPlacement(AppSettings current, int value)
@@ -98,7 +103,8 @@ public final class SettingsCoordinator
         return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(),
                 current.responseLengthEnabled(), current.responseLength(), current.minStoryPercent(),
                 current.storyCardLookback(), value,
-                current.comfyWorkflow(), current.comfyWidth(), current.comfyHeight(), current.comfyBatchSize());
+                current.comfyWorkflow(), current.comfyWidth(), current.comfyHeight(), current.comfyBatchSize(),
+                current.ollamaKeepAliveMinutes());
     }
 
     public static AppSettings withComfyWorkflow(AppSettings current, String workflow)
@@ -111,7 +117,8 @@ public final class SettingsCoordinator
         return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(),
                 current.responseLengthEnabled(), current.responseLength(), current.minStoryPercent(),
                 current.storyCardLookback(), current.anPlacement(),
-                trimmed, current.comfyWidth(), current.comfyHeight(), current.comfyBatchSize());
+                trimmed, current.comfyWidth(), current.comfyHeight(), current.comfyBatchSize(),
+                current.ollamaKeepAliveMinutes());
     }
 
     public static AppSettings withComfyWidth(AppSettings current, int width)
@@ -120,7 +127,8 @@ public final class SettingsCoordinator
         return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(),
                 current.responseLengthEnabled(), current.responseLength(), current.minStoryPercent(),
                 current.storyCardLookback(), current.anPlacement(),
-                current.comfyWorkflow(), capped, current.comfyHeight(), current.comfyBatchSize());
+                current.comfyWorkflow(), capped, current.comfyHeight(), current.comfyBatchSize(),
+                current.ollamaKeepAliveMinutes());
     }
 
     public static AppSettings withComfyHeight(AppSettings current, int height)
@@ -129,7 +137,8 @@ public final class SettingsCoordinator
         return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(),
                 current.responseLengthEnabled(), current.responseLength(), current.minStoryPercent(),
                 current.storyCardLookback(), current.anPlacement(),
-                current.comfyWorkflow(), current.comfyWidth(), capped, current.comfyBatchSize());
+                current.comfyWorkflow(), current.comfyWidth(), capped, current.comfyBatchSize(),
+                current.ollamaKeepAliveMinutes());
     }
 
     public static AppSettings withComfyBatchSize(AppSettings current, int batchSize)
@@ -138,7 +147,17 @@ public final class SettingsCoordinator
         return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(),
                 current.responseLengthEnabled(), current.responseLength(), current.minStoryPercent(),
                 current.storyCardLookback(), current.anPlacement(),
-                current.comfyWorkflow(), current.comfyWidth(), current.comfyHeight(), capped);
+                current.comfyWorkflow(), current.comfyWidth(), current.comfyHeight(), capped,
+                current.ollamaKeepAliveMinutes());
+    }
+
+    public static AppSettings withOllamaKeepAliveMinutes(AppSettings current, int minutes)
+    {
+        return new AppSettings(current.ollamaUrl(), current.comfyUiUrl(), current.selectedModel(),
+                current.responseLengthEnabled(), current.responseLength(), current.minStoryPercent(),
+                current.storyCardLookback(), current.anPlacement(),
+                current.comfyWorkflow(), current.comfyWidth(), current.comfyHeight(), current.comfyBatchSize(),
+                minutes);
     }
 
     public static ModelSettings withTemperature(ModelSettings current, double value)

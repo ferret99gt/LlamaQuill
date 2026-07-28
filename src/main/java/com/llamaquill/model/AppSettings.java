@@ -6,7 +6,8 @@ import com.llamaquill.serviceClients.OllamaEndpoint;
 
 public record AppSettings(String ollamaUrl, String comfyUiUrl, String selectedModel,
         boolean responseLengthEnabled, int responseLength, int minStoryPercent, int storyCardLookback, int anPlacement,
-        String comfyWorkflow, int comfyWidth, int comfyHeight, int comfyBatchSize)
+        String comfyWorkflow, int comfyWidth, int comfyHeight, int comfyBatchSize,
+        int ollamaKeepAliveMinutes)
 {
     public static final String DEFAULT_COMFY_WORKFLOW = "ChromaHD";
     public static final int DEFAULT_COMFY_WIDTH = 720;
@@ -14,6 +15,9 @@ public record AppSettings(String ollamaUrl, String comfyUiUrl, String selectedMo
     public static final int DEFAULT_COMFY_BATCH_SIZE = 4;
     public static final int MIN_STORY_PERCENT = 10;
     public static final int MAX_STORY_PERCENT = 100;
+    public static final int DEFAULT_OLLAMA_KEEP_ALIVE_MINUTES = 5;
+    public static final int MIN_OLLAMA_KEEP_ALIVE_MINUTES = 5;
+    public static final int MAX_OLLAMA_KEEP_ALIVE_MINUTES = 30;
 
     public AppSettings
     {
@@ -32,6 +36,20 @@ public record AppSettings(String ollamaUrl, String comfyUiUrl, String selectedMo
         comfyWidth = Math.max(64, Math.min(4096, comfyWidth));
         comfyHeight = Math.max(64, Math.min(4096, comfyHeight));
         comfyBatchSize = Math.max(1, Math.min(32, comfyBatchSize));
+        ollamaKeepAliveMinutes = Math.max(MIN_OLLAMA_KEEP_ALIVE_MINUTES,
+                Math.min(MAX_OLLAMA_KEEP_ALIVE_MINUTES, ollamaKeepAliveMinutes));
+    }
+
+    public AppSettings(String ollamaUrl, String comfyUiUrl, String selectedModel,
+            boolean responseLengthEnabled, int responseLength, int minStoryPercent,
+            int storyCardLookback, int anPlacement, String comfyWorkflow,
+            int comfyWidth, int comfyHeight, int comfyBatchSize)
+    {
+        this(ollamaUrl, comfyUiUrl, selectedModel,
+                responseLengthEnabled, responseLength, minStoryPercent,
+                storyCardLookback, anPlacement, comfyWorkflow,
+                comfyWidth, comfyHeight, comfyBatchSize,
+                DEFAULT_OLLAMA_KEEP_ALIVE_MINUTES);
     }
 
     public static AppSettings defaults()
@@ -40,6 +58,7 @@ public record AppSettings(String ollamaUrl, String comfyUiUrl, String selectedMo
         return new AppSettings(OllamaClient.DEFAULT_HOST, ComfyUiClient.DEFAULT_HOST, OllamaClient.DEFAULT_MODEL,
                 false, defaults.responseLength(), 60,
                 defaults.storyCardLookback(), defaults.anPlacement(), DEFAULT_COMFY_WORKFLOW,
-                DEFAULT_COMFY_WIDTH, DEFAULT_COMFY_HEIGHT, DEFAULT_COMFY_BATCH_SIZE);
+                DEFAULT_COMFY_WIDTH, DEFAULT_COMFY_HEIGHT, DEFAULT_COMFY_BATCH_SIZE,
+                DEFAULT_OLLAMA_KEEP_ALIVE_MINUTES);
     }
 }

@@ -11,7 +11,8 @@ public record GenerationSettings(String modelName, String ollamaHost, int contex
         boolean frequencyPenaltyEnabled, double frequencyPenalty,
         boolean repeatLastNEnabled, int repeatLastN,
         boolean repetitionPenaltyEnabled, double repetitionPenalty,
-        int minStoryWindow, int storyCardLookback, int anPlacement)
+        int minStoryWindow, int storyCardLookback, int anPlacement,
+        int ollamaKeepAliveMinutes)
 {
     public static final String DEFAULT_MODEL = "hf.co/LatitudeGames/Muse-12B-GGUF:BF16";
     public static final String DEFAULT_OLLAMA_HOST = "http://localhost:11434";
@@ -40,6 +41,36 @@ public record GenerationSettings(String modelName, String ollamaHost, int contex
         minStoryWindow = Math.max(0, Math.min(contextLimit, minStoryWindow));
         storyCardLookback = Math.max(0, Math.min(100, storyCardLookback));
         anPlacement = Math.max(1, Math.min(100, anPlacement));
+        ollamaKeepAliveMinutes = Math.max(AppSettings.MIN_OLLAMA_KEEP_ALIVE_MINUTES,
+                Math.min(AppSettings.MAX_OLLAMA_KEEP_ALIVE_MINUTES, ollamaKeepAliveMinutes));
+    }
+
+    public GenerationSettings(String modelName, String ollamaHost, int contextLimit, double promptTokenScale,
+            boolean responseLengthEnabled, int responseLength,
+            boolean temperatureEnabled, double temperature,
+            boolean topKEnabled, int topK,
+            boolean topPEnabled, double topP,
+            boolean minPEnabled, double minP,
+            boolean typicalPEnabled, double typicalP,
+            boolean presencePenaltyEnabled, double presencePenalty,
+            boolean frequencyPenaltyEnabled, double frequencyPenalty,
+            boolean repeatLastNEnabled, int repeatLastN,
+            boolean repetitionPenaltyEnabled, double repetitionPenalty,
+            int minStoryWindow, int storyCardLookback, int anPlacement)
+    {
+        this(modelName, ollamaHost, contextLimit, promptTokenScale,
+                responseLengthEnabled, responseLength,
+                temperatureEnabled, temperature,
+                topKEnabled, topK,
+                topPEnabled, topP,
+                minPEnabled, minP,
+                typicalPEnabled, typicalP,
+                presencePenaltyEnabled, presencePenalty,
+                frequencyPenaltyEnabled, frequencyPenalty,
+                repeatLastNEnabled, repeatLastN,
+                repetitionPenaltyEnabled, repetitionPenalty,
+                minStoryWindow, storyCardLookback, anPlacement,
+                AppSettings.DEFAULT_OLLAMA_KEEP_ALIVE_MINUTES);
     }
 
     public static GenerationSettings defaults()
@@ -57,6 +88,7 @@ public record GenerationSettings(String modelName, String ollamaHost, int contex
                 false, 0.0,
                 false, 64,
                 false, 1.05,
-                minStoryWindow, 7, 3);
+                minStoryWindow, 7, 3,
+                AppSettings.DEFAULT_OLLAMA_KEEP_ALIVE_MINUTES);
     }
 }

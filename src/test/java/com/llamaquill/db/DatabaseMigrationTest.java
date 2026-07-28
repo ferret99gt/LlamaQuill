@@ -72,9 +72,11 @@ class DatabaseMigrationTest
                     "SettingsWorkflow",
                     1024,
                     768,
-                    2);
+                    2,
+                    17);
             appSettings.save(expectedSettings);
             assertEquals(expectedSettings, appSettings.load().orElseThrow());
+            assertTrue(columns(database, "app_settings").contains("ollama_keep_alive_minutes"));
 
             ModelSettingsRepository modelSettings = new ModelSettingsRepository(database);
             ModelSettings expectedModelSettings = new ModelSettings(
@@ -140,6 +142,32 @@ class DatabaseMigrationTest
     }
 
     @Test
+    void normalizesAnEarlySchemaFourDatabaseMissingKeepAlive() throws Exception
+    {
+        AppPaths paths = paths("schema-four-keep-alive-normalization");
+        try (Database database = Database.open(paths))
+        {
+            new AppSettingsRepository(database).save(AppSettings.defaults());
+        }
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + paths.databaseFile());
+             Statement statement = connection.createStatement())
+        {
+            statement.execute("ALTER TABLE app_settings DROP COLUMN ollama_keep_alive_minutes");
+        }
+
+        try (Database database = Database.open(paths))
+        {
+            Database.StartupReport report = database.startupReport();
+            assertEquals(AppVersion.DATABASE_SCHEMA, report.migration().sourceSchema());
+            assertEquals(AppVersion.DATABASE_SCHEMA, report.migration().targetSchema());
+            assertTrue(Files.isRegularFile(report.migration().backup().orElseThrow()));
+            assertTrue(columns(database, "app_settings").contains("ollama_keep_alive_minutes"));
+            assertEquals(AppSettings.DEFAULT_OLLAMA_KEEP_ALIVE_MINUTES,
+                    new AppSettingsRepository(database).load().orElseThrow().ollamaKeepAliveMinutes());
+        }
+    }
+
+    @Test
     void migratesTheEarliestUnversionedDatabaseWithoutLosingRows() throws Exception
     {
         AppPaths paths = paths("earliest");
@@ -172,6 +200,8 @@ class DatabaseMigrationTest
                     "SELECT COUNT(*) FROM model_settings WHERE model_name LIKE 'hf.co/%'"));
             assertEquals(7, enabledModelOptionCount(database,
                     "hf.co/LatitudeGames/Muse-12B-GGUF:BF16"));
+            assertEquals(5, scalarInt(database,
+                    "SELECT ollama_keep_alive_minutes FROM app_settings WHERE id = 1"));
 
             int nextPosition = blocks.nextPosition("story-1");
             blocks.insert(new Block("image-block", "story-1", Role.IMAGE, "image-id", Timestamps.now(), nextPosition));
@@ -200,6 +230,8 @@ class DatabaseMigrationTest
             assertEquals(1, scalarInt(database,
                     "SELECT response_length_enabled FROM app_settings WHERE id = 1"));
             assertEquals(7, enabledModelOptionCount(database, "legacy-model"));
+            assertEquals(5, scalarInt(database,
+                    "SELECT ollama_keep_alive_minutes FROM app_settings WHERE id = 1"));
         }
     }
 
@@ -232,6 +264,8 @@ class DatabaseMigrationTest
             assertEquals(1, scalarInt(database,
                     "SELECT top_k_enabled FROM model_settings WHERE model_name = 'schema-two-model'"));
             assertEquals(7, enabledModelOptionCount(database, "schema-two-model"));
+            assertEquals(5, scalarInt(database,
+                    "SELECT ollama_keep_alive_minutes FROM app_settings WHERE id = 1"));
             assertEquals(AppVersion.DATABASE_SCHEMA, userVersion(database));
         }
     }

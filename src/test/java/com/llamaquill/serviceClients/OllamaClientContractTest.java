@@ -135,6 +135,7 @@ class OllamaClientContractTest
         assertEquals(9000L, result.totalDurationNanos());
         assertFalse(payload.getBoolean("stream"));
         assertFalse(payload.getBoolean("think"));
+        assertEquals("5m", payload.getString("keep_alive"));
         assertEquals("POST", client.lastStringRequest.method());
         assertEquals("/api/chat", client.lastStringRequest.uri().getPath());
     }

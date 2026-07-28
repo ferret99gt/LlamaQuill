@@ -41,6 +41,10 @@ Any compatible chat model available through Ollama can be selected inside LlamaQ
 
 Response length and model sampling controls each have an enable checkbox. Unchecked options are omitted from the Ollama request so the model's defaults can apply; the remembered response-length value remains LlamaQuill's conservative local prompt-budget reserve.
 
+The global **Ollama Model Keep Alive** setting keeps the selected model loaded for 5–30 minutes
+after each chat request. It defaults to Ollama's normal five minutes and can reduce reload delays
+when returning to a story after briefly switching away.
+
 ## ComfyUI Desktop setup
 
 LlamaQuill's "See" action expects ComfyUI Desktop to be installed and running. If you won't use See, it's optional.

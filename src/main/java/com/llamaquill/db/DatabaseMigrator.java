@@ -152,6 +152,7 @@ public final class DatabaseMigrator
         Set<String> appColumns = columns(connection, "app_settings");
         Set<String> modelColumns = columns(connection, "model_settings");
         return !appColumns.contains("min_story_percent")
+                || !appColumns.contains("ollama_keep_alive_minutes")
                 || appColumns.contains("context_limit")
                 || appColumns.contains("min_story_window")
                 || !modelColumns.contains("context_limit")
@@ -332,14 +333,15 @@ public final class DatabaseMigrator
                         id, ollama_url, comfyui_url, selected_model,
                         response_length_enabled, response_length,
                         min_story_percent, story_card_lookback, an_placement,
-                        comfy_workflow, comfy_width, comfy_height, comfy_batch_size
+                        comfy_workflow, comfy_width, comfy_height, comfy_batch_size,
+                        ollama_keep_alive_minutes
                     )
                     SELECT id, 'http://localhost:11434', 'http://localhost:8000',
                            'hf.co/LatitudeGames/Muse-12B-GGUF:BF16',
                            1, response_length,
                            MAX(10, MIN(100, ROUND(min_story_window * 100.0 / MAX(1, context_limit)))),
                            story_card_lookback, an_placement,
-                           'ChromaHD', 720, 720, 4
+                           'ChromaHD', 720, 720, 4, 5
                     FROM generation_settings
                     WHERE id = 1
                     """);
@@ -421,11 +423,12 @@ public final class DatabaseMigrator
                         id, ollama_url, comfyui_url, selected_model,
                         response_length_enabled, response_length,
                         min_story_percent, story_card_lookback, an_placement,
-                        comfy_workflow, comfy_width, comfy_height, comfy_batch_size
+                        comfy_workflow, comfy_width, comfy_height, comfy_batch_size,
+                        ollama_keep_alive_minutes
                     )
                     SELECT %s, %s, %s, %s, %s, %s,
                            MAX(10, MIN(100, %s)),
-                           %s, %s, %s, %s, %s, %s
+                           %s, %s, %s, %s, %s, %s, %s
                     FROM app_settings
                     WHERE %s = 1
                     """.formatted(
@@ -446,6 +449,7 @@ public final class DatabaseMigrator
                     value(oldColumns, "comfy_width", "720"),
                     value(oldColumns, "comfy_height", "720"),
                     value(oldColumns, "comfy_batch_size", "4"),
+                    value(oldColumns, "ollama_keep_alive_minutes", "5"),
                     value(oldColumns, "id", "1")));
             execute(connection, "DROP TABLE app_settings");
         }
@@ -527,7 +531,9 @@ public final class DatabaseMigrator
                     comfy_workflow TEXT NOT NULL DEFAULT 'ChromaHD',
                     comfy_width INTEGER NOT NULL DEFAULT 720,
                     comfy_height INTEGER NOT NULL DEFAULT 720,
-                    comfy_batch_size INTEGER NOT NULL DEFAULT 4
+                    comfy_batch_size INTEGER NOT NULL DEFAULT 4,
+                    ollama_keep_alive_minutes INTEGER NOT NULL DEFAULT 5
+                        CHECK (ollama_keep_alive_minutes BETWEEN 5 AND 30)
                 )
                 """.formatted(table);
     }

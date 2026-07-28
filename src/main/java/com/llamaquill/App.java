@@ -207,6 +207,7 @@ public class App extends Application
     private Spinner<Integer> storyCardLookbackSpinner;
     private Spinner<Integer> anPlacementSpinner;
     private TextField ollamaUrlField;
+    private Slider ollamaKeepAliveSlider;
     private TextField comfyUiUrlField;
     private ComboBox<String> comfyWorkflowSelect;
     private Spinner<Integer> comfyWidthSpinner;
@@ -657,6 +658,13 @@ public class App extends Application
         contextLimitSlider = buildIntSlider(ModelSettings.MIN_CONTEXT_LIMIT,
                 Math.max(131072, activeModelSettings.contextLimit()), activeModelSettings.contextLimit(), 512);
         contextLimitValueLabel = valueLabel(activeModelSettings.contextLimit(), "tokens");
+        ollamaKeepAliveSlider = buildIntSlider(
+                AppSettings.MIN_OLLAMA_KEEP_ALIVE_MINUTES,
+                AppSettings.MAX_OLLAMA_KEEP_ALIVE_MINUTES,
+                appSettings.ollamaKeepAliveMinutes(),
+                1);
+        ollamaKeepAliveSlider.setTooltip(new Tooltip(
+                "How long Ollama keeps the model loaded after each LlamaQuill chat request."));
         responseLengthSlider = buildIntSlider(1, 32768, appSettings.responseLength(), 1);
         temperatureSlider = buildDoubleSlider(0.0, 5.0, activeModelSettings.temperature(), 0.1);
         topKSlider = buildIntSlider(0, 10000, activeModelSettings.topK(), 1);
@@ -727,6 +735,9 @@ public class App extends Application
         });
 
         content.getChildren().addAll(textFieldRow("Ollama URL", ollamaUrlField),
+                sliderRow("Ollama Model Keep Alive", ollamaKeepAliveSlider,
+                        valueLabel(appSettings.ollamaKeepAliveMinutes(), "minutes"),
+                        value -> updateOllamaKeepAliveMinutes(value.intValue())),
                 modelSelectorRow(),
                 modelDetailsLabel,
                 sliderRow("Context Limit", contextLimitSlider, contextLimitValueLabel,
@@ -1072,7 +1083,8 @@ public class App extends Application
                 activeModelSettings.frequencyPenaltyEnabled(), activeModelSettings.frequencyPenalty(),
                 activeModelSettings.repeatLastNEnabled(), activeModelSettings.repeatLastN(),
                 activeModelSettings.repetitionPenaltyEnabled(), activeModelSettings.repetitionPenalty(),
-                minStoryWindow, appSettings.storyCardLookback(), appSettings.anPlacement());
+                minStoryWindow, appSettings.storyCardLookback(), appSettings.anPlacement(),
+                appSettings.ollamaKeepAliveMinutes());
     }
 
     private void refreshModelSelect()
@@ -2768,6 +2780,13 @@ public class App extends Application
     private void updateResponseLength(int value)
     {
         appSettings = SettingsCoordinator.withResponseLength(appSettings, value);
+        persistAppSettings();
+        refreshGenerationSettings();
+    }
+
+    private void updateOllamaKeepAliveMinutes(int minutes)
+    {
+        appSettings = SettingsCoordinator.withOllamaKeepAliveMinutes(appSettings, minutes);
         persistAppSettings();
         refreshGenerationSettings();
     }

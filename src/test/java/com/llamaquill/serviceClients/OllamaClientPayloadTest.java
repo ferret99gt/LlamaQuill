@@ -26,7 +26,19 @@ class OllamaClientPayloadTest
         assertFalse(payload.has("prompt"));
         assertFalse(payload.has("raw"));
         assertTrue(payload.has("messages"));
+        assertEquals("5m", payload.getString("keep_alive"));
         assertEquals(Set.of("num_ctx"), payload.getJSONObject("options").keySet());
+    }
+
+    @Test
+    void serializesTheConfiguredGlobalKeepAliveAsAnOllamaDuration()
+    {
+        OllamaClient client = new OllamaClient("http://localhost:11434", "test-model");
+        JSONObject payload = new JSONObject(client.buildChatPayload(
+                List.of(new ChatMessage("user", "Hello")),
+                settings(false, "test-model", 30)));
+
+        assertEquals("30m", payload.getString("keep_alive"));
     }
 
     @Test
@@ -94,6 +106,11 @@ class OllamaClientPayloadTest
 
     private static GenerationSettings settings(boolean enabled, String modelName)
     {
+        return settings(enabled, modelName, 5);
+    }
+
+    private static GenerationSettings settings(boolean enabled, String modelName, int keepAliveMinutes)
+    {
         return new GenerationSettings(
                 modelName, GenerationSettings.DEFAULT_OLLAMA_HOST, 8192, 1.0,
                 enabled, 150,
@@ -108,6 +125,7 @@ class OllamaClientPayloadTest
                 enabled, 0.0,
                 4096,
                 7,
-                3);
+                3,
+                keepAliveMinutes);
     }
 }

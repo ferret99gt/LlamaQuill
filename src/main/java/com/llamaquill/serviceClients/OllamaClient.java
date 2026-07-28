@@ -310,6 +310,7 @@ public class OllamaClient implements AutoCloseable
         // acknowledged compatibility edge case to revisit later.
         payload.put("think", false);
         payload.put("stream", stream);
+        payload.put("keep_alive", settings.ollamaKeepAliveMinutes() + "m");
         payload.put("options", buildOptions(settings));
         return payload.toString();
     }

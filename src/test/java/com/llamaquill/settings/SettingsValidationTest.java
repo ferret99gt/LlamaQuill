@@ -80,7 +80,8 @@ class SettingsValidationTest
                 "",
                 1,
                 99999,
-                0);
+                0,
+                100);
 
         assertEquals("http://localhost:11434", settings.ollamaUrl());
         assertEquals(32768, settings.responseLength());
@@ -90,5 +91,8 @@ class SettingsValidationTest
         assertEquals(64, settings.comfyWidth());
         assertEquals(4096, settings.comfyHeight());
         assertEquals(1, settings.comfyBatchSize());
+        assertEquals(AppSettings.MAX_OLLAMA_KEEP_ALIVE_MINUTES, settings.ollamaKeepAliveMinutes());
+        assertEquals(AppSettings.MAX_OLLAMA_KEEP_ALIVE_MINUTES,
+                SettingsCoordinator.withComfyWidth(settings, 800).ollamaKeepAliveMinutes());
     }
 }
