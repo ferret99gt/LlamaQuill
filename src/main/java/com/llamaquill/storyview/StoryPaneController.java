@@ -10,6 +10,8 @@ import javafx.animation.PauseTransition;
 import javafx.application.Platform;
 import javafx.beans.binding.Bindings;
 import javafx.beans.binding.DoubleBinding;
+import javafx.beans.property.SimpleStringProperty;
+import javafx.beans.property.StringProperty;
 import javafx.beans.value.ChangeListener;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
@@ -24,6 +26,7 @@ import javafx.scene.control.ListView;
 import javafx.scene.control.OverrunStyle;
 import javafx.scene.control.ScrollBar;
 import javafx.scene.control.TextArea;
+import javafx.scene.control.skin.VirtualFlow;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.input.MouseEvent;
@@ -54,6 +57,7 @@ public final class StoryPaneController
 {
     private static final int ASSISTANT_FLOW_CHUNK_CHAR_LIMIT = 6000;
     private static final int ASSISTANT_FLOW_CHUNK_BLOCK_LIMIT = 48;
+    private static final long STREAMING_FRAME_INTERVAL_NANOS = 33_333_333L;
     private static final String STREAMING_DRAFT_ID = "__llamaquill_streaming_draft__";
     private static final String STORY_BLOCK_ID_KEY = "llamaquill-story-block-id";
     private static final String DECORATION_UPDATE_KEY = "llamaquill-decoration-update";
@@ -88,18 +92,32 @@ public final class StoryPaneController
     private final ObservableList<StoryItem> storyRows = FXCollections.observableArrayList();
     private final ListView<StoryItem> storyListView = new ListView<>(storyRows);
     private final PauseTransition storyViewportRefreshDebounce = new PauseTransition(Duration.millis(120));
+    private boolean suppressPostScrollLayout;
     private final ChangeListener<Number> storyScrollListener =
-            (observable, oldValue, newValue) -> schedulePostScrollLayout(newValue.doubleValue());
+            (observable, oldValue, newValue) ->
+            {
+                if (!suppressPostScrollLayout)
+                {
+                    schedulePostScrollLayout(newValue.doubleValue());
+                }
+            };
     private final TurnInputPane turnInputPane;
     private final Region storyInteractionShield = new Region();
     private final Object streamingLock = new Object();
     private final StringBuilder streamingText = new StringBuilder();
+    private long lastStreamingRenderNanos;
     private final AnimationTimer streamingPulse = new AnimationTimer()
     {
         @Override
         public void handle(long now)
         {
-            drainStreamingDraft();
+            if (lastStreamingRenderNanos == 0
+                    || now - lastStreamingRenderNanos >= STREAMING_FRAME_INTERVAL_NANOS)
+            {
+                lastStreamingRenderNanos = now;
+                renderQueuedStreamingFrame();
+            }
+            advanceStreamingBottomFollow(now);
         }
     };
 
@@ -113,6 +131,9 @@ public final class StoryPaneController
     private ScrollBar observedStoryScrollBar;
     private boolean postScrollLayoutQueued;
     private double requestedScrollValue;
+    private double pendingStreamingScrollPixels;
+    private long lastStreamingScrollNanos;
+    private boolean streamingFlowLayoutPending;
 
     private boolean streamingActive;
     private StreamingMode streamingMode;
@@ -123,6 +144,7 @@ public final class StoryPaneController
     private long streamingVersion;
     private long renderedStreamingVersion = -1;
     private boolean streamingDraftVisible;
+    private StreamingAssistantItem streamingDraftItem;
 
     public StoryPaneController(Stage owner, Runnable onSubmitTurn, Function<String, StoryImage> imageLoader,
             Consumer<StoryImage> imageSaver, BlockDeletionHandler blockDeletionHandler,
@@ -230,7 +252,10 @@ public final class StoryPaneController
             streamingVersion++;
             renderedStreamingVersion = -1;
             streamingDraftVisible = false;
+            streamingDraftItem = null;
+            lastStreamingRenderNanos = 0;
         }
+        clearStreamingBottomFollow();
         setStoryInteractionLocked(true);
         streamingPulse.start();
         return streamingToken;
@@ -321,7 +346,10 @@ public final class StoryPaneController
             streamingSeed = null;
             streamingOriginalBlocks = List.of();
             streamingDraftVisible = false;
+            streamingDraftItem = null;
+            lastStreamingRenderNanos = 0;
         }
+        clearStreamingBottomFollow();
         setStoryInteractionLocked(false);
     }
 
@@ -336,7 +364,10 @@ public final class StoryPaneController
             streamingSeed = null;
             streamingOriginalBlocks = List.of();
             streamingDraftVisible = false;
+            streamingDraftItem = null;
+            lastStreamingRenderNanos = 0;
         }
+        clearStreamingBottomFollow();
         setStoryInteractionLocked(false);
     }
 
@@ -346,7 +377,7 @@ public final class StoryPaneController
         storyInteractionShield.setVisible(locked);
     }
 
-    private void drainStreamingDraft()
+    void renderQueuedStreamingFrame()
     {
         StreamingSnapshot snapshot;
         synchronized (streamingLock)
@@ -370,9 +401,10 @@ public final class StoryPaneController
             }
             if (streamingDraftVisible || showCommittedTurn)
             {
+                streamingDraftItem = null;
                 storyRows.setAll(buildStoryItems(visibleBlocks));
                 streamingDraftVisible = showCommittedTurn;
-                followStreamingBottom();
+                scrollToBottom();
             }
             return;
         }
@@ -381,50 +413,41 @@ public final class StoryPaneController
             return;
         }
 
-        List<Block> displayBlocks = new ArrayList<>(snapshot.originalBlocks());
-        if (snapshot.mode() == StreamingMode.RETRY && !displayBlocks.isEmpty())
+        if (streamingDraftItem == null)
         {
-            displayBlocks.removeLast();
+            stageStreamingDraft(snapshot);
+            return;
+        }
+        streamingDraftItem.setText(snapshot.text());
+    }
+
+    private void stageStreamingDraft(StreamingSnapshot snapshot)
+    {
+        List<Block> visibleBlocks = new ArrayList<>(snapshot.originalBlocks());
+        if (snapshot.mode() == StreamingMode.RETRY && !visibleBlocks.isEmpty())
+        {
+            visibleBlocks.removeLast();
         }
         if (snapshot.mode() == StreamingMode.TURN)
         {
-            displayBlocks.add(snapshot.seed());
+            visibleBlocks.add(snapshot.seed());
         }
 
-        String storyId = !displayBlocks.isEmpty()
-                ? displayBlocks.getLast().storyId()
-                : currentBlocks.isEmpty() ? "" : currentBlocks.getFirst().storyId();
-        int position = displayBlocks.isEmpty() ? 0 : displayBlocks.getLast().position() + 1;
-        Block draft = new Block(STREAMING_DRAFT_ID, storyId, Role.ASSISTANT, snapshot.text(), "", position);
-        displayBlocks.add(draft);
-        applyStreamingItems(buildStoryItems(displayBlocks));
-        streamingDraftVisible = true;
-        followStreamingBottom();
-    }
-
-    private void applyStreamingItems(List<StoryItem> updated)
-    {
-        int lastIndex = updated.size() - 1;
-        if (streamingDraftVisible && updated.size() == storyRows.size() && lastIndex >= 0
-                && updated.get(lastIndex) instanceof AssistantItem
-                && storyRows.get(lastIndex) instanceof AssistantItem)
+        List<StoryItem> stagedItems = new ArrayList<>(buildStoryItems(visibleBlocks));
+        List<Block> assistantPrefix = List.of();
+        if (!stagedItems.isEmpty() && stagedItems.getLast() instanceof AssistantItem assistant)
         {
-            boolean unchangedPrefix = true;
-            for (int i = 0; i < lastIndex; i++)
-            {
-                if (!updated.get(i).equals(storyRows.get(i)))
-                {
-                    unchangedPrefix = false;
-                    break;
-                }
-            }
-            if (unchangedPrefix)
-            {
-                storyRows.set(lastIndex, updated.get(lastIndex));
-                return;
-            }
+            stagedItems.removeLast();
+            assistantPrefix = assistant.blocks();
         }
-        storyRows.setAll(updated);
+
+        StreamingAssistantItem draftItem = new StreamingAssistantItem(assistantPrefix);
+        draftItem.setText(snapshot.text());
+        stagedItems.add(draftItem);
+        streamingDraftItem = draftItem;
+        streamingDraftVisible = true;
+        storyRows.setAll(stagedItems);
+        scrollToBottom();
     }
 
     private void initializeStoryListView()
@@ -514,6 +537,18 @@ public final class StoryPaneController
 
     private Region buildAssistantFlow(AssistantItem item)
     {
+        return buildAssistantFlow(item.blocks(), item.latestAssistantId(), null);
+    }
+
+    private Region buildStreamingAssistantFlow(StreamingAssistantItem item)
+    {
+        List<Block> blocks = new ArrayList<>(item.prefixBlocks());
+        blocks.add(new Block(STREAMING_DRAFT_ID, "", Role.ASSISTANT, "", "", Integer.MAX_VALUE));
+        return buildAssistantFlow(blocks, STREAMING_DRAFT_ID, item.textProperty());
+    }
+
+    private Region buildAssistantFlow(List<Block> blocks, String latestAssistantId, StringProperty draftText)
+    {
         TextFlow flow = new TextFlow();
         flow.setLineSpacing(6);
         flow.prefWidthProperty().bind(contentWidthBinding().subtract(20));
@@ -522,12 +557,20 @@ public final class StoryPaneController
         List<Path> latestBackgrounds = new ArrayList<>();
         List<Runnable> decorationUpdates = new ArrayList<>();
 
-        for (Block itemBlock : item.blocks())
+        for (Block itemBlock : blocks)
         {
             Block block = currentBlock(itemBlock);
-            boolean latest = block.id().equals(item.latestAssistantId());
+            boolean latest = block.id().equals(latestAssistantId);
             boolean draft = STREAMING_DRAFT_ID.equals(block.id());
-            Text textNode = new Text(block.text());
+            Text textNode = new Text();
+            if (draft && draftText != null)
+            {
+                textNode.textProperty().bind(draftText);
+            }
+            else
+            {
+                textNode.setText(block.text());
+            }
             textNode.getProperties().put(STORY_BLOCK_ID_KEY, block.id());
             applyAssistantTextStyle(textNode, latest);
             Path hoverUnderline = latest ? null : createDottedUnderline();
@@ -1220,21 +1263,87 @@ public final class StoryPaneController
         });
     }
 
-    private void followStreamingBottom()
+    private void queueStreamingBottomFollow(double heightIncrease)
     {
-        if (storyRows.isEmpty())
+        if (heightIncrease <= 0)
         {
             return;
         }
-        storyListView.scrollTo(storyRows.size() - 1);
-        storyListView.applyCss();
-        storyListView.layout();
-        hideStoryHorizontalScrollBar();
-        ScrollBar bar = findStoryVerticalScrollBar();
-        if (bar != null)
+        pendingStreamingScrollPixels += heightIncrease;
+        streamingFlowLayoutPending = true;
+    }
+
+    private void advanceStreamingBottomFollow(long now)
+    {
+        if (!streamingActive || pendingStreamingScrollPixels <= 0.1)
         {
-            bar.setValue(bar.getMax());
+            return;
         }
+
+        VirtualFlow<?> flow = findStoryVirtualFlow();
+        if (flow == null)
+        {
+            clearStreamingBottomFollow();
+            return;
+        }
+
+        suppressPostScrollLayout = true;
+        try
+        {
+            if (streamingFlowLayoutPending)
+            {
+                flow.requestLayout();
+                flow.layout();
+                streamingFlowLayoutPending = false;
+            }
+
+            long elapsedNanos = lastStreamingScrollNanos == 0
+                    ? 16_666_667L
+                    : Math.max(1, now - lastStreamingScrollNanos);
+            lastStreamingScrollNanos = now;
+            double fraction = 1.0 - Math.exp(-elapsedNanos / 45_000_000.0);
+            double requested = Math.min(pendingStreamingScrollPixels,
+                    Math.max(0.75, pendingStreamingScrollPixels * fraction));
+            double moved = flow.scrollPixels(requested);
+            if (moved <= 0.05 || moved + 0.5 < requested)
+            {
+                pendingStreamingScrollPixels = 0;
+            }
+            else
+            {
+                pendingStreamingScrollPixels = Math.max(0, pendingStreamingScrollPixels - moved);
+            }
+        }
+        finally
+        {
+            suppressPostScrollLayout = false;
+        }
+
+        if (pendingStreamingScrollPixels <= 0.1)
+        {
+            pendingStreamingScrollPixels = 0;
+            lastStreamingScrollNanos = 0;
+        }
+    }
+
+    private VirtualFlow<?> findStoryVirtualFlow()
+    {
+        for (Node node : storyListView.lookupAll(".virtual-flow"))
+        {
+            if (node instanceof VirtualFlow<?> flow)
+            {
+                return flow;
+            }
+        }
+        return null;
+    }
+
+    private void clearStreamingBottomFollow()
+    {
+        pendingStreamingScrollPixels = 0;
+        lastStreamingScrollNanos = 0;
+        streamingFlowLayoutPending = false;
+        suppressPostScrollLayout = false;
     }
 
     private void clearStoryListSelection()
@@ -1318,6 +1427,11 @@ public final class StoryPaneController
         postScrollLayoutQueued = true;
         Platform.runLater(() ->
         {
+            if (suppressPostScrollLayout)
+            {
+                postScrollLayoutQueued = false;
+                return;
+            }
             remeasureVisibleStoryCells();
             storyListView.applyCss();
             storyListView.layout();
@@ -1357,7 +1471,7 @@ public final class StoryPaneController
         return storyRowContentWidthBinding != null ? storyRowContentWidthBinding : contentWidthBinding().subtract(24);
     }
 
-    private sealed interface StoryItem permits AssistantItem, UserItem, ImageItem
+    private sealed interface StoryItem permits AssistantItem, StreamingAssistantItem, UserItem, ImageItem
     {
     }
 
@@ -1366,6 +1480,32 @@ public final class StoryPaneController
         private AssistantItem
         {
             blocks = List.copyOf(blocks);
+        }
+    }
+
+    private static final class StreamingAssistantItem implements StoryItem
+    {
+        private final List<Block> prefixBlocks;
+        private final StringProperty text = new SimpleStringProperty("");
+
+        private StreamingAssistantItem(List<Block> prefixBlocks)
+        {
+            this.prefixBlocks = List.copyOf(prefixBlocks);
+        }
+
+        private List<Block> prefixBlocks()
+        {
+            return prefixBlocks;
+        }
+
+        private StringProperty textProperty()
+        {
+            return text;
+        }
+
+        private void setText(String value)
+        {
+            text.set(value == null ? "" : value);
         }
     }
 
@@ -1387,6 +1527,8 @@ public final class StoryPaneController
         private final Rectangle graphicClip = new Rectangle();
         private Region displayGraphic;
         private Region editorGraphic;
+        private StreamingAssistantItem observedStreamingItem;
+        private ChangeListener<String> streamingTextListener;
 
         private StoryCell()
         {
@@ -1404,6 +1546,7 @@ public final class StoryPaneController
         @Override
         protected void updateItem(StoryItem item, boolean empty)
         {
+            detachStreamingTextListener();
             super.updateItem(item, empty);
             setText(null);
             setPadding(Insets.EMPTY);
@@ -1430,12 +1573,19 @@ public final class StoryPaneController
             displayGraphic = switch (item)
             {
                 case AssistantItem assistant -> buildAssistantFlow(assistant);
+                case StreamingAssistantItem streaming -> buildStreamingAssistantFlow(streaming);
                 case UserItem user -> buildUserBlockNode(currentBlock(user.block()));
                 case ImageItem image -> buildImageBlockNode(image.block());
             };
             editorGraphic = null;
             clippedGraphic.getChildren().setAll(displayGraphic);
             setGraphic(clippedGraphic);
+            if (item instanceof StreamingAssistantItem streaming)
+            {
+                observedStreamingItem = streaming;
+                streamingTextListener = (observable, oldValue, newValue) -> refreshStreamingDraftLayout();
+                streaming.textProperty().addListener(streamingTextListener);
+            }
             Platform.runLater(() ->
             {
                 if (getItem() == item)
@@ -1443,6 +1593,37 @@ public final class StoryPaneController
                     remeasure();
                 }
             });
+        }
+
+        private void detachStreamingTextListener()
+        {
+            if (observedStreamingItem != null && streamingTextListener != null)
+            {
+                observedStreamingItem.textProperty().removeListener(streamingTextListener);
+            }
+            observedStreamingItem = null;
+            streamingTextListener = null;
+        }
+
+        private void refreshStreamingDraftLayout()
+        {
+            if (!(getItem() instanceof StreamingAssistantItem) || displayGraphic == null)
+            {
+                return;
+            }
+            double previousHeight = getPrefHeight();
+            double measuredHeight = remeasure(true);
+            Object decorationUpdate = displayGraphic.getProperties().get(DECORATION_UPDATE_KEY);
+            if (decorationUpdate instanceof Runnable update)
+            {
+                update.run();
+            }
+            if (!Double.isNaN(measuredHeight)
+                    && previousHeight != Region.USE_COMPUTED_SIZE
+                    && measuredHeight > previousHeight + 0.5)
+            {
+                queueStreamingBottomFollow(measuredHeight - previousHeight);
+            }
         }
 
         private void showBlockEditor(Block block)
@@ -1521,11 +1702,16 @@ public final class StoryPaneController
             remeasure();
         }
 
-        private void remeasure()
+        private double remeasure()
+        {
+            return remeasure(false);
+        }
+
+        private double remeasure(boolean avoidUnchangedCellLayout)
         {
             if (isEmpty() || getItem() == null)
             {
-                return;
+                return Double.NaN;
             }
             double availableWidth = Math.max(0, getWidth() > 0 ? getWidth() : storyListView.getWidth());
             clippedGraphic.setMinHeight(Region.USE_COMPUTED_SIZE);
@@ -1539,7 +1725,7 @@ public final class StoryPaneController
             preferredHeight = clippedGraphic.prefHeight(availableWidth);
             if (preferredHeight <= 0)
             {
-                return;
+                return Double.NaN;
             }
             clippedGraphic.resize(availableWidth, preferredHeight);
             clippedGraphic.requestLayout();
@@ -1552,10 +1738,16 @@ public final class StoryPaneController
             clippedGraphic.resize(availableWidth, cellHeight);
             clippedGraphic.requestLayout();
             clippedGraphic.layout();
-            setMinHeight(cellHeight);
-            setPrefHeight(cellHeight);
-            setMaxHeight(cellHeight);
-            requestLayout();
+            boolean cellHeightChanged = getPrefHeight() == Region.USE_COMPUTED_SIZE
+                    || Math.abs(getPrefHeight() - cellHeight) > 0.5;
+            if (!avoidUnchangedCellLayout || cellHeightChanged)
+            {
+                setMinHeight(cellHeight);
+                setPrefHeight(cellHeight);
+                setMaxHeight(cellHeight);
+                requestLayout();
+            }
+            return cellHeight;
         }
     }
 }

@@ -37,6 +37,8 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class StoryPaneControllerTest
@@ -439,6 +441,138 @@ class StoryPaneControllerTest
         finally
         {
             runOnFxThread(fixture.stage()::close);
+        }
+    }
+
+    @Test
+    void streamingReusesOneTextNodeAndKeepsPartialContinuationInOneFlow() throws Exception
+    {
+        String originalText = "The door";
+        EditorFixture fixture = createFixture(List.of(
+                new Block("assistant", "story", Role.ASSISTANT, originalText, "", 0)));
+        long[] token = { 0 };
+        AtomicReference<Text> initialDraftNode = new AtomicReference<>();
+        AtomicReference<ListCell<?>> initialDraftCell = new AtomicReference<>();
+        double[] initialDraftHeight = { 0 };
+        try
+        {
+            runOnFxThread(() ->
+            {
+                token[0] = fixture.controller().startStreaming(StoryPaneController.StreamingMode.APPEND);
+                fixture.controller().queueStreamingText(token[0], " opens");
+                fixture.controller().renderQueuedStreamingFrame();
+                fixture.root().applyCss();
+                fixture.root().layout();
+
+                Text prefix = findText(fixture.root(), originalText);
+                Text draft = findText(fixture.root(), " opens");
+                assertNotNull(prefix);
+                assertNotNull(draft);
+                assertSame(prefix.getParent(), draft.getParent(),
+                        "A partial continuation was split across separate TextFlows.");
+                initialDraftNode.set(draft);
+                initialDraftCell.set(enclosingCell(draft));
+                assertNotNull(initialDraftCell.get());
+                initialDraftHeight[0] = initialDraftCell.get().getPrefHeight();
+            });
+
+            for (int i = 0; i < 40; i++)
+            {
+                int chunk = i;
+                runOnFxThread(() ->
+                {
+                    fixture.controller().queueStreamingText(token[0], " " + chunk);
+                    fixture.controller().renderQueuedStreamingFrame();
+                });
+            }
+
+            runOnFxThread(() ->
+            {
+                fixture.root().applyCss();
+                fixture.root().layout();
+                Text updatedDraft = findText(fixture.root(),
+                        " opens" + java.util.stream.IntStream.range(0, 40)
+                                .mapToObj(value -> " " + value)
+                                .collect(java.util.stream.Collectors.joining()));
+                assertNotNull(updatedDraft);
+                assertSame(initialDraftNode.get(), updatedDraft,
+                        "Streaming replaced the draft Text node instead of updating it in place.");
+
+                String streamedText = updatedDraft.getText();
+                String paragraphGrowth = "\n\n"
+                        + "A new paragraph adds enough prose to wrap the streaming cell across several more lines. "
+                                .repeat(18);
+                fixture.controller().queueStreamingText(token[0], paragraphGrowth);
+                fixture.controller().renderQueuedStreamingFrame();
+                fixture.root().applyCss();
+                fixture.root().layout();
+
+                Text paragraphDraft = findText(fixture.root(), streamedText + paragraphGrowth);
+                assertNotNull(paragraphDraft);
+                assertSame(initialDraftNode.get(), paragraphDraft,
+                        "Paragraph growth replaced the streaming Text node.");
+                assertSame(initialDraftCell.get(), enclosingCell(paragraphDraft),
+                        "Paragraph growth recycled the active streaming cell.");
+                assertTrue(enclosingCell(paragraphDraft).getPrefHeight() > initialDraftHeight[0],
+                        "Paragraph growth did not expand the streaming cell.");
+                assertVisibleCellGraphicsAreContained(
+                        findNode(fixture.root(), ListView.class, ignored -> true));
+            });
+        }
+        finally
+        {
+            runOnFxThread(() ->
+            {
+                fixture.controller().cancelStreaming(token[0]);
+                fixture.stage().close();
+            });
+        }
+    }
+
+    @Test
+    void retryKeepsTheOldHeadUntilTextArrivesAndRestoresItBetweenAttempts() throws Exception
+    {
+        String oldResponse = "The response being retried.";
+        EditorFixture fixture = createFixture(List.of(
+                new Block("assistant", "story", Role.ASSISTANT, oldResponse, "", 0)));
+        long[] token = { 0 };
+        try
+        {
+            runOnFxThread(() ->
+            {
+                token[0] = fixture.controller().startStreaming(StoryPaneController.StreamingMode.RETRY);
+                fixture.root().applyCss();
+                fixture.root().layout();
+                assertNotNull(findText(fixture.root(), oldResponse),
+                        "Retry removed the old head before replacement text arrived.");
+
+                fixture.controller().queueStreamingText(token[0], "A new response.");
+                fixture.controller().renderQueuedStreamingFrame();
+                fixture.root().applyCss();
+                fixture.root().layout();
+                assertNull(findText(fixture.root(), oldResponse),
+                        "Retry retained the old head after replacement text arrived.");
+                assertNotNull(findText(fixture.root(), "A new response."));
+            });
+
+            runOnFxThread(() ->
+            {
+                fixture.controller().queueStreamingAttempt(token[0], "");
+                fixture.controller().renderQueuedStreamingFrame();
+                fixture.root().applyCss();
+                fixture.root().layout();
+                assertNotNull(findText(fixture.root(), oldResponse),
+                        "Starting another attempt did not restore the original retry head.");
+                assertNull(findText(fixture.root(), "A new response."));
+            });
+        }
+        finally
+        {
+            runOnFxThread(() ->
+            {
+                fixture.controller().cancelStreaming(token[0]);
+                fixture.stage().close();
+            });
         }
     }
 
