@@ -90,6 +90,29 @@ public class BlockRepository
         });
     }
 
+    public Optional<Block> findById(String id) throws SQLException
+    {
+        return database.withConnection(connection ->
+        {
+            try (PreparedStatement stmt = connection.prepareStatement("""
+                    SELECT id, story_id, role, text, created_at, position
+                    FROM blocks
+                    WHERE id = ?
+                    """))
+            {
+                stmt.setString(1, id);
+                try (ResultSet rs = stmt.executeQuery())
+                {
+                    if (!rs.next())
+                    {
+                        return Optional.empty();
+                    }
+                    return Optional.of(mapBlock(rs));
+                }
+            }
+        });
+    }
+
     public int nextPosition(String storyId) throws SQLException
     {
         return database.withConnection(connection ->
@@ -133,6 +156,22 @@ public class BlockRepository
         });
     }
 
+    public boolean deleteByIdForStory(String id, String storyId) throws SQLException
+    {
+        return database.withConnection(connection ->
+        {
+            try (PreparedStatement stmt = connection.prepareStatement("""
+                    DELETE FROM blocks
+                    WHERE id = ? AND story_id = ?
+                    """))
+            {
+                stmt.setString(1, id);
+                stmt.setString(2, storyId);
+                return stmt.executeUpdate() == 1;
+            }
+        });
+    }
+
     public void deleteHead(String storyId) throws SQLException
     {
         database.useConnection(connection ->
@@ -150,6 +189,30 @@ public class BlockRepository
         });
     }
 
+    public boolean deleteHeadIfCurrent(String storyId, String expectedHeadId) throws SQLException
+    {
+        return database.withConnection(connection ->
+        {
+            try (PreparedStatement stmt = connection.prepareStatement("""
+                    DELETE FROM blocks
+                    WHERE id = ?
+                      AND story_id = ?
+                      AND id = (
+                          SELECT id FROM blocks
+                          WHERE story_id = ?
+                          ORDER BY position DESC
+                          LIMIT 1
+                      )
+                    """))
+            {
+                stmt.setString(1, expectedHeadId);
+                stmt.setString(2, storyId);
+                stmt.setString(3, storyId);
+                return stmt.executeUpdate() == 1;
+            }
+        });
+    }
+
     public void updateText(String id, String text) throws SQLException
     {
         database.useConnection(connection ->
@@ -161,6 +224,24 @@ public class BlockRepository
                 stmt.setString(1, text);
                 stmt.setString(2, id);
                 stmt.executeUpdate();
+            }
+        });
+    }
+
+    public boolean updateTextForStory(String id, String storyId, String text) throws SQLException
+    {
+        return database.withConnection(connection ->
+        {
+            try (PreparedStatement stmt = connection.prepareStatement("""
+                    UPDATE blocks
+                    SET text = ?
+                    WHERE id = ? AND story_id = ?
+                    """))
+            {
+                stmt.setString(1, text);
+                stmt.setString(2, id);
+                stmt.setString(3, storyId);
+                return stmt.executeUpdate() == 1;
             }
         });
     }

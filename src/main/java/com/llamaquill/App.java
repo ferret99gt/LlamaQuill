@@ -37,39 +37,33 @@ import com.llamaquill.session.StoryRetryHistory;
 import com.llamaquill.session.StorySession;
 import com.llamaquill.session.StoryWorkspace;
 import com.llamaquill.settings.SettingsCoordinator;
+import com.llamaquill.settings.SettingsPaneController;
+import com.llamaquill.stories.StoryBlockService;
 import com.llamaquill.stories.StoryDialogs;
+import com.llamaquill.stories.StoryLibraryController;
+import com.llamaquill.stories.StoryService;
 import com.llamaquill.storycards.StoryCardDialogs;
 import com.llamaquill.storycards.StoryCardGenerationCoordinator;
+import com.llamaquill.storycards.StoryCardLibraryController;
 import com.llamaquill.storycards.StoryCardPresetService;
+import com.llamaquill.storycards.StoryCardService;
 import com.llamaquill.storyview.StoryPaneController;
-import com.llamaquill.util.Ids;
 import com.llamaquill.util.Timestamps;
 import javafx.application.Application;
 import javafx.application.Platform;
-import javafx.collections.FXCollections;
-import javafx.collections.ObservableList;
 import javafx.concurrent.Task;
 import javafx.concurrent.WorkerStateEvent;
 import javafx.geometry.Insets;
-import javafx.geometry.Orientation;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
-import javafx.scene.control.CheckBox;
 import javafx.scene.control.Label;
-import javafx.scene.control.ListCell;
-import javafx.scene.control.ListView;
-import javafx.scene.control.ComboBox;
 import javafx.scene.control.ScrollPane;
-import javafx.scene.control.Slider;
 import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
 import javafx.scene.control.TextArea;
-import javafx.scene.control.TextField;
-import javafx.scene.control.Spinner;
-import javafx.scene.control.SpinnerValueFactory;
 import javafx.scene.control.Tooltip;
 import javafx.stage.FileChooser;
 import javafx.scene.layout.BorderPane;
@@ -133,6 +127,9 @@ public class App extends Application
     private ImageGenerationCoordinator imageGenerationCoordinator;
     private StoryCardGenerationCoordinator storyCardGenerationCoordinator;
     private StoryCardPresetService storyCardPresetService;
+    private StoryBlockService storyBlockService;
+    private StoryService storyService;
+    private StoryCardService storyCardService;
     private AIDungeonImports aiDungeonImports;
     private OllamaClient ollamaClient;
     private ComfyUiClient comfyUiClient;
@@ -145,11 +142,10 @@ public class App extends Application
     private final StoryOperationRegistry storyOperations = new StoryOperationRegistry();
     private final Set<Task<?>> backgroundTasks = ConcurrentHashMap.newKeySet();
 
-    private final ObservableList<Story> storyItems = FXCollections.observableArrayList();
-    private final ObservableList<StoryCard> cardItems = FXCollections.observableArrayList();
-
     private Stage primaryStage;
     private StoryPaneController storyPaneController;
+    private StoryLibraryController storyLibraryController;
+    private StoryCardLibraryController storyCardLibraryController;
     private Label statusLabel;
     private Button continueButton;
     private Button takeTurnButton;
@@ -159,13 +155,6 @@ public class App extends Application
     private Button seeButton;
     private Button promptButton;
 
-    private Button newStoryButton;
-    private Button importAdventureButton;
-    private Button collapseLeftButton;
-    private ListView<Story> storyList;
-    private VBox leftSideBar;
-    private Label storyHeader;
-
     private Button collapseRightButton;
     private VBox rightSidebar;
     private TabPane rightTabs;
@@ -174,48 +163,9 @@ public class App extends Application
     private TextArea plotEssentialsArea;
     private TextArea authorNoteArea;
 
-    private Button newCardButton;
-    private Button importCardsButton;
-    private ListView<StoryCard> cardList;
-
     private final StoryRetryHistory<RetryHistoryEntry> retryHistory = new StoryRetryHistory<>();
 
-    private Slider contextLimitSlider;
-    private CheckBox responseLengthEnabledBox;
-    private Slider responseLengthSlider;
-    private CheckBox temperatureEnabledBox;
-    private Slider temperatureSlider;
-    private CheckBox topKEnabledBox;
-    private Slider topKSlider;
-    private CheckBox topPEnabledBox;
-    private Slider topPSlider;
-    private CheckBox minPEnabledBox;
-    private Slider minPSlider;
-    private CheckBox typicalPEnabledBox;
-    private Slider typicalPSlider;
-    private CheckBox presencePenaltyEnabledBox;
-    private Slider presencePenaltySlider;
-    private CheckBox frequencyPenaltyEnabledBox;
-    private Slider frequencyPenaltySlider;
-    private CheckBox repeatLastNEnabledBox;
-    private Slider repeatLastNSlider;
-    private CheckBox repetitionPenaltyEnabledBox;
-    private Slider repetitionPenaltySlider;
-    private Slider minStoryPercentSlider;
-    private Spinner<Integer> storyCardLookbackSpinner;
-    private Spinner<Integer> anPlacementSpinner;
-    private TextField ollamaUrlField;
-    private Slider ollamaKeepAliveSlider;
-    private TextField comfyUiUrlField;
-    private ComboBox<String> comfyWorkflowSelect;
-    private Spinner<Integer> comfyWidthSpinner;
-    private Spinner<Integer> comfyHeightSpinner;
-    private Spinner<Integer> comfyBatchSizeSpinner;
-    private ComboBox<String> modelSelect;
-    private Button refreshModelsButton;
-    private Label modelDetailsLabel;
-    private Label contextLimitValueLabel;
-    private boolean updatingModelControls;
+    private SettingsPaneController settingsPaneController;
     private boolean modelRefreshInProgress;
     private boolean updatingStoryDetails;
     private boolean storyDetailsDirty;
@@ -292,6 +242,8 @@ public class App extends Application
             storyRepository = new StoryRepository(database);
             blockRepository = new BlockRepository(database);
             cardRepository = new StoryCardRepository(database);
+            storyService = new StoryService(storyRepository, blockRepository);
+            storyCardService = new StoryCardService(cardRepository);
             ImageRepository imageRepository = new ImageRepository(database);
             appSettingsRepository = new AppSettingsRepository(database);
             modelSettingsRepository = new ModelSettingsRepository(database);
@@ -311,6 +263,8 @@ public class App extends Application
             storyCardPresetService = new StoryCardPresetService(presetRepository);
             imageGenerationCoordinator = new ImageGenerationCoordinator(database, imageRepository, blockRepository,
                     storyRepository, cardRepository, auxiliaryGenerationService, comfyUiClient);
+            storyBlockService = new StoryBlockService(
+                    database, blockRepository, imageGenerationCoordinator::deleteImageById);
             appSettings = loadOrCreateAppSettings();
             refreshComfyWorkflowNames();
             ensureValidComfyWorkflowSelection();
@@ -321,9 +275,9 @@ public class App extends Application
             settings = buildGenerationSettings();
             executor = Executors.newSingleThreadExecutor();
 
-            Story initialStory = loadOrCreateStory();
-            List<Block> initialBlocks = blockRepository.listForStory(initialStory.id());
-            storyWorkspace.open(initialStory, initialBlocks);
+            StoryService.StoryDocument initialDocument =
+                    storyService.loadOrCreate("Untitled Story", DEFAULT_SYSTEM_PROMPT);
+            storyWorkspace.open(initialDocument.story(), initialDocument.blocks());
             retryHistory.activate(currentSession());
         }
         catch (SQLException e)
@@ -364,13 +318,23 @@ public class App extends Application
 
         statusLabel = new Label("Ready");
 
+        storyLibraryController = new StoryLibraryController(
+                LEFT_SIDEBAR_WIDTH,
+                this::showNewStoryDialog,
+                this::showImportAdventureDialog,
+                this::showStoryDialog);
+        storyCardLibraryController = new StoryCardLibraryController(
+                () -> showCardDialog(null),
+                this::showImportCardsDialog,
+                this::showCardDialog);
+
         var statusBar = new HBox(statusLabel);
         statusBar.getStyleClass().add("status-bar");
         statusBar.setPadding(new Insets(8, 12, 8, 12));
 
         var root = new BorderPane();
         root.getStyleClass().add("app-root");
-        root.setLeft(buildStorySidebar());
+        root.setLeft(storyLibraryController.root());
         root.setCenter(storyPaneController.buildCenterPane(
                 takeTurnButton, continueButton, seeButton, retryButton, retryHistoryButton, deleteButton, promptButton));
         root.setRight(buildRightSidebar());
@@ -433,58 +397,6 @@ public class App extends Application
         }
     }
 
-    private VBox buildStorySidebar()
-    {
-        storyHeader = new Label("Stories");
-        storyHeader.setStyle("-fx-font-size: 14px; -fx-font-weight: bold;");
-
-        newStoryButton = new Button("New Story");
-        newStoryButton.setMaxWidth(Double.MAX_VALUE);
-        newStoryButton.setOnAction(event -> showNewStoryDialog());
-
-        importAdventureButton = new Button("Import AI Dungeon Adventure");
-        importAdventureButton.setMaxWidth(Double.MAX_VALUE);
-        importAdventureButton.setOnAction(event -> showImportAdventureDialog());
-
-        storyList = new ListView<>(storyItems);
-        storyList.setCellFactory(list -> new ListCell<>()
-        {
-            @Override
-            protected void updateItem(Story item, boolean empty)
-            {
-                super.updateItem(item, empty);
-                setText(empty || item == null ? null : item.title());
-            }
-        });
-        storyList.setOnMouseClicked(event ->
-        {
-            if (event.getClickCount() == 1)
-            {
-                Story selected = storyList.getSelectionModel().getSelectedItem();
-                if (selected != null)
-                {
-                    showStoryDialog(selected);
-                }
-            }
-        });
-
-        collapseLeftButton = new Button("<<");
-        collapseLeftButton.setOnAction(event -> toggleSidebar());
-
-        var headerRow = new HBox(8, storyHeader, collapseLeftButton);
-        headerRow.setAlignment(Pos.CENTER_LEFT);
-        HBox.setHgrow(storyHeader, Priority.ALWAYS);
-
-        leftSideBar = new VBox(8, headerRow, newStoryButton, storyList, importAdventureButton);
-        leftSideBar.getStyleClass().add("sidebar");
-        leftSideBar.setPadding(new Insets(10));
-        leftSideBar.setPrefWidth(LEFT_SIDEBAR_WIDTH);
-        leftSideBar.setMinWidth(200);
-
-        VBox.setVgrow(storyList, Priority.ALWAYS);
-        return leftSideBar;
-    }
-
     private void showTurnInput(boolean show)
     {
         if (storyPaneController != null)
@@ -499,7 +411,7 @@ public class App extends Application
         collapseRightButton.setOnAction(event -> toggleRightSidebar());
 
         rightTabs = new TabPane();
-        rightTabs.getTabs().addAll(buildStoryTab(), buildStoryCardsTab(), buildOptionsTab());
+        rightTabs.getTabs().addAll(buildStoryTab(), storyCardLibraryController.tab(), buildOptionsTab());
         rightTabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
         rightTabs.skinProperty().addListener((obs, oldSkin, newSkin) ->
         {
@@ -545,274 +457,114 @@ public class App extends Application
         return new Tab("Story", scrollPane);
     }
 
-    private Tab buildStoryCardsTab()
-    {
-        newCardButton = new Button("Create New Card");
-        newCardButton.setMaxWidth(Double.MAX_VALUE);
-        newCardButton.setOnAction(event -> showCardDialog(null));
-
-        importCardsButton = new Button("Import AI Dungeon Cards");
-        importCardsButton.setMaxWidth(Double.MAX_VALUE);
-        importCardsButton.setOnAction(event -> showImportCardsDialog());
-
-        cardList = new ListView<>(cardItems);
-        cardList.setCellFactory(list -> new ListCell<>()
-        {
-            private final Label title = new Label();
-            private final Label snippet = new Label();
-            private final Label group = new Label();
-            private final VBox box = new VBox(2, group, title, snippet);
-
-            {
-                snippet.setStyle("-fx-font-size: 11px;");
-                group.setStyle("-fx-font-size: 12px; -fx-font-weight: bold; -fx-padding: 8 0 4 0;");
-            }
-
-            @Override
-            protected void updateItem(StoryCard item, boolean empty)
-            {
-                super.updateItem(item, empty);
-                if (empty || item == null)
-                {
-                    setGraphic(null);
-                }
-                else
-                {
-                    String type = item.displayType();
-                    int index = getIndex();
-                    boolean firstInGroup = index <= 0 || index > cardItems.size() - 1
-                            || !cardItems.get(index - 1).displayType().equalsIgnoreCase(type);
-                    group.setVisible(firstInGroup);
-                    group.setManaged(firstInGroup);
-                    if (firstInGroup)
-                    {
-                        long count = cardItems.stream()
-                                .filter(candidate -> candidate.displayType().equalsIgnoreCase(type))
-                                .count();
-                        group.setText(type + "  " + count);
-                    }
-                    title.setText((item.pinned() ? "\uD83D\uDCCC " : "") + item.title());
-                    snippet.setText(snippetFor(item.content()));
-                    setGraphic(box);
-                }
-            }
-        });
-        cardList.setOnMouseClicked(event ->
-        {
-            if (event.getClickCount() == 1)
-            {
-                StoryCard selected = cardList.getSelectionModel().getSelectedItem();
-                if (selected != null)
-                {
-                    showCardDialog(selected);
-                }
-            }
-        });
-
-        VBox content = new VBox(8, newCardButton, cardList, importCardsButton);
-        content.setPadding(new Insets(10));
-        VBox.setVgrow(cardList, Priority.ALWAYS);
-
-        ScrollPane scrollPane = new ScrollPane(content);
-        scrollPane.setFitToWidth(true);
-        return new Tab("Story Cards", scrollPane);
-    }
-
     private Tab buildOptionsTab()
     {
-        VBox content = new VBox(12);
-        content.setPadding(new Insets(10));
+        settingsPaneController = new SettingsPaneController(
+                appSettings, activeModelSettings, comfyWorkflowNames, database.paths().databaseFile(),
+                new SettingsPaneController.Actions()
+                {
+                    @Override
+                    public void settingChanged(SettingsPaneController.Change change)
+                    {
+                        applySettingChange(change);
+                    }
 
-        ollamaUrlField = new TextField(appSettings.ollamaUrl());
-        ollamaUrlField.setPromptText("Ollama URL");
-        ollamaUrlField.focusedProperty().addListener((obs, oldValue, newValue) ->
-        {
-            if (!newValue)
-            {
-                updateOllamaUrl(ollamaUrlField.getText());
-            }
-        });
+                    @Override
+                    public void modelSelected(String modelName)
+                    {
+                        selectModel(modelName);
+                    }
 
-        comfyUiUrlField = new TextField(appSettings.comfyUiUrl());
-        comfyUiUrlField.setPromptText("ComfyUI URL");
-        comfyUiUrlField.focusedProperty().addListener((obs, oldValue, newValue) ->
-        {
-            if (!newValue)
-            {
-                updateComfyUiUrl(comfyUiUrlField.getText());
-            }
-        });
+                    @Override
+                    public void refreshModels()
+                    {
+                        refreshModelsFromOllama(true);
+                    }
 
-        comfyWorkflowSelect = new ComboBox<>();
-        comfyWorkflowSelect.setMaxWidth(Double.MAX_VALUE);
-        comfyWorkflowSelect.setItems(FXCollections.observableArrayList(comfyWorkflowNames));
-        comfyWorkflowSelect.setValue(appSettings.comfyWorkflow());
-        comfyWorkflowSelect.setOnAction(event ->
-        {
-            String selected = comfyWorkflowSelect.getValue();
-            if (selected != null)
-            {
-                updateComfyWorkflow(selected);
-            }
-        });
+                    @Override
+                    public void backupDatabase()
+                    {
+                        createDatabaseBackup();
+                    }
 
-        comfyWidthSpinner = buildSpinner(64, 4096, appSettings.comfyWidth());
-        comfyHeightSpinner = buildSpinner(64, 4096, appSettings.comfyHeight());
-        comfyBatchSizeSpinner = buildSpinner(1, 32, appSettings.comfyBatchSize());
-
-        modelSelect = new ComboBox<>();
-        modelSelect.setMaxWidth(Double.MAX_VALUE);
+                    @Override
+                    public void checkDatabase()
+                    {
+                        checkDatabaseHealth();
+                    }
+                });
         refreshModelSelect();
-        modelSelect.setOnAction(event ->
+        return settingsPaneController.tab();
+    }
+
+    private void applySettingChange(SettingsPaneController.Change change)
+    {
+        switch (change.setting())
         {
-            String selected = modelSelect.getValue();
-            if (!updatingModelControls && selected != null)
-            {
-                selectModel(selected);
-            }
-        });
-        refreshModelsButton = new Button("Refresh");
-        refreshModelsButton.setOnAction(event -> refreshModelsFromOllama(true));
-        modelDetailsLabel = new Label("Model metadata has not been loaded.");
-        modelDetailsLabel.setWrapText(true);
+            case OLLAMA_URL -> updateOllamaUrl(change.stringValue());
+            case OLLAMA_KEEP_ALIVE_MINUTES -> updateOllamaKeepAliveMinutes(change.intValue());
+            case CONTEXT_LIMIT -> updateContextLimit(change.intValue());
+            case RESPONSE_LENGTH -> updateResponseLength(change.intValue());
+            case RESPONSE_LENGTH_ENABLED -> updateResponseLengthEnabled(change.booleanValue());
+            case TEMPERATURE -> updateTemperature(roundTo(change.doubleValue(), 0.1));
+            case TEMPERATURE_ENABLED -> updateTemperatureEnabled(change.booleanValue());
+            case TOP_K -> updateTopK(change.intValue());
+            case TOP_K_ENABLED -> updateTopKEnabled(change.booleanValue());
+            case TOP_P -> updateTopP(roundTo(change.doubleValue(), 0.01));
+            case TOP_P_ENABLED -> updateTopPEnabled(change.booleanValue());
+            case MIN_P -> updateMinP(roundTo(change.doubleValue(), 0.001));
+            case MIN_P_ENABLED -> updateMinPEnabled(change.booleanValue());
+            case TYPICAL_P -> updateTypicalP(roundTo(change.doubleValue(), 0.01));
+            case TYPICAL_P_ENABLED -> updateTypicalPEnabled(change.booleanValue());
+            case PRESENCE_PENALTY -> updatePresencePenalty(roundTo(change.doubleValue(), 0.01));
+            case PRESENCE_PENALTY_ENABLED -> updatePresencePenaltyEnabled(change.booleanValue());
+            case FREQUENCY_PENALTY -> updateFrequencyPenalty(roundTo(change.doubleValue(), 0.01));
+            case FREQUENCY_PENALTY_ENABLED -> updateFrequencyPenaltyEnabled(change.booleanValue());
+            case REPEAT_LAST_N -> updateRepeatLastN(change.intValue());
+            case REPEAT_LAST_N_ENABLED -> updateRepeatLastNEnabled(change.booleanValue());
+            case REPETITION_PENALTY -> updateRepetitionPenalty(roundTo(change.doubleValue(), 0.01));
+            case REPETITION_PENALTY_ENABLED -> updateRepetitionPenaltyEnabled(change.booleanValue());
+            case MIN_STORY_PERCENT -> updateMinStoryPercent(change.intValue());
+            case STORY_CARD_LOOKBACK -> updateStoryCardLookback(change.intValue());
+            case AN_PLACEMENT -> updateAnPlacement(change.intValue());
+            case COMFY_UI_URL -> updateComfyUiUrl(change.stringValue());
+            case COMFY_WORKFLOW -> updateComfyWorkflow(change.stringValue());
+            case COMFY_WIDTH -> updateComfyWidth(change.intValue());
+            case COMFY_HEIGHT -> updateComfyHeight(change.intValue());
+            case COMFY_BATCH_SIZE -> updateComfyBatchSize(change.intValue());
+        }
+    }
 
-        contextLimitSlider = buildIntSlider(ModelSettings.MIN_CONTEXT_LIMIT,
-                Math.max(131072, activeModelSettings.contextLimit()), activeModelSettings.contextLimit(), 512);
-        contextLimitValueLabel = valueLabel(activeModelSettings.contextLimit(), "tokens");
-        ollamaKeepAliveSlider = buildIntSlider(
-                AppSettings.MIN_OLLAMA_KEEP_ALIVE_MINUTES,
-                AppSettings.MAX_OLLAMA_KEEP_ALIVE_MINUTES,
-                appSettings.ollamaKeepAliveMinutes(),
-                1);
-        ollamaKeepAliveSlider.setTooltip(new Tooltip(
-                "How long Ollama keeps the model loaded after each LlamaQuill chat request."));
-        responseLengthSlider = buildIntSlider(1, 32768, appSettings.responseLength(), 1);
-        temperatureSlider = buildDoubleSlider(0.0, 5.0, activeModelSettings.temperature(), 0.1);
-        topKSlider = buildIntSlider(0, 10000, activeModelSettings.topK(), 1);
-        topPSlider = buildDoubleSlider(0.0, 1.0, activeModelSettings.topP(), 0.01);
-        minPSlider = buildDoubleSlider(0.0, 1.0, activeModelSettings.minP(), 0.001);
-        typicalPSlider = buildDoubleSlider(0.0, 1.0, activeModelSettings.typicalP(), 0.01);
-        presencePenaltySlider = buildDoubleSlider(-2.0, 2.0, activeModelSettings.presencePenalty(), 0.01);
-        frequencyPenaltySlider = buildDoubleSlider(-2.0, 2.0, activeModelSettings.frequencyPenalty(), 0.01);
-        repeatLastNSlider = buildIntSlider(-1, activeModelSettings.contextLimit(),
-                activeModelSettings.repeatLastN(), 1);
-        repetitionPenaltySlider = buildDoubleSlider(0.0, 5.0, activeModelSettings.repetitionPenalty(), 0.01);
-        responseLengthEnabledBox = optionCheckBox("Response Length", appSettings.responseLengthEnabled());
-        responseLengthEnabledBox.setTooltip(new Tooltip(
-                "When disabled, Ollama chooses the response length and LlamaQuill reserves 200 context tokens for output."));
-        temperatureEnabledBox = optionCheckBox("Temperature", activeModelSettings.temperatureEnabled());
-        topKEnabledBox = optionCheckBox("Top K", activeModelSettings.topKEnabled());
-        topPEnabledBox = optionCheckBox("Top P", activeModelSettings.topPEnabled());
-        minPEnabledBox = optionCheckBox("Min P", activeModelSettings.minPEnabled());
-        typicalPEnabledBox = optionCheckBox("Typical P", activeModelSettings.typicalPEnabled());
-        typicalPEnabledBox.setTooltip(new Tooltip(
-                "Locally typical sampling. 1.0 has no effect; disabling leaves the value to Ollama and the model."));
-        presencePenaltyEnabledBox = optionCheckBox("Presence Penalty", activeModelSettings.presencePenaltyEnabled());
-        frequencyPenaltyEnabledBox = optionCheckBox("Frequency Penalty", activeModelSettings.frequencyPenaltyEnabled());
-        repeatLastNEnabledBox = optionCheckBox("Repeat Last N", activeModelSettings.repeatLastNEnabled());
-        repeatLastNEnabledBox.setTooltip(new Tooltip(
-                "Tokens checked by repetition penalty. 0 disables the lookback; -1 uses the full context."));
-        repetitionPenaltyEnabledBox = optionCheckBox("Repetition Penalty",
-                activeModelSettings.repetitionPenaltyEnabled());
-        minStoryPercentSlider = buildIntSlider(10, 100, percentFromSettings(), 1);
-        storyCardLookbackSpinner = buildSpinner(0, 100, appSettings.storyCardLookback());
-        anPlacementSpinner = buildSpinner(1, 100, appSettings.anPlacement());
-
-        Label databaseLocationLabel = new Label(database.paths().databaseFile().toString());
-        databaseLocationLabel.setWrapText(true);
-        Button backupDatabaseButton = new Button("Back Up Database");
-        backupDatabaseButton.setMaxWidth(Double.MAX_VALUE);
-        backupDatabaseButton.setOnAction(event ->
+    private void createDatabaseBackup()
+    {
+        try
         {
-            try
-            {
-                Path backup = database.createBackup();
-                showInfo("Database backup created:\n" + backup);
-            }
-            catch (SQLException e)
-            {
-                showError("Failed to back up database", e);
-            }
-        });
-        Button checkDatabaseButton = new Button("Check Database");
-        checkDatabaseButton.setMaxWidth(Double.MAX_VALUE);
-        checkDatabaseButton.setOnAction(event ->
+            Path backup = database.createBackup();
+            showInfo("Database backup created:\n" + backup);
+        }
+        catch (SQLException e)
         {
-            try
-            {
-                Database.Diagnostics diagnostics = database.diagnostics();
-                showInfo("Database: " + diagnostics.databaseFile()
-                        + "\nSchema: " + diagnostics.schemaVersion()
-                        + "\nIntegrity: " + diagnostics.integrityResult()
-                        + "\nForeign-key violations: " + diagnostics.foreignKeyViolations()
-                        + "\nOrphan images: " + diagnostics.orphanImages()
-                        + "\nBroken image blocks: " + diagnostics.brokenImageBlocks()
-                        + "\nJournal mode: " + diagnostics.journalMode());
-            }
-            catch (SQLException e)
-            {
-                showError("Failed to check database", e);
-            }
-        });
+            showError("Failed to back up database", e);
+        }
+    }
 
-        content.getChildren().addAll(textFieldRow("Ollama URL", ollamaUrlField),
-                sliderRow("Ollama Model Keep Alive", ollamaKeepAliveSlider,
-                        valueLabel(appSettings.ollamaKeepAliveMinutes(), "minutes"),
-                        value -> updateOllamaKeepAliveMinutes(value.intValue())),
-                modelSelectorRow(),
-                modelDetailsLabel,
-                sliderRow("Context Limit", contextLimitSlider, contextLimitValueLabel,
-                        value -> updateContextLimit(value.intValue())),
-                optionalSliderRow(responseLengthEnabledBox, responseLengthSlider,
-                        valueLabel(appSettings.responseLength(), "tokens"),
-                        value -> updateResponseLength(value.intValue()), this::updateResponseLengthEnabled),
-                optionalSliderRow(temperatureEnabledBox, temperatureSlider,
-                        valueLabel(activeModelSettings.temperature(), "", 2),
-                        value -> updateTemperature(roundTo(value.doubleValue(), 0.1)), this::updateTemperatureEnabled),
-                optionalSliderRow(topKEnabledBox, topKSlider, valueLabel(activeModelSettings.topK(), ""),
-                        value -> updateTopK(value.intValue()), this::updateTopKEnabled),
-                optionalSliderRow(topPEnabledBox, topPSlider, valueLabel(activeModelSettings.topP(), "", 2),
-                        value -> updateTopP(roundTo(value.doubleValue(), 0.01)), this::updateTopPEnabled),
-                optionalSliderRow(minPEnabledBox, minPSlider, valueLabel(activeModelSettings.minP(), "", 3),
-                        value -> updateMinP(roundTo(value.doubleValue(), 0.001)), this::updateMinPEnabled),
-                optionalSliderRow(typicalPEnabledBox, typicalPSlider,
-                        valueLabel(activeModelSettings.typicalP(), "", 2),
-                        value -> updateTypicalP(roundTo(value.doubleValue(), 0.01)), this::updateTypicalPEnabled),
-                optionalSliderRow(presencePenaltyEnabledBox, presencePenaltySlider,
-                        valueLabel(activeModelSettings.presencePenalty(), "", 2),
-                        value -> updatePresencePenalty(roundTo(value.doubleValue(), 0.01)),
-                        this::updatePresencePenaltyEnabled),
-                optionalSliderRow(frequencyPenaltyEnabledBox, frequencyPenaltySlider,
-                        valueLabel(activeModelSettings.frequencyPenalty(), "", 2),
-                        value -> updateFrequencyPenalty(roundTo(value.doubleValue(), 0.01)),
-                        this::updateFrequencyPenaltyEnabled),
-                optionalSliderRow(repeatLastNEnabledBox, repeatLastNSlider,
-                        valueLabel(activeModelSettings.repeatLastN(), ""),
-                        value -> updateRepeatLastN(value.intValue()), this::updateRepeatLastNEnabled),
-                optionalSliderRow(repetitionPenaltyEnabledBox, repetitionPenaltySlider,
-                        valueLabel(activeModelSettings.repetitionPenalty(), "", 2),
-                        value -> updateRepetitionPenalty(roundTo(value.doubleValue(), 0.01)),
-                        this::updateRepetitionPenaltyEnabled),
-                sliderRow("Context to Use for Story", minStoryPercentSlider, valueLabel(percentFromSettings(), "%"),
-                        value -> updateMinStoryPercent(value.intValue())),
-                spinnerRow("Story Card Look Back", storyCardLookbackSpinner, this::updateStoryCardLookback),
-                spinnerRow("Author's Note Insertion Point", anPlacementSpinner, this::updateAnPlacement),
-                underlinedLabel("Image Generation"),
-                textFieldRow("ComfyUI URL", comfyUiUrlField),
-                comboRow("ComfyUI Workflow", comfyWorkflowSelect),
-                spinnerRow("Image Width", comfyWidthSpinner, this::updateComfyWidth),
-                spinnerRow("Image Height", comfyHeightSpinner, this::updateComfyHeight),
-                spinnerRow("Image Batch Size", comfyBatchSizeSpinner, this::updateComfyBatchSize),
-                underlinedLabel("Local Data"),
-                new Label("Database"),
-                databaseLocationLabel,
-                backupDatabaseButton,
-                checkDatabaseButton
-            );
-
-        ScrollPane scrollPane = new ScrollPane(content);
-        scrollPane.setFitToWidth(true);
-        return new Tab("Options", scrollPane);
+    private void checkDatabaseHealth()
+    {
+        try
+        {
+            Database.Diagnostics diagnostics = database.diagnostics();
+            showInfo("Database: " + diagnostics.databaseFile()
+                    + "\nSchema: " + diagnostics.schemaVersion()
+                    + "\nIntegrity: " + diagnostics.integrityResult()
+                    + "\nForeign-key violations: " + diagnostics.foreignKeyViolations()
+                    + "\nOrphan images: " + diagnostics.orphanImages()
+                    + "\nBroken image blocks: " + diagnostics.brokenImageBlocks()
+                    + "\nJournal mode: " + diagnostics.journalMode());
+        }
+        catch (SQLException e)
+        {
+            showError("Failed to check database", e);
+        }
     }
 
     private void forceTabHeaderDark()
@@ -859,32 +611,6 @@ public class App extends Application
         });
     }
 
-    private void toggleSidebar()
-    {
-        boolean collapsing = storyList.isVisible();
-        storyList.setVisible(!collapsing);
-        storyList.setManaged(!collapsing);
-        newStoryButton.setVisible(!collapsing);
-        newStoryButton.setManaged(!collapsing);
-        storyHeader.setVisible(!collapsing);
-        storyHeader.setManaged(!collapsing);
-        importAdventureButton.setVisible(!collapsing);
-        importAdventureButton.setManaged(!collapsing);
-
-        if (collapsing)
-        {
-            leftSideBar.setPrefWidth(48);
-            leftSideBar.setMinWidth(48);
-            collapseLeftButton.setText(">>");
-        }
-        else
-        {
-            leftSideBar.setPrefWidth(LEFT_SIDEBAR_WIDTH);
-            leftSideBar.setMinWidth(200);
-            collapseLeftButton.setText("<<");
-        }
-    }
-
     private void toggleRightSidebar()
     {
         boolean collapsing = rightTabs.isVisible();
@@ -903,19 +629,6 @@ public class App extends Application
             rightSidebar.setMinWidth(240);
             collapseRightButton.setText(">>");
         }
-    }
-
-    private Story loadOrCreateStory() throws SQLException
-    {
-        List<Story> stories = storyRepository.listAll();
-        if (!stories.isEmpty())
-        {
-            return stories.getFirst();
-        }
-        String now = Timestamps.now();
-        Story story = new Story(Ids.newId(), "Untitled Story", DEFAULT_SYSTEM_PROMPT, "", "", now, now);
-        storyRepository.insert(story);
-        return story;
     }
 
     private AppSettings loadOrCreateAppSettings() throws SQLException
@@ -947,9 +660,9 @@ public class App extends Application
         }
 
         modelRefreshInProgress = true;
-        if (refreshModelsButton != null)
+        if (settingsPaneController != null)
         {
-            refreshModelsButton.setDisable(true);
+            settingsPaneController.setRefreshInProgress(true);
         }
         if (statusLabel != null)
         {
@@ -995,7 +708,7 @@ public class App extends Application
                                     ModelSettings.defaults(appSettings.selectedModel()));
                             refreshModelSelect();
                             statusLabel.setText("Ollama is available, but no local models were found.");
-                            modelDetailsLabel.setText("No local Ollama models were found.");
+                            settingsPaneController.setModelDetails("No local Ollama models were found.");
                             if (userInitiated)
                             {
                                 showInfo("Ollama is available, but no local models were found.");
@@ -1022,7 +735,7 @@ public class App extends Application
                         {
                             if (selectedModel.equals(result.selectedModel()) && result.metadataError() != null)
                             {
-                                modelDetailsLabel.setText("Model metadata unavailable: "
+                                settingsPaneController.setModelDetails("Model metadata unavailable: "
                                         + taskErrorMessage(result.metadataError()));
                                 statusLabel.setText("Models refreshed, but context validation failed.");
                                 if (userInitiated)
@@ -1055,9 +768,10 @@ public class App extends Application
                     }
                     String message = taskErrorMessage(error);
                     statusLabel.setText("Ollama model refresh failed: " + message);
-                    if (modelDetailsLabel != null)
+                    if (settingsPaneController != null)
                     {
-                        modelDetailsLabel.setText("Model discovery failed. Existing saved settings remain available.");
+                        settingsPaneController.setModelDetails(
+                                "Model discovery failed. Existing saved settings remain available.");
                     }
                     if (userInitiated)
                     {
@@ -1069,9 +783,9 @@ public class App extends Application
     private void finishModelRefresh()
     {
         modelRefreshInProgress = false;
-        if (refreshModelsButton != null)
+        if (settingsPaneController != null)
         {
-            refreshModelsButton.setDisable(false);
+            settingsPaneController.setRefreshInProgress(false);
         }
     }
 
@@ -1121,7 +835,7 @@ public class App extends Application
 
     private void refreshModelSelect()
     {
-        if (modelSelect == null)
+        if (settingsPaneController == null)
         {
             return;
         }
@@ -1133,14 +847,10 @@ public class App extends Application
             {
                 names.add(model.modelName());
             }
-            updatingModelControls = true;
-            modelSelect.setItems(FXCollections.observableArrayList(names));
-            modelSelect.setValue(names.contains(appSettings.selectedModel()) ? appSettings.selectedModel() : null);
-            updatingModelControls = false;
+            settingsPaneController.setModels(names, appSettings.selectedModel());
         }
         catch (SQLException e)
         {
-            updatingModelControls = false;
             showError("Failed to load models", e);
         }
     }
@@ -1185,9 +895,9 @@ public class App extends Application
     private void loadModelDetails(String modelName)
     {
         String endpoint = ollamaClient.getHost();
-        if (modelDetailsLabel != null)
+        if (settingsPaneController != null)
         {
-            modelDetailsLabel.setText("Loading model metadata...");
+            settingsPaneController.setModelDetails("Loading model metadata...");
         }
         submitTask(() -> ollamaClient.showModel(endpoint, modelName),
                 details ->
@@ -1208,7 +918,8 @@ public class App extends Application
                 {
                     if (activeModelSettings != null && modelName.equals(activeModelSettings.modelName()))
                     {
-                        modelDetailsLabel.setText("Model metadata unavailable: " + taskErrorMessage(error));
+                        settingsPaneController.setModelDetails(
+                                "Model metadata unavailable: " + taskErrorMessage(error));
                         statusLabel.setText("Could not validate model context.");
                         showError("Failed to inspect Ollama model", error);
                     }
@@ -1217,13 +928,13 @@ public class App extends Application
 
     private void applyModelDetails(OllamaModelDetails details)
     {
-        if (modelDetailsLabel == null || activeModelSettings == null)
+        if (settingsPaneController == null || activeModelSettings == null)
         {
             return;
         }
         if (details == null)
         {
-            modelDetailsLabel.setText("Model metadata has not been loaded.");
+            settingsPaneController.setModelDetails("Model metadata has not been loaded.");
             return;
         }
 
@@ -1242,7 +953,7 @@ public class App extends Application
                     + activeModelSettings.contextLimit() + " tokens. " + summary;
             statusLabel.setText("Context limit adjusted to model maximum.");
         }
-        modelDetailsLabel.setText(summary);
+        settingsPaneController.setModelDetails(summary);
     }
 
     private void updateOllamaUrl(String url)
@@ -1254,27 +965,27 @@ public class App extends Application
         }
         catch (IllegalArgumentException e)
         {
-            if (ollamaUrlField != null)
+            if (settingsPaneController != null)
             {
-                ollamaUrlField.setText(appSettings.ollamaUrl());
+                settingsPaneController.setOllamaUrl(appSettings.ollamaUrl());
             }
             showError("Invalid Ollama URL", e);
             return;
         }
         if (normalized.equals(appSettings.ollamaUrl()))
         {
-            if (ollamaUrlField != null)
+            if (settingsPaneController != null)
             {
-                ollamaUrlField.setText(normalized);
+                settingsPaneController.setOllamaUrl(normalized);
             }
             return;
         }
         appSettings = SettingsCoordinator.withOllamaUrl(appSettings, normalized);
         persistAppSettings();
         ollamaClient.setHost(appSettings.ollamaUrl());
-        if (ollamaUrlField != null)
+        if (settingsPaneController != null)
         {
-            ollamaUrlField.setText(appSettings.ollamaUrl());
+            settingsPaneController.setOllamaUrl(appSettings.ollamaUrl());
         }
         modelDetailsByName.clear();
         refreshModelsFromOllama(false);
@@ -1285,26 +996,26 @@ public class App extends Application
         String normalized = url == null ? "" : url.trim();
         if (normalized.isBlank())
         {
-            if (comfyUiUrlField != null)
+            if (settingsPaneController != null)
             {
-                comfyUiUrlField.setText(appSettings.comfyUiUrl());
+                settingsPaneController.setComfyUiUrl(appSettings.comfyUiUrl());
             }
             return;
         }
         if (normalized.equals(appSettings.comfyUiUrl()))
         {
-            if (comfyUiUrlField != null)
+            if (settingsPaneController != null)
             {
-                comfyUiUrlField.setText(normalized);
+                settingsPaneController.setComfyUiUrl(normalized);
             }
             return;
         }
         appSettings = SettingsCoordinator.withComfyUiUrl(appSettings, normalized);
         persistAppSettings();
         comfyUiClient.setHost(appSettings.comfyUiUrl());
-        if (comfyUiUrlField != null)
+        if (settingsPaneController != null)
         {
-            comfyUiUrlField.setText(appSettings.comfyUiUrl());
+            settingsPaneController.setComfyUiUrl(appSettings.comfyUiUrl());
         }
     }
 
@@ -1313,9 +1024,9 @@ public class App extends Application
         String normalized = workflowName == null ? "" : workflowName.trim();
         if (normalized.isBlank())
         {
-            if (comfyWorkflowSelect != null)
+            if (settingsPaneController != null)
             {
-                comfyWorkflowSelect.setValue(appSettings.comfyWorkflow());
+                settingsPaneController.setComfyWorkflow(appSettings.comfyWorkflow());
             }
             return;
         }
@@ -1606,38 +1317,12 @@ public class App extends Application
 
     private void updateModelControls()
     {
-        if (activeModelSettings == null || contextLimitSlider == null)
+        if (activeModelSettings == null || settingsPaneController == null)
         {
             return;
         }
-        updatingModelControls = true;
         OllamaModelDetails details = modelDetailsByName.get(activeModelSettings.modelName());
-        int sliderMaximum = details != null && details.maxContextLength() > 0
-                ? Math.min(ModelSettings.MAX_CONTEXT_LIMIT, details.maxContextLength())
-                : Math.max(131072, activeModelSettings.contextLimit());
-        sliderMaximum = Math.max(ModelSettings.MIN_CONTEXT_LIMIT, sliderMaximum);
-        contextLimitSlider.setMax(sliderMaximum);
-        contextLimitSlider.setValue(Math.min(activeModelSettings.contextLimit(), sliderMaximum));
-        temperatureSlider.setValue(activeModelSettings.temperature());
-        topKSlider.setValue(activeModelSettings.topK());
-        topPSlider.setValue(activeModelSettings.topP());
-        minPSlider.setValue(activeModelSettings.minP());
-        typicalPSlider.setValue(activeModelSettings.typicalP());
-        presencePenaltySlider.setValue(activeModelSettings.presencePenalty());
-        frequencyPenaltySlider.setValue(activeModelSettings.frequencyPenalty());
-        repeatLastNSlider.setMax(activeModelSettings.contextLimit());
-        repeatLastNSlider.setValue(activeModelSettings.repeatLastN());
-        repetitionPenaltySlider.setValue(activeModelSettings.repetitionPenalty());
-        temperatureEnabledBox.setSelected(activeModelSettings.temperatureEnabled());
-        topKEnabledBox.setSelected(activeModelSettings.topKEnabled());
-        topPEnabledBox.setSelected(activeModelSettings.topPEnabled());
-        minPEnabledBox.setSelected(activeModelSettings.minPEnabled());
-        typicalPEnabledBox.setSelected(activeModelSettings.typicalPEnabled());
-        presencePenaltyEnabledBox.setSelected(activeModelSettings.presencePenaltyEnabled());
-        frequencyPenaltyEnabledBox.setSelected(activeModelSettings.frequencyPenaltyEnabled());
-        repeatLastNEnabledBox.setSelected(activeModelSettings.repeatLastNEnabled());
-        repetitionPenaltyEnabledBox.setSelected(activeModelSettings.repetitionPenaltyEnabled());
-        updatingModelControls = false;
+        settingsPaneController.applyModelSettings(activeModelSettings, details);
     }
 
     private StoryTaskContext captureStoryTaskContext()
@@ -1653,23 +1338,11 @@ public class App extends Application
     {
         try
         {
-            storyItems.setAll(storyRepository.listAll());
+            storyLibraryController.setStories(storyService.list(), selectedId);
         }
         catch (SQLException e)
         {
             showError("Failed to load stories", e);
-        }
-
-        if (selectedId != null)
-        {
-            for (Story story : storyItems)
-            {
-                if (story.id().equals(selectedId))
-                {
-                    storyList.getSelectionModel().select(story);
-                    break;
-                }
-            }
         }
     }
 
@@ -1677,12 +1350,12 @@ public class App extends Application
     {
         if (storyId == null)
         {
-            cardItems.clear();
+            storyCardLibraryController.clear();
             return;
         }
         try
         {
-            cardItems.setAll(cardRepository.listForStory(storyId));
+            storyCardLibraryController.setCards(storyCardService.listForStory(storyId));
         }
         catch (SQLException e)
         {
@@ -1696,9 +1369,7 @@ public class App extends Application
         {
             try
             {
-                String now = Timestamps.now();
-                Story story = new Story(Ids.newId(), trimmed, DEFAULT_SYSTEM_PROMPT, "", "", now, now);
-                storyRepository.insert(story);
+                Story story = storyService.create(trimmed, DEFAULT_SYSTEM_PROMPT);
                 refreshStoryList(story.id());
                 loadStory(story, true);
             }
@@ -1768,11 +1439,11 @@ public class App extends Application
                 {
                     if (card == null)
                     {
-                        cardRepository.insert(savedCard);
+                        storyCardService.create(savedCard);
                     }
                     else
                     {
-                        cardRepository.update(savedCard);
+                        storyCardService.update(savedCard);
                     }
                     if (currentStory() != null && currentStory().id().equals(story.id()))
                     {
@@ -1924,7 +1595,7 @@ public class App extends Application
     {
         try
         {
-            cardRepository.delete(card.id());
+            storyCardService.delete(card);
             refreshCardList(currentStory().id());
         }
         catch (SQLException e)
@@ -1964,12 +1635,9 @@ public class App extends Application
         {
             base = currentStory();
         }
-        String now = Timestamps.now();
-        Story updated = new Story(story.id(), name, base.systemPrompt(), base.plotEssentials(), base.authorNote(),
-                base.createdAt(), now);
         try
         {
-            storyRepository.updateTitle(updated.id(), updated.title(), updated.updatedAt());
+            Story updated = storyService.rename(base, name);
             if (currentStory() != null && currentStory().id().equals(updated.id()))
             {
                 storyWorkspace.updateStory(updated);
@@ -1995,19 +1663,15 @@ public class App extends Application
         String plotEssentials = plotEssentialsArea.getText();
         String authorNote = authorNoteArea.getText();
 
-        if (systemPrompt.equals(currentStory().systemPrompt()) && plotEssentials.equals(currentStory().plotEssentials())
-                && authorNote.equals(currentStory().authorNote()))
-        {
-            storyDetailsDirty = false;
-            return;
-        }
-
-        String now = Timestamps.now();
-        Story updated = new Story(currentStory().id(), currentStory().title(), systemPrompt, plotEssentials, authorNote,
-                currentStory().createdAt(), now);
         try
         {
-            storyRepository.update(updated);
+            Story original = currentStory();
+            Story updated = storyService.updateDetails(original, systemPrompt, plotEssentials, authorNote);
+            if (updated == original)
+            {
+                storyDetailsDirty = false;
+                return;
+            }
             storyWorkspace.updateStory(updated);
             storyDetailsDirty = false;
             if (statusLabel != null && !storyOperations.hasActive(updated.id()))
@@ -2047,7 +1711,7 @@ public class App extends Application
     {
         try
         {
-            storyRepository.delete(story.id());
+            storyService.delete(story);
             refreshStoryList(null);
             if (currentStory() != null && currentStory().id().equals(story.id()))
             {
@@ -2079,12 +1743,7 @@ public class App extends Application
         try
         {
             Block head = currentBlocks().getLast();
-            database.inTransaction(connection ->
-            {
-                blockRepository.deleteHead(currentStory().id());
-                deleteLinkedImageIfPresent(head);
-            });
-            List<Block> refreshedBlocks = blockRepository.listForStory(currentStory().id());
+            List<Block> refreshedBlocks = storyBlockService.deleteHead(currentStory(), head);
             storyWorkspace.advance(refreshedBlocks);
             retryHistory.activate(currentSession());
             renderStoryBlocks(true);
@@ -2098,19 +1757,16 @@ public class App extends Application
 
     private void playStory(Story story)
     {
-        String now = Timestamps.now();
-        Story updated = new Story(story.id(), story.title(), story.systemPrompt(), story.plotEssentials(), story.authorNote(),
-                story.createdAt(), now);
         try
         {
-            storyRepository.update(updated);
+            Story updated = storyService.touch(story);
+            refreshStoryList(updated.id());
+            loadStory(updated, true);
         }
         catch (SQLException e)
         {
             showError("Failed to update story timestamp", e);
         }
-        refreshStoryList(updated.id());
-        loadStory(updated, true);
     }
 
     private void loadStory(Story story, boolean updateSelection)
@@ -2121,8 +1777,8 @@ public class App extends Application
         }
         try
         {
-            List<Block> refreshedBlocks = blockRepository.listForStory(story.id());
-            storyWorkspace.open(story, refreshedBlocks);
+            StoryService.StoryDocument document = storyService.load(story);
+            storyWorkspace.open(document.story(), document.blocks());
             retryHistory.activate(currentSession());
             renderStoryBlocks(true);
             statusLabel.setText("Ready");
@@ -2133,7 +1789,7 @@ public class App extends Application
             updateRetryCountLabel();
             if (updateSelection)
             {
-                storyList.getSelectionModel().select(story);
+                storyLibraryController.select(story.id());
             }
         }
         catch (SQLException e)
@@ -2156,11 +1812,8 @@ public class App extends Application
             return;
         }
 
-        Story refreshedStory = updatedStory == null
-                ? storyRepository.findById(source.storyId()).orElse(currentStory())
-                : updatedStory;
-        List<Block> refreshedBlocks = blockRepository.listForStory(source.storyId());
-        storyWorkspace.advance(refreshedStory, refreshedBlocks);
+        StoryService.StoryDocument document = storyService.reload(source.storyId(), updatedStory);
+        storyWorkspace.advance(document.story(), document.blocks());
         retryHistory.activate(currentSession());
         renderStoryBlocks(forceScroll);
         refreshStoryList(source.storyId());
@@ -2321,7 +1974,7 @@ public class App extends Application
                         Timestamps.now(), currentHead.position());
                 try
                 {
-                    if (!blockRepository.replaceHeadIfCurrent(updated))
+                    if (!storyBlockService.replaceHeadIfCurrent(updated))
                     {
                         statusLabel.setText("Retry selection was stale; the story was not changed.");
                         return;
@@ -2438,9 +2091,7 @@ public class App extends Application
         systemPromptArea.setDisable(!enabled);
         plotEssentialsArea.setDisable(!enabled);
         authorNoteArea.setDisable(!enabled);
-        newCardButton.setDisable(!enabled);
-        importCardsButton.setDisable(!enabled);
-        cardList.setDisable(!enabled);
+        storyCardLibraryController.setEnabled(enabled);
     }
 
     private void submitTurn()
@@ -2626,188 +2277,8 @@ public class App extends Application
         };
     }
 
-    private Slider buildIntSlider(int min, int max, int value, int step)
-    {
-        Slider slider = new Slider(min, max, value);
-        slider.setShowTickMarks(false);
-        slider.setShowTickLabels(false);
-        slider.setBlockIncrement(step);
-        slider.setSnapToTicks(true);
-        slider.setMajorTickUnit(step);
-        slider.setMinorTickCount(0);
-        slider.setOrientation(Orientation.HORIZONTAL);
-        return slider;
-    }
-
-    private Slider buildDoubleSlider(double min, double max, double value, double step)
-    {
-        Slider slider = new Slider(min, max, value);
-        slider.setShowTickMarks(false);
-        slider.setShowTickLabels(false);
-        slider.setBlockIncrement(step);
-        slider.setSnapToTicks(true);
-        slider.setMajorTickUnit(step);
-        slider.setMinorTickCount(0);
-        slider.setOrientation(Orientation.HORIZONTAL);
-        return slider;
-    }
-
-    private VBox sliderRow(String labelText, Slider slider, Label valueLabel, java.util.function.Consumer<Number> handler)
-    {
-        Label label = new Label(labelText);
-        Region spacer = new Region();
-        HBox.setHgrow(spacer, Priority.ALWAYS);
-        HBox header = new HBox(8, label, spacer, valueLabel);
-        header.setAlignment(Pos.CENTER_LEFT);
-        VBox box = new VBox(6, header, slider);
-        slider.valueProperty().addListener((obs, oldValue, newValue) ->
-        {
-            valueLabel.setText(formatValue(newValue, valueLabel));
-            handler.accept(newValue);
-        });
-        return box;
-    }
-
-    private CheckBox optionCheckBox(String labelText, boolean selected)
-    {
-        CheckBox checkBox = new CheckBox(labelText);
-        checkBox.setSelected(selected);
-        return checkBox;
-    }
-
-    private VBox optionalSliderRow(CheckBox enabledBox, Slider slider, Label valueLabel,
-            java.util.function.Consumer<Number> valueHandler,
-            java.util.function.Consumer<Boolean> enabledHandler)
-    {
-        Region spacer = new Region();
-        HBox.setHgrow(spacer, Priority.ALWAYS);
-        HBox header = new HBox(8, enabledBox, spacer, valueLabel);
-        header.setAlignment(Pos.CENTER_LEFT);
-        VBox box = new VBox(6, header, slider);
-
-        slider.disableProperty().bind(enabledBox.selectedProperty().not());
-        valueLabel.disableProperty().bind(enabledBox.selectedProperty().not());
-        slider.valueProperty().addListener((obs, oldValue, newValue) ->
-        {
-            valueLabel.setText(formatValue(newValue, valueLabel));
-            valueHandler.accept(newValue);
-        });
-        enabledBox.setOnAction(event -> enabledHandler.accept(enabledBox.isSelected()));
-        return box;
-    }
-
-    private VBox textFieldRow(String labelText, TextField field)
-    {
-        Label label = new Label(labelText);
-        VBox box = new VBox(6, label, field);
-        return box;
-    }
-
-    private VBox comboRow(String labelText, ComboBox<String> comboBox)
-    {
-        Label label = new Label(labelText);
-        VBox box = new VBox(6, label, comboBox);
-        return box;
-    }
-
-    private VBox modelSelectorRow()
-    {
-        Label label = new Label("Model");
-        HBox row = new HBox(8, modelSelect, refreshModelsButton);
-        HBox.setHgrow(modelSelect, Priority.ALWAYS);
-        return new VBox(6, label, row);
-    }
-
-    private VBox spinnerRow(String labelText, Spinner<Integer> spinner, java.util.function.Consumer<Integer> handler)
-    {
-        Label label = new Label(labelText);
-        VBox box = new VBox(6, label, spinner);
-        spinner.valueProperty().addListener((obs, oldValue, newValue) -> handler.accept(newValue));
-        return box;
-    }
-
-    private Spinner<Integer> buildSpinner(int min, int max, int value)
-    {
-        Spinner<Integer> spinner = new Spinner<>();
-        spinner.setValueFactory(new SpinnerValueFactory.IntegerSpinnerValueFactory(min, max, value));
-        spinner.setEditable(true);
-        spinner.setMaxWidth(Double.MAX_VALUE);
-        return spinner;
-    }
-
-    private Label valueLabel(double value, String suffix)
-    {
-        Label label = new Label(formatValue(value, suffix));
-        return label;
-    }
-
-    private Label valueLabel(double value, String suffix, int decimals)
-    {
-        Label label = new Label(formatValue(value, suffix, decimals));
-        label.setUserData(decimals);
-        return label;
-    }
-
-    private static Label underlinedLabel(String text)
-    {
-        Label label = new Label(text);
-        label.setUnderline(true);
-        return label;
-    }
-
-    private String formatValue(Number value, Label label)
-    {
-        String text = label.getText();
-        String suffix = "";
-        int space = text.lastIndexOf(' ');
-        if (space > -1)
-        {
-            suffix = text.substring(space + 1);
-        }
-        int decimals = 2;
-        Object data = label.getUserData();
-        if (data instanceof Integer)
-        {
-            decimals = (int) data;
-        }
-        return formatValue(value.doubleValue(), suffix.equals("") ? "" : suffix, decimals);
-    }
-
-    private String formatValue(double value, String suffix)
-    {
-        return formatValue(value, suffix, 2);
-    }
-
-    private String formatValue(double value, String suffix, int decimals)
-    {
-        String formatted;
-        if (Math.abs(value - Math.round(value)) < 0.0001)
-        {
-            formatted = String.valueOf((int) Math.round(value));
-        }
-        else
-        {
-            String pattern = "%." + Math.max(0, decimals) + "f";
-            formatted = String.format(java.util.Locale.US, pattern, value);
-        }
-        if (!suffix.isEmpty())
-        {
-            return formatted + " " + suffix;
-        }
-        return formatted;
-    }
-
-    private int percentFromSettings()
-    {
-        return appSettings.minStoryPercent();
-    }
-
     private void updateContextLimit(int value)
     {
-        if (updatingModelControls)
-        {
-            return;
-        }
         OllamaModelDetails details = modelDetailsByName.get(activeModelSettings.modelName());
         int maximum = details != null && details.maxContextLength() > 0
                 ? Math.min(ModelSettings.MAX_CONTEXT_LIMIT, details.maxContextLength())
@@ -2841,10 +2312,6 @@ public class App extends Application
 
     private void updateTemperature(double value)
     {
-        if (updatingModelControls)
-        {
-            return;
-        }
         activeModelSettings = SettingsCoordinator.withTemperature(activeModelSettings, value);
         persistModelSettings();
         refreshGenerationSettings();
@@ -2852,10 +2319,6 @@ public class App extends Application
 
     private void updateTemperatureEnabled(boolean enabled)
     {
-        if (updatingModelControls)
-        {
-            return;
-        }
         activeModelSettings = SettingsCoordinator.withTemperatureEnabled(activeModelSettings, enabled);
         persistModelSettings();
         refreshGenerationSettings();
@@ -2863,10 +2326,6 @@ public class App extends Application
 
     private void updateTopK(int value)
     {
-        if (updatingModelControls)
-        {
-            return;
-        }
         activeModelSettings = SettingsCoordinator.withTopK(activeModelSettings, value);
         persistModelSettings();
         refreshGenerationSettings();
@@ -2874,10 +2333,6 @@ public class App extends Application
 
     private void updateTopKEnabled(boolean enabled)
     {
-        if (updatingModelControls)
-        {
-            return;
-        }
         activeModelSettings = SettingsCoordinator.withTopKEnabled(activeModelSettings, enabled);
         persistModelSettings();
         refreshGenerationSettings();
@@ -2885,10 +2340,6 @@ public class App extends Application
 
     private void updateTopP(double value)
     {
-        if (updatingModelControls)
-        {
-            return;
-        }
         activeModelSettings = SettingsCoordinator.withTopP(activeModelSettings, value);
         persistModelSettings();
         refreshGenerationSettings();
@@ -2896,10 +2347,6 @@ public class App extends Application
 
     private void updateTopPEnabled(boolean enabled)
     {
-        if (updatingModelControls)
-        {
-            return;
-        }
         activeModelSettings = SettingsCoordinator.withTopPEnabled(activeModelSettings, enabled);
         persistModelSettings();
         refreshGenerationSettings();
@@ -2907,10 +2354,6 @@ public class App extends Application
 
     private void updateMinP(double value)
     {
-        if (updatingModelControls)
-        {
-            return;
-        }
         activeModelSettings = SettingsCoordinator.withMinP(activeModelSettings, value);
         persistModelSettings();
         refreshGenerationSettings();
@@ -2918,10 +2361,6 @@ public class App extends Application
 
     private void updateMinPEnabled(boolean enabled)
     {
-        if (updatingModelControls)
-        {
-            return;
-        }
         activeModelSettings = SettingsCoordinator.withMinPEnabled(activeModelSettings, enabled);
         persistModelSettings();
         refreshGenerationSettings();
@@ -2929,10 +2368,6 @@ public class App extends Application
 
     private void updateTypicalP(double value)
     {
-        if (updatingModelControls)
-        {
-            return;
-        }
         activeModelSettings = SettingsCoordinator.withTypicalP(activeModelSettings, value);
         persistModelSettings();
         refreshGenerationSettings();
@@ -2940,10 +2375,6 @@ public class App extends Application
 
     private void updateTypicalPEnabled(boolean enabled)
     {
-        if (updatingModelControls)
-        {
-            return;
-        }
         activeModelSettings = SettingsCoordinator.withTypicalPEnabled(activeModelSettings, enabled);
         persistModelSettings();
         refreshGenerationSettings();
@@ -2951,10 +2382,6 @@ public class App extends Application
 
     private void updatePresencePenalty(double value)
     {
-        if (updatingModelControls)
-        {
-            return;
-        }
         activeModelSettings = SettingsCoordinator.withPresencePenalty(activeModelSettings, value);
         persistModelSettings();
         refreshGenerationSettings();
@@ -2962,10 +2389,6 @@ public class App extends Application
 
     private void updatePresencePenaltyEnabled(boolean enabled)
     {
-        if (updatingModelControls)
-        {
-            return;
-        }
         activeModelSettings = SettingsCoordinator.withPresencePenaltyEnabled(activeModelSettings, enabled);
         persistModelSettings();
         refreshGenerationSettings();
@@ -2973,10 +2396,6 @@ public class App extends Application
 
     private void updateFrequencyPenalty(double value)
     {
-        if (updatingModelControls)
-        {
-            return;
-        }
         activeModelSettings = SettingsCoordinator.withFrequencyPenalty(activeModelSettings, value);
         persistModelSettings();
         refreshGenerationSettings();
@@ -2984,10 +2403,6 @@ public class App extends Application
 
     private void updateFrequencyPenaltyEnabled(boolean enabled)
     {
-        if (updatingModelControls)
-        {
-            return;
-        }
         activeModelSettings = SettingsCoordinator.withFrequencyPenaltyEnabled(activeModelSettings, enabled);
         persistModelSettings();
         refreshGenerationSettings();
@@ -2995,10 +2410,6 @@ public class App extends Application
 
     private void updateRepeatLastN(int value)
     {
-        if (updatingModelControls)
-        {
-            return;
-        }
         activeModelSettings = SettingsCoordinator.withRepeatLastN(activeModelSettings, value);
         persistModelSettings();
         refreshGenerationSettings();
@@ -3006,10 +2417,6 @@ public class App extends Application
 
     private void updateRepeatLastNEnabled(boolean enabled)
     {
-        if (updatingModelControls)
-        {
-            return;
-        }
         activeModelSettings = SettingsCoordinator.withRepeatLastNEnabled(activeModelSettings, enabled);
         persistModelSettings();
         refreshGenerationSettings();
@@ -3017,10 +2424,6 @@ public class App extends Application
 
     private void updateRepetitionPenalty(double value)
     {
-        if (updatingModelControls)
-        {
-            return;
-        }
         activeModelSettings = SettingsCoordinator.withRepetitionPenalty(activeModelSettings, value);
         persistModelSettings();
         refreshGenerationSettings();
@@ -3028,10 +2431,6 @@ public class App extends Application
 
     private void updateRepetitionPenaltyEnabled(boolean enabled)
     {
-        if (updatingModelControls)
-        {
-            return;
-        }
         activeModelSettings = SettingsCoordinator.withRepetitionPenaltyEnabled(activeModelSettings, enabled);
         persistModelSettings();
         refreshGenerationSettings();
@@ -3118,20 +2517,6 @@ public class App extends Application
         return Math.round(value / step) * step;
     }
 
-    private static String snippetFor(String text)
-    {
-        if (text == null || text.isBlank())
-        {
-            return "";
-        }
-        String single = text.replaceAll("\\s+", " ").trim();
-        if (single.length() <= 80)
-        {
-            return single;
-        }
-        return single.substring(0, 77) + "...";
-    }
-
     private void renderStoryBlocks(boolean forceScroll)
     {
         if (storyPaneController == null)
@@ -3184,12 +2569,7 @@ public class App extends Application
         }
         try
         {
-            database.inTransaction(connection ->
-            {
-                blockRepository.deleteById(block.id());
-                deleteLinkedImageIfPresent(block);
-            });
-            List<Block> refreshedBlocks = blockRepository.listForStory(currentStory().id());
+            List<Block> refreshedBlocks = storyBlockService.delete(currentStory(), block);
             storyWorkspace.advance(refreshedBlocks);
             retryHistory.activate(currentSession());
             renderStoryBlocks(forceScroll);
@@ -3204,18 +2584,14 @@ public class App extends Application
         }
     }
 
-    private void deleteLinkedImageIfPresent(Block block) throws SQLException
-    {
-        if (block == null || block.role() != Role.IMAGE)
-        {
-            return;
-        }
-        imageGenerationCoordinator.deleteImageById(block.text());
-    }
-
     private void persistBlockTextAsync(String blockId, String text, Runnable onSuccess, Consumer<Exception> onFailure)
     {
         Block originalBlock = storyWorkspace.findBlock(blockId);
+        if (originalBlock == null)
+        {
+            onFailure.accept(new IllegalStateException("Story block is no longer available: " + blockId));
+            return;
+        }
         if (originalBlock != null && storyWorkspace.updateBlockText(blockId, originalBlock.text(), text))
         {
             retryHistory.activate(currentSession());
@@ -3228,7 +2604,7 @@ public class App extends Application
         {
             try
             {
-                blockRepository.updateText(blockId, text);
+                storyBlockService.updateText(originalBlock, text);
                 onSuccess.run();
                 if (statusLabel != null && isCurrentStory(originalBlock))
                 {
@@ -3247,7 +2623,7 @@ public class App extends Application
         {
             try
             {
-                blockRepository.updateText(blockId, text);
+                storyBlockService.updateText(originalBlock, text);
             }
             catch (SQLException e)
             {

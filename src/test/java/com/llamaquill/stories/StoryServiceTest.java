@@ -1,0 +1,87 @@
+package com.llamaquill.stories;
+
+import com.llamaquill.db.AppPaths;
+import com.llamaquill.db.BlockRepository;
+import com.llamaquill.db.Database;
+import com.llamaquill.db.StoryRepository;
+import com.llamaquill.model.Block;
+import com.llamaquill.model.Role;
+import com.llamaquill.model.Story;
+import com.llamaquill.util.Timestamps;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.nio.file.Path;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+class StoryServiceTest
+{
+    @TempDir
+    Path temporaryDirectory;
+
+    @Test
+    void ownsStoryCreationLoadingAndMutationLifecycle() throws Exception
+    {
+        AppPaths paths = AppPaths.forDirectories(
+                temporaryDirectory.resolve("data"),
+                temporaryDirectory.resolve("legacy"));
+        try (Database database = Database.open(paths))
+        {
+            StoryRepository stories = new StoryRepository(database);
+            BlockRepository blocks = new BlockRepository(database);
+            StoryService service = new StoryService(stories, blocks);
+
+            StoryService.StoryDocument initial =
+                    service.loadOrCreate("Untitled Story", "Default system");
+            assertEquals("Untitled Story", initial.story().title());
+            assertEquals("Default system", initial.story().systemPrompt());
+            assertTrue(initial.blocks().isEmpty());
+            assertEquals(initial.story().id(),
+                    service.loadOrCreate("Ignored", "Ignored").story().id());
+
+            Story renamed = service.rename(initial.story(), "  The Archive  ");
+            assertEquals("The Archive", renamed.title());
+            assertEquals("The Archive", stories.findById(renamed.id()).orElseThrow().title());
+
+            Story detailed = service.updateDetails(renamed, "System", "Plot", "Note");
+            assertEquals("System", detailed.systemPrompt());
+            assertEquals("Plot", detailed.plotEssentials());
+            assertEquals("Note", detailed.authorNote());
+            assertEquals(detailed, stories.findById(detailed.id()).orElseThrow());
+
+            Block block = new Block("block", detailed.id(), Role.ASSISTANT,
+                    "Loaded through the service.", Timestamps.now(), 0);
+            blocks.insert(block);
+            StoryService.StoryDocument loaded = service.reload(detailed.id(), null);
+            assertEquals(detailed, loaded.story());
+            assertEquals(block, loaded.blocks().getFirst());
+            assertThrows(UnsupportedOperationException.class, () -> loaded.blocks().add(block));
+
+            Story touched = service.touch(detailed);
+            assertEquals(detailed.id(), touched.id());
+            service.delete(touched);
+            assertTrue(stories.findById(touched.id()).isEmpty());
+            assertTrue(blocks.listForStory(touched.id()).isEmpty());
+        }
+    }
+
+    @Test
+    void rejectsBlankStoryTitles()
+    {
+        AppPaths paths = AppPaths.forDirectories(
+                temporaryDirectory.resolve("blank-data"),
+                temporaryDirectory.resolve("blank-legacy"));
+        assertThrows(IllegalArgumentException.class, () ->
+        {
+            try (Database database = Database.open(paths))
+            {
+                StoryService service = new StoryService(
+                        new StoryRepository(database), new BlockRepository(database));
+                service.create("   ", "System");
+            }
+        });
+    }
+}
