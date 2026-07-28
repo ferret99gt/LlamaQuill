@@ -10,6 +10,7 @@ import javafx.animation.PauseTransition;
 import javafx.application.Platform;
 import javafx.beans.binding.Bindings;
 import javafx.beans.binding.DoubleBinding;
+import javafx.beans.value.ChangeListener;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.geometry.Insets;
@@ -87,6 +88,8 @@ public final class StoryPaneController
     private final ObservableList<StoryItem> storyRows = FXCollections.observableArrayList();
     private final ListView<StoryItem> storyListView = new ListView<>(storyRows);
     private final PauseTransition storyViewportRefreshDebounce = new PauseTransition(Duration.millis(120));
+    private final ChangeListener<Number> storyScrollListener =
+            (observable, oldValue, newValue) -> schedulePostScrollLayout(newValue.doubleValue());
     private final TurnInputPane turnInputPane;
     private final Region storyInteractionShield = new Region();
     private final Object streamingLock = new Object();
@@ -107,6 +110,9 @@ public final class StoryPaneController
     private String activeAssistantEditId;
     private final TextArea blockEditor;
     private StoryCell activeEditorCell;
+    private ScrollBar observedStoryScrollBar;
+    private boolean postScrollLayoutQueued;
+    private double requestedScrollValue;
 
     private boolean streamingActive;
     private StreamingMode streamingMode;
@@ -204,6 +210,7 @@ public final class StoryPaneController
         storyRows.setAll(buildStoryItems(currentBlocks));
         clearStoryListSelection();
         storyListView.getFocusModel().focus(-1);
+        Platform.runLater(this::installStoryScrollListener);
         if (forceScroll)
         {
             scrollToBottom();
@@ -458,6 +465,8 @@ public final class StoryPaneController
         storyViewportRefreshDebounce.setOnFinished(event -> relayoutStoryPreserveViewport());
         storyListView.widthProperty().addListener((obs, oldValue, newValue) -> scheduleStoryViewportRefresh());
         storyListView.heightProperty().addListener((obs, oldValue, newValue) -> scheduleStoryViewportRefresh());
+        storyListView.skinProperty().addListener((obs, oldValue, newValue) ->
+                Platform.runLater(this::installStoryScrollListener));
     }
 
     private List<StoryItem> buildStoryItems(List<Block> blocks)
@@ -1279,6 +1288,48 @@ public final class StoryPaneController
             }
         }
         return null;
+    }
+
+    private void installStoryScrollListener()
+    {
+        ScrollBar current = findStoryVerticalScrollBar();
+        if (current == observedStoryScrollBar)
+        {
+            return;
+        }
+        if (observedStoryScrollBar != null)
+        {
+            observedStoryScrollBar.valueProperty().removeListener(storyScrollListener);
+        }
+        observedStoryScrollBar = current;
+        if (observedStoryScrollBar != null)
+        {
+            observedStoryScrollBar.valueProperty().addListener(storyScrollListener);
+        }
+    }
+
+    private void schedulePostScrollLayout(double scrollValue)
+    {
+        requestedScrollValue = scrollValue;
+        if (postScrollLayoutQueued)
+        {
+            return;
+        }
+        postScrollLayoutQueued = true;
+        Platform.runLater(() ->
+        {
+            remeasureVisibleStoryCells();
+            storyListView.applyCss();
+            storyListView.layout();
+            hideStoryHorizontalScrollBar();
+            if (observedStoryScrollBar != null)
+            {
+                double clamped = Math.max(observedStoryScrollBar.getMin(),
+                        Math.min(observedStoryScrollBar.getMax(), requestedScrollValue));
+                observedStoryScrollBar.setValue(clamped);
+            }
+            postScrollLayoutQueued = false;
+        });
     }
 
     private void hideStoryHorizontalScrollBar()

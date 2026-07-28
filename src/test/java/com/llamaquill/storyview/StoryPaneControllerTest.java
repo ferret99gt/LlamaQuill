@@ -2,6 +2,7 @@ package com.llamaquill.storyview;
 
 import com.llamaquill.model.Block;
 import com.llamaquill.model.Role;
+import com.llamaquill.model.StoryImage;
 import javafx.application.Platform;
 import javafx.scene.Node;
 import javafx.scene.Parent;
@@ -24,8 +25,12 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -299,6 +304,63 @@ class StoryPaneControllerTest
     }
 
     @Test
+    void scrollingAboveAnImageKeepsEveryVirtualizedGraphicInsideItsCell() throws Exception
+    {
+        List<Block> blocks = new ArrayList<>();
+        int position = 0;
+        int[] importedActionLengths = { 1716, 758, 739, 692, 691 };
+        for (int i = 0; i < importedActionLengths.length; i++)
+        {
+            String paragraph = "The imported adventure continues with descriptive prose that wraps across the pane. "
+                    + "You study the room, count each breath, and hold your position at the keyhole.\n\n";
+            String text = paragraph.repeat((importedActionLengths[i] / paragraph.length()) + 1)
+                    .substring(0, importedActionLengths[i]);
+            blocks.add(new Block("before-" + i, "story", Role.ASSISTANT, text, "", position++));
+        }
+        blocks.add(new Block("image-block", "story", Role.IMAGE, "image", "", position++));
+        blocks.add(new Block("after-image", "story", Role.ASSISTANT,
+                ("Still.\n\nYou hold the position. Eye to keyhole. Counting breaths that do not come from "
+                        + "the other side. The silver hair does not stir. No sway. No shift of fabric.\n\n").repeat(5),
+                "", position));
+
+        byte[] png = squarePng();
+        StoryImage image = new StoryImage("image", "story", "Test prompt", "image/png",
+                1, 1, "", png, "");
+        EditorFixture fixture = createFixture(
+                blocks,
+                (blockId, text, onSuccess, onFailure) -> onSuccess.run(),
+                ignored -> image);
+        try
+        {
+            runOnFxThread(() ->
+            {
+                ListView<?> list = findNode(fixture.root(), ListView.class, ignored -> true);
+                assertNotNull(list);
+                list.scrollTo(1);
+                fixture.root().applyCss();
+                fixture.root().layout();
+                assertVisibleCellGraphicsAreContained(list);
+            });
+            runOnFxThread(() ->
+            {
+                ScrollBar vertical = findNode(fixture.root(), ScrollBar.class,
+                        bar -> bar.getOrientation() == javafx.geometry.Orientation.VERTICAL
+                                && enclosingList(bar) != null);
+                assertNotNull(vertical);
+                vertical.decrement();
+                fixture.root().applyCss();
+                fixture.root().layout();
+            });
+            runOnFxThread(() -> assertVisibleCellGraphicsAreContained(
+                    findNode(fixture.root(), ListView.class, ignored -> true)));
+        }
+        finally
+        {
+            runOnFxThread(fixture.stage()::close);
+        }
+    }
+
+    @Test
     void whitespaceDoesNotSelectAndExistingSelectionDoesNotInvalidateEdit() throws Exception
     {
         EditorFixture fixture = createFixture();
@@ -396,13 +458,20 @@ class StoryPaneControllerTest
     private EditorFixture createFixture(List<Block> blocks, StoryPaneController.BlockTextPersister persister)
             throws Exception
     {
+        return createFixture(blocks, persister, ignored -> null);
+    }
+
+    private EditorFixture createFixture(List<Block> blocks, StoryPaneController.BlockTextPersister persister,
+            java.util.function.Function<String, StoryImage> imageLoader)
+            throws Exception
+    {
         AtomicReference<EditorFixture> result = new AtomicReference<>();
         runOnFxThread(() ->
         {
             StoryPaneController controller = new StoryPaneController(
                     null,
                     () -> { },
-                    ignored -> null,
+                    imageLoader,
                     ignored -> { },
                     (block, forceScroll) -> true,
                     persister,
@@ -427,6 +496,47 @@ class StoryPaneControllerTest
             result.set(new EditorFixture(root, stage, controller));
         });
         return result.get();
+    }
+
+    private static void assertVisibleCellGraphicsAreContained(ListView<?> list)
+    {
+        assertNotNull(list);
+        for (Node node : list.lookupAll(".list-cell"))
+        {
+            if (!(node instanceof ListCell<?> cell) || cell.isEmpty() || cell.getGraphic() == null
+                    || !cell.isVisible())
+            {
+                continue;
+            }
+            Bounds cellBounds = cell.localToScene(cell.getBoundsInLocal());
+            Bounds graphicBounds = cell.getGraphic().localToScene(cell.getGraphic().getBoundsInLocal());
+            assertTrue(cellBounds.getMinY() <= graphicBounds.getMinY() + 1
+                            && cellBounds.getMaxY() >= graphicBounds.getMaxY() - 1,
+                    "Virtualized graphic escaped its cell: cell=" + cellBounds + ", graphic=" + graphicBounds);
+        }
+
+        List<Bounds> cellBounds = list.lookupAll(".list-cell").stream()
+                .filter(ListCell.class::isInstance)
+                .map(ListCell.class::cast)
+                .filter(cell -> !cell.isEmpty() && cell.isVisible())
+                .map(cell -> cell.localToScene(cell.getBoundsInLocal()))
+                .sorted(Comparator.comparingDouble(Bounds::getMinY))
+                .toList();
+        for (int i = 1; i < cellBounds.size(); i++)
+        {
+            Bounds previous = cellBounds.get(i - 1);
+            Bounds current = cellBounds.get(i);
+            assertTrue(previous.getMaxY() <= current.getMinY() + 1,
+                    "Virtualized story cells overlap: previous=" + previous + ", current=" + current);
+        }
+    }
+
+    private static byte[] squarePng() throws Exception
+    {
+        BufferedImage image = new BufferedImage(720, 720, BufferedImage.TYPE_INT_RGB);
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        ImageIO.write(image, "png", bytes);
+        return bytes.toByteArray();
     }
 
     private static TextArea assertVisibleEditor(Parent root, String text)
