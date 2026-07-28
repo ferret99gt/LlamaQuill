@@ -37,17 +37,30 @@ public class PromptCompiler
     public synchronized PromptCompilation compile(Story story, List<Block> blocks, List<StoryCard> storyCards,
             GenerationSettings settings)
     {
+        return compile(story, blocks, storyCards, settings, PromptAuxiliaryInput.none());
+    }
+
+    public synchronized PromptCompilation compile(Story story, List<Block> blocks, List<StoryCard> storyCards,
+            GenerationSettings settings, PromptAuxiliaryInput auxiliaryInput)
+    {
         Objects.requireNonNull(story, "story");
         Objects.requireNonNull(blocks, "blocks");
         Objects.requireNonNull(storyCards, "storyCards");
         Objects.requireNonNull(settings, "settings");
+        PromptAuxiliaryInput auxiliary = auxiliaryInput == null ? PromptAuxiliaryInput.none() : auxiliaryInput;
         operationTokenScale = settings.promptTokenScale();
 
         PromptBudget budget = PromptBudget.from(settings);
         List<Block> originalWindow = List.copyOf(filterPromptBlocks(blocks));
         List<Block> window = new ArrayList<>(originalWindow);
+        List<ChatMessage> originalTaskMessages = normalizeTrailingMessages(auxiliary.trailingMessages());
+        List<ChatMessage> taskMessages = new ArrayList<>(originalTaskMessages);
+        StoryCard originalForcedCard = auxiliary.forcedStoryCard();
+        StoryCard forcedCard = originalForcedCard;
 
-        StoryCardSelection selectedCards = selectStoryCards(storyCards, originalWindow, settings.storyCardLookback());
+        StoryCardSelection selectedCards = selectStoryCards(
+                storyCards, originalWindow, settings.storyCardLookback(), auxiliary.activationText(),
+                originalForcedCard == null ? "" : originalForcedCard.id());
         List<StoryCard> originalPinned = List.copyOf(selectedCards.pinned());
         List<StoryCard> originalTriggered = List.copyOf(selectedCards.triggered());
         List<StoryCard> pinned = new ArrayList<>(originalPinned);
@@ -70,13 +83,14 @@ public class PromptCompiler
                 authorNote = "";
             }
             CompiledState compiled = compileState(systemText, plotEssentials, authorNote, window, pinned, triggered,
-                    settings.anPlacement());
+                    forcedCard, taskMessages, settings.anPlacement());
             if (compiled.estimatedTokens() <= budget.inputLimit())
             {
                 return finishCompilation(compiled, budget, story, originalSystem, systemText,
                         originalPlotEssentials, plotEssentials, originalAuthorNote, authorNote,
                         originalWindow, window, originalPinned, pinned, originalTriggered, triggered,
-                        selectedCards.triggerMatches());
+                        selectedCards.triggerMatches(), originalForcedCard, forcedCard,
+                        originalTaskMessages, taskMessages);
             }
 
             int excessTokens = compiled.estimatedTokens() - budget.inputLimit();
@@ -105,6 +119,11 @@ public class PromptCompiler
             if (!triggered.isEmpty())
             {
                 triggered.removeLast();
+                continue;
+            }
+            if (forcedCard != null)
+            {
+                forcedCard = null;
                 continue;
             }
 
@@ -139,6 +158,11 @@ public class PromptCompiler
                 systemText = shortenFromEnd(systemText, excessTokens);
                 continue;
             }
+            if (taskMessages.stream().anyMatch(message -> !message.content().isBlank()))
+            {
+                taskMessages = shortenTaskMessages(taskMessages, excessTokens);
+                continue;
+            }
 
             // A zero-sized or otherwise invalid external setting cannot leave an
             // over-budget payload behind. Empty messages are the final safe state.
@@ -146,7 +170,8 @@ public class PromptCompiler
             return finishCompilation(empty, budget, story, originalSystem, "",
                     originalPlotEssentials, "", originalAuthorNote, "",
                     originalWindow, List.of(), originalPinned, List.of(),
-                    originalTriggered, List.of(), selectedCards.triggerMatches());
+                    originalTriggered, List.of(), selectedCards.triggerMatches(),
+                    originalForcedCard, null, originalTaskMessages, taskMessages);
         }
     }
 
@@ -157,24 +182,36 @@ public class PromptCompiler
             List<Block> originalWindow, List<Block> window,
             List<StoryCard> originalPinned, List<StoryCard> pinned,
             List<StoryCard> originalTriggered, List<StoryCard> triggered,
-            Map<StoryCard, List<String>> triggerMatches)
+            Map<StoryCard, List<String>> triggerMatches,
+            StoryCard originalForcedCard, StoryCard forcedCard,
+            List<ChatMessage> originalTaskMessages, List<ChatMessage> taskMessages)
     {
         PromptContextReport report = buildContextReport(budget, compiled.estimatedTokens(), story,
                 originalSystem, systemText, originalPlotEssentials, plotEssentials,
                 originalAuthorNote, authorNote, originalWindow, window,
-                originalPinned, pinned, originalTriggered, triggered, triggerMatches);
+                originalPinned, pinned, originalTriggered, triggered, triggerMatches,
+                originalForcedCard, forcedCard, originalTaskMessages, taskMessages);
         logCompilationReport(report);
         return new PromptCompilation(compiled.messages(), compiled.estimatedTokens(), report);
     }
 
     private CompiledState compileState(String systemText, String plotEssentials, String authorNote,
-            List<Block> window, List<StoryCard> pinned, List<StoryCard> triggered, int authorNotePlacement)
+            List<Block> window, List<StoryCard> pinned, List<StoryCard> triggered,
+            StoryCard forcedCard, List<ChatMessage> taskMessages, int authorNotePlacement)
     {
         List<Block> windowWithNote = insertAuthorNote(window, authorNotePlacement, authorNote);
         List<Message> messages = new ArrayList<>();
         if (!plotEssentials.isBlank())
         {
             messages.add(new Message(Role.USER, plotEssentials));
+        }
+        if (forcedCard != null)
+        {
+            String text = formatStoryCard(forcedCard);
+            if (!text.isBlank())
+            {
+                messages.add(new Message(Role.USER, text));
+            }
         }
         for (StoryCard card : pinned)
         {
@@ -194,7 +231,23 @@ public class PromptCompiler
         }
         messages.addAll(groupMessages(windowWithNote));
 
-        List<ChatMessage> promptMessages = buildPromptMessages(systemText, messages);
+        String mergedSystemText = systemText;
+        for (ChatMessage taskMessage : taskMessages)
+        {
+            if ("system".equalsIgnoreCase(taskMessage.role()))
+            {
+                mergedSystemText = mergeSystemInstructions(mergedSystemText, taskMessage.content());
+            }
+        }
+        List<ChatMessage> promptMessages = buildPromptMessages(mergedSystemText, messages);
+        for (ChatMessage taskMessage : taskMessages)
+        {
+            if (!"system".equalsIgnoreCase(taskMessage.role())
+                    && !taskMessage.role().isBlank() && !taskMessage.content().isBlank())
+            {
+                promptMessages.add(taskMessage);
+            }
+        }
         return new CompiledState(promptMessages, estimateTokens(promptMessages));
     }
 
@@ -205,7 +258,9 @@ public class PromptCompiler
             List<Block> originalWindow, List<Block> window,
             List<StoryCard> originalPinned, List<StoryCard> pinned,
             List<StoryCard> originalTriggered, List<StoryCard> triggered,
-            Map<StoryCard, List<String>> triggerMatches)
+            Map<StoryCard, List<String>> triggerMatches,
+            StoryCard originalForcedCard, StoryCard forcedCard,
+            List<ChatMessage> originalTaskMessages, List<ChatMessage> taskMessages)
     {
         List<Entry> entries = new ArrayList<>();
         addTextEntry(entries, Component.SYSTEM, story.id(), "System",
@@ -236,6 +291,21 @@ public class PromptCompiler
         for (StoryCard card : originalPinned)
         {
             entries.add(cardEntry(Component.PINNED_STORY_CARD, card, pinned.contains(card), List.of()));
+        }
+        if (originalForcedCard != null)
+        {
+            entries.add(cardEntry(Component.FORCED_STORY_CARD, originalForcedCard,
+                    forcedCard != null, List.of()));
+        }
+        for (int index = 0; index < originalTaskMessages.size(); index++)
+        {
+            ChatMessage original = originalTaskMessages.get(index);
+            ChatMessage included = index < taskMessages.size()
+                    ? taskMessages.get(index)
+                    : new ChatMessage(original.role(), "");
+            addTextEntry(entries, Component.AUXILIARY_TASK, "task-" + index,
+                    "Auxiliary " + original.role() + " message",
+                    original.content(), included.content(), original.role());
         }
 
         return new PromptContextReport(budget, estimatedInputTokens, entries);
@@ -598,9 +668,65 @@ public class PromptCompiler
         return updated;
     }
 
-    private static StoryCardSelection selectStoryCards(List<StoryCard> storyCards, List<Block> window, int lookback)
+    private List<ChatMessage> shortenTaskMessages(List<ChatMessage> messages, int excessTokens)
+    {
+        List<ChatMessage> shortened = new ArrayList<>(messages);
+        for (int index = 0; index < shortened.size(); index++)
+        {
+            ChatMessage message = shortened.get(index);
+            if (message.content().isBlank())
+            {
+                continue;
+            }
+            String content = shortenFromEnd(message.content(), excessTokens);
+            if (content.equals(message.content()))
+            {
+                int end = message.content().offsetByCodePoints(message.content().length(), -1);
+                content = message.content().substring(0, end).stripTrailing();
+            }
+            shortened.set(index, new ChatMessage(message.role(), content));
+            return shortened;
+        }
+        return shortened;
+    }
+
+    private static List<ChatMessage> normalizeTrailingMessages(List<ChatMessage> messages)
+    {
+        List<ChatMessage> normalized = new ArrayList<>();
+        for (ChatMessage message : messages == null ? List.<ChatMessage>of() : messages)
+        {
+            if (message == null || message.role().isBlank() || message.content().isBlank())
+            {
+                continue;
+            }
+            normalized.add(new ChatMessage(message.role().trim(), message.content().trim()));
+        }
+        return List.copyOf(normalized);
+    }
+
+    private static String mergeSystemInstructions(String existing, String addition)
+    {
+        String first = normalizeContextText(existing);
+        String second = normalizeContextText(addition);
+        if (first.isBlank())
+        {
+            return second;
+        }
+        if (second.isBlank())
+        {
+            return first;
+        }
+        return first + "\n\n" + second;
+    }
+
+    private static StoryCardSelection selectStoryCards(List<StoryCard> storyCards, List<Block> window, int lookback,
+            String activationText, String forcedCardId)
     {
         String matchText = buildLookbackText(window, lookback);
+        if (activationText != null && !activationText.isBlank())
+        {
+            matchText = matchText + "\n" + activationText;
+        }
         List<StoryCard> pinned = new ArrayList<>();
         List<StoryCard> triggered = new ArrayList<>();
         Map<StoryCard, Integer> relevance = new HashMap<>();
@@ -609,6 +735,10 @@ public class PromptCompiler
         for (StoryCard card : storyCards)
         {
             if (card == null)
+            {
+                continue;
+            }
+            if (forcedCardId != null && !forcedCardId.isBlank() && forcedCardId.equals(card.id()))
             {
                 continue;
             }

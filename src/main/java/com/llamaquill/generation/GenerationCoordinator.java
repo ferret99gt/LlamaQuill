@@ -43,14 +43,13 @@ public final class GenerationCoordinator
         this.ollamaClient = Objects.requireNonNull(ollamaClient, "ollamaClient");
     }
 
-    public ContinueResult continueStory(Story story, GenerationSettings settings, AutoCardsRunner autoCardsRunner)
+    public ContinueResult continueStory(Story story, GenerationSettings settings)
             throws Exception
     {
-        return continueStory(story, settings, autoCardsRunner, GenerationObserver.NOOP);
+        return continueStory(story, settings, GenerationObserver.NOOP);
     }
 
-    public ContinueResult continueStory(Story story, GenerationSettings settings, AutoCardsRunner autoCardsRunner,
-            GenerationObserver observer)
+    public ContinueResult continueStory(Story story, GenerationSettings settings, GenerationObserver observer)
             throws Exception
     {
         Objects.requireNonNull(story, "story");
@@ -60,10 +59,6 @@ public final class GenerationCoordinator
         List<Block> currentBlocks = blockRepository.listForStory(story.id());
         String expectedHeadId = headId(currentBlocks);
         List<StoryCard> currentCards = storyCardRepository.listForStory(story.id());
-        if (autoCardsRunner != null && autoCardsRunner.run(currentBlocks, currentCards))
-        {
-            currentCards = storyCardRepository.listForStory(story.id());
-        }
 
         PromptCompilation compilation = promptCompiler.compile(story, currentBlocks, currentCards, settings);
         GeneratedText generated = generateContinuationWithFallback(compilation, settings, activeObserver);
@@ -124,15 +119,14 @@ public final class GenerationCoordinator
                 applied ? ResultStatus.APPLIED : ResultStatus.STALE, generated.response());
     }
 
-    public TurnResult takeTurn(Story story, String userText, GenerationSettings settings,
-            AutoCardsRunner autoCardsRunner)
+    public TurnResult takeTurn(Story story, String userText, GenerationSettings settings)
             throws Exception
     {
-        return takeTurn(story, userText, settings, autoCardsRunner, GenerationObserver.NOOP);
+        return takeTurn(story, userText, settings, GenerationObserver.NOOP);
     }
 
     public TurnResult takeTurn(Story story, String userText, GenerationSettings settings,
-            AutoCardsRunner autoCardsRunner, GenerationObserver observer)
+            GenerationObserver observer)
             throws Exception
     {
         Objects.requireNonNull(story, "story");
@@ -143,10 +137,6 @@ public final class GenerationCoordinator
         List<Block> currentBlocks = blockRepository.listForStory(story.id());
         String expectedHeadId = headId(currentBlocks);
         List<StoryCard> currentCards = storyCardRepository.listForStory(story.id());
-        if (autoCardsRunner != null && autoCardsRunner.run(currentBlocks, currentCards))
-        {
-            currentCards = storyCardRepository.listForStory(story.id());
-        }
 
         boolean isFirstTurn = currentBlocks.isEmpty();
         Role seedRole = isFirstTurn ? Role.ASSISTANT : Role.USER;
@@ -293,12 +283,6 @@ public final class GenerationCoordinator
     private static String headId(List<Block> blocks)
     {
         return blocks.isEmpty() ? null : blocks.getLast().id();
-    }
-
-    @FunctionalInterface
-    public interface AutoCardsRunner
-    {
-        boolean run(List<Block> currentBlocks, List<StoryCard> currentCards) throws Exception;
     }
 
     public interface GenerationObserver

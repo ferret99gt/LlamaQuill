@@ -144,6 +144,58 @@ public class OllamaClient implements AutoCloseable
                 buildChatPayloadFromNormalized(normalizedMessages, settings), prefillFilter);
     }
 
+    public OllamaChatResult chatNonStreaming(List<ChatMessage> messages, GenerationSettings settings)
+            throws IOException, InterruptedException
+    {
+        if (settings == null)
+        {
+            throw new IllegalArgumentException("Generation settings are required.");
+        }
+        String requestedModel = requireModel(settings.modelName());
+        List<ChatMessage> normalizedMessages = normalizeChatMessages(messages);
+        String endpoint = OllamaEndpoint.resolve(settings.ollamaHost(), "/api/chat").toString();
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(java.net.URI.create(endpoint))
+                .timeout(CHAT_RESPONSE_TIMEOUT)
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(
+                        buildChatPayloadFromNormalized(normalizedMessages, settings, false),
+                        StandardCharsets.UTF_8))
+                .build();
+        HttpResponse<String> response = sendString(request);
+        requireSuccess("/api/chat", endpoint, response.statusCode(), response.body());
+
+        JSONObject root = parseObject(response.body(), "Ollama /api/chat response");
+        String error = extractErrorMessage(root);
+        if (!error.isBlank())
+        {
+            throw new OllamaException("Ollama non-streaming chat error: " + error,
+                    endpoint, response.statusCode(), error);
+        }
+        if (!root.optBoolean("done", false))
+        {
+            throw new OllamaException("Ollama non-streaming chat response was not terminal",
+                    endpoint, response.statusCode(), "");
+        }
+        JSONObject message = root.optJSONObject("message");
+        if (message == null || !(message.opt("content") instanceof String content))
+        {
+            throw new OllamaException("Ollama non-streaming chat response has no message.content",
+                    endpoint, response.statusCode(), "");
+        }
+        return new OllamaChatResult(
+                root.optString("model", requestedModel),
+                content,
+                intMetadata(root, "prompt_eval_count"),
+                intMetadata(root, "eval_count"),
+                root.optString("done_reason", ""),
+                longMetadata(root, "total_duration"),
+                longMetadata(root, "load_duration"),
+                longMetadata(root, "prompt_eval_duration"),
+                longMetadata(root, "eval_duration"),
+                0);
+    }
+
     private OllamaChatResult executeStreaming(String baseHost, String path, String requestedModel, String payload,
             AssistantPrefillFilter prefillFilter)
             throws IOException, InterruptedException
@@ -226,7 +278,18 @@ public class OllamaClient implements AutoCloseable
         return buildChatPayloadFromNormalized(normalizeChatMessages(messages), settings);
     }
 
+    String buildChatPayload(List<ChatMessage> messages, GenerationSettings settings, boolean stream)
+    {
+        return buildChatPayloadFromNormalized(normalizeChatMessages(messages), settings, stream);
+    }
+
     private String buildChatPayloadFromNormalized(List<ChatMessage> normalizedMessages, GenerationSettings settings)
+    {
+        return buildChatPayloadFromNormalized(normalizedMessages, settings, true);
+    }
+
+    private String buildChatPayloadFromNormalized(List<ChatMessage> normalizedMessages, GenerationSettings settings,
+            boolean stream)
     {
         JSONObject payload = new JSONObject();
         payload.put("model", requireModel(settings.modelName()));
@@ -246,7 +309,7 @@ public class OllamaClient implements AutoCloseable
         // with incomplete reasoning. GPT-OSS models that require thinking remain an
         // acknowledged compatibility edge case to revisit later.
         payload.put("think", false);
-        payload.put("stream", true);
+        payload.put("stream", stream);
         payload.put("options", buildOptions(settings));
         return payload.toString();
     }

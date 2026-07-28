@@ -146,7 +146,7 @@ class AIDungeonImportsTest
             Path input = temporaryDirectory.resolve("variant-cards.json");
             Files.writeString(input, "\uFEFF" + """
                     [
-                      {"title":"Shared","keys":"Mia","value":"First card"},
+                      {"title":"Shared","keys":"Mia","value":"First card","type":"Character","notes":"Imported note"},
                       {"title":"Shared","keys":["Emily","friend"],"value":"Second card"},
                       {"title":"Duplicate label","keys":["Emily","friend"],"value":"Second card"},
                       {"keys":"","value":""}
@@ -160,6 +160,12 @@ class AIDungeonImportsTest
             List<StoryCard> imported = cards.listForStory(story.id());
             assertEquals(3, imported.size());
             assertEquals(2, imported.stream().filter(card -> card.title().equals("Shared")).count());
+            StoryCard typed = imported.stream()
+                    .filter(card -> card.content().equals("First card"))
+                    .findFirst()
+                    .orElseThrow();
+            assertEquals("Character", typed.type());
+            assertEquals("Imported note", typed.notes());
             StoryCard titleless = imported.stream()
                     .filter(card -> card.title().equals("Untitled"))
                     .findFirst()
@@ -197,6 +203,8 @@ class AIDungeonImportsTest
                                   {
                                     "keys": ["Mia", {"text": "friend"}],
                                     "entry": "Mia is an old friend.",
+                                    "type": "Character",
+                                    "notes": "Old friend from home.",
                                     "pinned": true
                                   },
                                   {
@@ -252,6 +260,8 @@ class AIDungeonImportsTest
                     .findFirst()
                     .orElseThrow();
             assertEquals("Mia, friend", untitled.triggers());
+            assertEquals("Character", untitled.type());
+            assertEquals("Old friend from home.", untitled.notes());
             assertTrue(untitled.pinned());
 
             List<Block> importedBlocks = blocks.listForStory(imported.id());

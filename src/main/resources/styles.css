@@ -23,6 +23,7 @@
 
 .tab-pane,
 .tab-pane > .tab-header-area,
+.tab-pane > .tab-header-area > .tab-header-background,
 .tab-pane > .tab-header-area > .headers-region,
 .tab-pane > .tab-header-area > .headers-region > .tab-header-background {
   -fx-background-color: #242424;

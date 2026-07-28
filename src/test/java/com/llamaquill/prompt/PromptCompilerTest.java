@@ -192,6 +192,71 @@ class PromptCompilerTest
         assertEquals(Status.TRIMMED, entry(compilation, Component.STORY).status());
     }
 
+    @Test
+    void auxiliaryGenerationForcesASavedCardOnceAndEndsWithTheTask()
+    {
+        StoryCard saved = new StoryCard(
+                "mia", "story", "Mia", "Mia, thief", "Mia is a careful thief.",
+                "Character", "PRIVATE PLAYER NOTE", true);
+        ChatMessage task = new ChatMessage("user", "Generate Mia now.");
+
+        PromptCompilation compilation = new PromptCompiler().compile(
+                story("Narrate.", "", ""),
+                List.of(block("1", Role.ASSISTANT, "Mia enters.")),
+                List.of(saved),
+                settings(2048, false, 1, 100),
+                new PromptAuxiliaryInput(List.of(task), "", saved));
+
+        String text = messageText(compilation);
+        assertEquals(1, occurrences(text, "Mia is a careful thief."));
+        assertFalse(text.contains("Character"));
+        assertFalse(text.contains("PRIVATE PLAYER NOTE"));
+        assertEquals(task, compilation.messages().getLast());
+        assertEquals(Status.INCLUDED, entry(compilation, Component.FORCED_STORY_CARD).status());
+    }
+
+    @Test
+    void additionalGenerationContextCanTriggerCardsWithoutEnteringTheAdventure()
+    {
+        StoryCard rogue = card("rogue", "rogue", "Rogue class lore.", false);
+
+        PromptCompilation compilation = new PromptCompiler().compile(
+                story("", "", ""),
+                List.of(block("1", Role.ASSISTANT, "A stranger arrives.")),
+                List.of(rogue),
+                settings(2048, false, 1, 100),
+                new PromptAuxiliaryInput(
+                        List.of(new ChatMessage("user", "Create Mia, a rogue.")),
+                        "Mia is a rogue.",
+                        null));
+
+        assertTrue(messageText(compilation).contains("Rogue class lore."));
+        assertEquals(List.of("rogue"), cardEntry(compilation, "rogue").matchedTriggers());
+        assertEquals("Create Mia, a rogue.", compilation.messages().getLast().content());
+    }
+
+    @Test
+    void auxiliarySystemInstructionsRemainInTheSingleLeadingSystemTurn()
+    {
+        PromptCompilation compilation = new PromptCompiler().compile(
+                story("Story system.", "", ""),
+                List.of(block("1", Role.ASSISTANT, "Story text.")),
+                List.of(),
+                settings(2048, false, 1, 100),
+                new PromptAuxiliaryInput(
+                        List.of(
+                                new ChatMessage("system", "Auxiliary behavior."),
+                                new ChatMessage("user", "Perform the task.")),
+                        "",
+                        null));
+
+        assertEquals(List.of("system", "assistant", "user"),
+                compilation.messages().stream().map(ChatMessage::role).toList());
+        assertEquals("Story system.\n\nAuxiliary behavior.",
+                compilation.messages().getFirst().content());
+        assertEquals("Perform the task.", compilation.messages().getLast().content());
+    }
+
     private static PromptCompiler exactCompiler()
     {
         PromptCompiler compiler = new PromptCompiler();
@@ -221,6 +286,11 @@ class PromptCompilerTest
     private static String messageText(PromptCompilation compilation)
     {
         return compilation.messages().stream().map(ChatMessage::content).reduce("", (left, right) -> left + right);
+    }
+
+    private static int occurrences(String text, String target)
+    {
+        return (text.length() - text.replace(target, "").length()) / target.length();
     }
 
     private static Story story(String system, String plotEssentials, String authorNote)

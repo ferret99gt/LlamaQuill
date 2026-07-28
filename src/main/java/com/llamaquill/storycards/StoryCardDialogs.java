@@ -1,31 +1,40 @@
 package com.llamaquill.storycards;
 
-import com.llamaquill.autocards.AutoCards;
 import com.llamaquill.model.StoryCard;
+import com.llamaquill.model.StoryCardCommandPreset;
 import com.llamaquill.util.Ids;
 import javafx.event.ActionEvent;
 import javafx.geometry.Insets;
-import javafx.geometry.Pos;
 import javafx.scene.Node;
+import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonBar;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.CheckBox;
+import javafx.scene.control.ComboBox;
 import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
+import javafx.scene.control.ScrollPane;
+import javafx.scene.control.Tab;
+import javafx.scene.control.TabPane;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
+import javafx.scene.control.TextInputDialog;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
-import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
 
+import java.time.LocalDateTime;
+import java.util.List;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 public final class StoryCardDialogs
 {
+    private static final List<String> STANDARD_TYPES =
+            List.of("Character", "Class", "Race", "Location", "Faction", "Custom");
+
     private StoryCardDialogs()
     {
     }
@@ -45,34 +54,197 @@ public final class StoryCardDialogs
     @FunctionalInterface
     public interface DraftGenerator
     {
-        void generate(String request, Consumer<AutoCards.GeneratedCard> onSuccess, Consumer<Throwable> onFailure);
+        void generate(StoryCardGenerationRequest request,
+                Consumer<StoryCardGenerationCoordinator.Result> onSuccess,
+                Consumer<Throwable> onFailure);
     }
 
-    public static void showCardDialog(Stage owner, String storyId, StoryCard card, Consumer<String> showInfo,
-            BiConsumer<String, Throwable> showError, CardSaver saver, CardDeleter deleter)
+    public static void showCardDialog(Stage owner, String storyId, StoryCard card,
+            StoryCardPresetService presetService, Consumer<String> showInfo,
+            BiConsumer<String, Throwable> showError, Consumer<String> setStatus,
+            DraftGenerator draftGenerator, CardSaver saver, CardDeleter deleter)
     {
         boolean isNew = card == null;
         Dialog<Void> dialog = new Dialog<>();
         dialog.setTitle(isNew ? "New Story Card" : "Edit Story Card");
         dialog.setHeaderText(isNew ? "Create a story card" : "Edit story card");
         dialog.initOwner(owner);
+        dialog.setResizable(true);
+        boolean[] generationInProgress = {false};
+        dialog.setOnCloseRequest(event ->
+        {
+            if (generationInProgress[0])
+            {
+                event.consume();
+                showInfo.accept("Please wait for Story Card generation to finish.");
+            }
+        });
+
+        ComboBox<String> typeChoice = new ComboBox<>();
+        typeChoice.getItems().setAll(STANDARD_TYPES);
+        typeChoice.setMaxWidth(Double.MAX_VALUE);
+        TextField customTypeField = new TextField();
+        customTypeField.setPromptText("Custom type");
+        configureTypeControls(typeChoice, customTypeField, card);
 
         TextField titleField = new TextField(isNew ? "" : card.title());
-        TextArea contentArea = new TextArea(isNew ? "" : card.content());
-        contentArea.setWrapText(true);
-        contentArea.setPrefRowCount(6);
+        TextArea entryArea = textArea(isNew ? "" : card.content(), 8);
         TextField triggersField = new TextField(isNew ? "" : card.triggers());
+        TextArea notesArea = textArea(isNew ? "" : card.notes(), 5);
         CheckBox pinnedBox = new CheckBox("Pinned");
         pinnedBox.setSelected(!isNew && card.pinned());
 
-        VBox content = new VBox(8, new Label("Title"), titleField, new Label("Content"), contentArea,
-                new Label("Triggers (comma separated)"), triggersField, pinnedBox);
-        content.setPadding(new Insets(10));
+        ComboBox<StoryCardCommands.PresetChoice> presetChoice = new ComboBox<>();
+        presetChoice.setMaxWidth(Double.MAX_VALUE);
+        TextArea commandArea = textArea("", 7);
+        ComboBox<StoryCardCommands.EntryFormatting> formattingChoice = new ComboBox<>();
+        formattingChoice.getItems().setAll(StoryCardCommands.EntryFormatting.values());
+        formattingChoice.setValue(StoryCardCommands.EntryFormatting.NONE);
+        formattingChoice.setMaxWidth(Double.MAX_VALUE);
+        TextArea additionalContextArea = textArea("", 5);
+        additionalContextArea.setPromptText("Lore, notes, or keywords that should guide this generation.");
+        CheckBox logGenerationsBox = new CheckBox("Log replaced entries in Notes");
+        logGenerationsBox.setSelected(true);
+
+        Button savePresetButton = new Button("Save");
+        Button deletePresetButton = new Button("Delete");
+        Button generateFromDetailsButton = new Button("Generate Entry with AI");
+
+        TabPane tabs = new TabPane();
+        Tab detailsTab = new Tab("Details");
+        detailsTab.setClosable(false);
+        Tab commandTab = new Tab("Command");
+        commandTab.setClosable(false);
+        tabs.getTabs().addAll(detailsTab, commandTab);
+
+        HBox triggerRow = new HBox(8, triggersField, pinnedBox);
+        triggerRow.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
+        HBox.setHgrow(triggersField, Priority.ALWAYS);
+
+        VBox details = new VBox(8,
+                new Label("Type"), typeChoice, customTypeField,
+                new Label("Title"), titleField,
+                new Label("Entry"), entryArea, generateFromDetailsButton,
+                new Label("Triggers (comma separated)"), triggerRow,
+                new Label("Notes (not sent to the model)"), notesArea);
+        details.setPadding(new Insets(10));
+        detailsTab.setContent(scrollable(details));
+
+        Label tokenHelp = new Label("Required: {{title}}    Optional: {{triggers}}, {{entry}}");
+        tokenHelp.setWrapText(true);
+        HBox presetRow = new HBox(8, presetChoice, savePresetButton, deletePresetButton);
+        HBox.setHgrow(presetChoice, Priority.ALWAYS);
+        VBox command = new VBox(8,
+                new Label("Story Card Command Preset"), presetRow,
+                new Label("Story Card Command"), commandArea, tokenHelp,
+                new Label("Entry Formatting"), formattingChoice,
+                new Label("Additional Generation Context"), additionalContextArea,
+                logGenerationsBox);
+        command.setPadding(new Insets(10));
+        commandTab.setContent(scrollable(command));
+
+        loadPresetChoices(presetService, presetChoice, null, showError);
+        StoryCardCommands.PresetChoice defaultPreset = findDefaultPreset(presetChoice.getItems());
+        presetChoice.setValue(defaultPreset);
+        commandArea.setText(defaultPreset.command());
+        deletePresetButton.setDisable(true);
+        presetChoice.setOnAction(event ->
+        {
+            StoryCardCommands.PresetChoice selected = presetChoice.getValue();
+            if (selected != null)
+            {
+                commandArea.setText(selected.command());
+                deletePresetButton.setDisable(selected.builtIn());
+            }
+        });
+
+        savePresetButton.setOnAction(event ->
+                saveOrUpdatePreset(owner, presetService, presetChoice, commandArea, showInfo, showError));
+        deletePresetButton.setOnAction(event ->
+                deletePreset(owner, presetService, presetChoice, showInfo, showError));
+
+        Runnable generate = () ->
+        {
+            String title = titleField.getText().trim();
+            if (title.isBlank())
+            {
+                showInfo.accept("Card title cannot be empty.");
+                return;
+            }
+            String triggers = triggersField.getText().trim();
+            if (triggers.isBlank())
+            {
+                triggers = title;
+                triggersField.setText(triggers);
+            }
+
+            StoryCardGenerationRequest request;
+            try
+            {
+                String validatedCommand = StoryCardCommands.validateCommand(commandArea.getText());
+                request = new StoryCardGenerationRequest(
+                        isNew ? "" : card.id(),
+                        title,
+                        triggers,
+                        validatedCommand,
+                        formattingChoice.getValue(),
+                        additionalContextArea.getText());
+            }
+            catch (IllegalArgumentException e)
+            {
+                showInfo.accept(e.getMessage());
+                return;
+            }
+
+            generationInProgress[0] = true;
+            tabs.setDisable(true);
+            setDialogActionsDisabled(dialog, true);
+            setStatus.accept("Generating Story Card entry...");
+            String priorEntry = entryArea.getText();
+            draftGenerator.generate(request,
+                    result ->
+                    {
+                        generationInProgress[0] = false;
+                        tabs.setDisable(false);
+                        setDialogActionsDisabled(dialog, false);
+                        deletePresetButton.setDisable(
+                                presetChoice.getValue() == null || presetChoice.getValue().builtIn());
+                        if (logGenerationsBox.isSelected() && !priorEntry.isBlank())
+                        {
+                            notesArea.setText(StoryCardCommands.appendGenerationHistory(
+                                    notesArea.getText(), priorEntry, LocalDateTime.now()));
+                        }
+                        entryArea.setText(result.entry());
+                        if (triggersField.getText().isBlank())
+                        {
+                            triggersField.setText(result.resolvedTriggers());
+                        }
+                        setStatus.accept("Generated Story Card entry");
+                        tabs.getSelectionModel().select(detailsTab);
+                    },
+                    error ->
+                    {
+                        generationInProgress[0] = false;
+                        tabs.setDisable(false);
+                        setDialogActionsDisabled(dialog, false);
+                        deletePresetButton.setDisable(
+                                presetChoice.getValue() == null || presetChoice.getValue().builtIn());
+                        setStatus.accept("Story Card generation failed");
+                        showError.accept("Failed to generate Story Card entry", error);
+                    });
+        };
+
+        generateFromDetailsButton.setOnAction(event ->
+        {
+            generate.run();
+        });
+
+        dialog.getDialogPane().setContent(tabs);
+        dialog.getDialogPane().setPrefSize(780, 680);
 
         ButtonType saveType = new ButtonType(isNew ? "Create" : "Update", ButtonBar.ButtonData.OK_DONE);
         ButtonType deleteType = new ButtonType("Delete", ButtonBar.ButtonData.LEFT);
         ButtonType cancelType = new ButtonType("Cancel", ButtonBar.ButtonData.CANCEL_CLOSE);
-
         if (isNew)
         {
             dialog.getDialogPane().getButtonTypes().addAll(saveType, cancelType);
@@ -81,34 +253,40 @@ public final class StoryCardDialogs
         {
             dialog.getDialogPane().getButtonTypes().addAll(saveType, deleteType, cancelType);
         }
-        dialog.getDialogPane().setContent(content);
 
         Button saveButton = (Button) dialog.getDialogPane().lookupButton(saveType);
         saveButton.addEventFilter(ActionEvent.ACTION, event ->
         {
             event.consume();
             String title = titleField.getText().trim();
-            if (title.isEmpty())
+            if (title.isBlank())
             {
                 showInfo.accept("Card title cannot be empty.");
                 return;
             }
-
-            StoryCard updatedCard = new StoryCard(
+            String triggers = triggersField.getText().trim();
+            if (triggers.isBlank())
+            {
+                triggers = title;
+                triggersField.setText(triggers);
+            }
+            StoryCard updated = new StoryCard(
                     isNew ? Ids.newId() : card.id(),
                     storyId,
                     title,
-                    triggersField.getText().trim(),
-                    contentArea.getText().trim(),
+                    triggers,
+                    entryArea.getText().trim(),
+                    resolvedType(typeChoice, customTypeField),
+                    notesArea.getText(),
                     pinnedBox.isSelected());
             try
             {
-                saver.save(updatedCard);
+                saver.save(updated);
                 dialog.close();
             }
             catch (Exception e)
             {
-                showError.accept(isNew ? "Failed to create story card" : "Failed to update story card", e);
+                showError.accept(isNew ? "Failed to create Story Card" : "Failed to update Story Card", e);
             }
         });
 
@@ -127,7 +305,7 @@ public final class StoryCardDialogs
                 }
                 catch (Exception e)
                 {
-                    showError.accept("Failed to delete story card", e);
+                    showError.accept("Failed to delete Story Card", e);
                 }
             });
         }
@@ -135,144 +313,145 @@ public final class StoryCardDialogs
         dialog.showAndWait();
     }
 
-    public static void showGenerateDialog(Stage owner, String storyId, Consumer<String> showInfo,
-            BiConsumer<String, Throwable> showError, Consumer<String> setStatus, DraftGenerator draftGenerator,
-            CardSaver saver)
+    private static void configureTypeControls(ComboBox<String> typeChoice, TextField customTypeField, StoryCard card)
     {
-        Dialog<Void> dialog = new Dialog<>();
-        dialog.setTitle("Generate Story Card");
-        dialog.setHeaderText("Generate a new card from a prompt");
-        dialog.initOwner(owner);
-
-        TextField titleField = new TextField();
-        TextArea contentArea = new TextArea();
-        contentArea.setWrapText(true);
-        contentArea.setPrefRowCount(6);
-        TextField triggersField = new TextField();
-        CheckBox pinnedBox = new CheckBox("Pinned");
-        TextArea promptArea = new TextArea();
-        promptArea.setWrapText(true);
-        promptArea.setPrefRowCount(4);
-        promptArea.setPromptText("Example: Generate a new character who is a wandering mercenary.");
-
-        VBox content = new VBox(8,
-                new Label("Prompt"), promptArea,
-                new Label("Title"), titleField,
-                new Label("Content"), contentArea,
-                new Label("Triggers (comma separated)"), triggersField,
-                pinnedBox);
-        content.setPadding(new Insets(10));
-
-        Button generateButton = new Button("Generate");
-        Button createButton = new Button("Create");
-        Button createAndCloseButton = new Button("Create and Close");
-        Button cancelButton = new Button("Cancel");
-
-        Region spacer = new Region();
-        HBox.setHgrow(spacer, Priority.ALWAYS);
-        HBox rightActions = new HBox(8, createButton, createAndCloseButton, cancelButton);
-        rightActions.setAlignment(Pos.CENTER_RIGHT);
-        HBox actions = new HBox(8, generateButton, spacer, rightActions);
-        actions.setAlignment(Pos.CENTER_LEFT);
-        content.getChildren().add(actions);
-
-        dialog.getDialogPane().setContent(content);
-        dialog.getDialogPane().getButtonTypes().add(ButtonType.CANCEL);
-        Node cancelNode = dialog.getDialogPane().lookupButton(ButtonType.CANCEL);
-        if (cancelNode != null)
+        String savedType = card == null ? "Character" : card.type().trim();
+        if (STANDARD_TYPES.subList(0, STANDARD_TYPES.size() - 1).contains(savedType))
         {
-            cancelNode.setVisible(false);
-            cancelNode.setManaged(false);
+            typeChoice.setValue(savedType);
         }
-
-        Runnable restoreButtons = () ->
+        else
         {
-            generateButton.setDisable(false);
-            createButton.setDisable(false);
-            createAndCloseButton.setDisable(false);
+            typeChoice.setValue("Custom");
+            customTypeField.setText(savedType);
+        }
+        Runnable updateVisibility = () ->
+        {
+            boolean custom = "Custom".equals(typeChoice.getValue());
+            customTypeField.setVisible(custom);
+            customTypeField.setManaged(custom);
         };
+        typeChoice.setOnAction(event -> updateVisibility.run());
+        updateVisibility.run();
+    }
 
-        Runnable saveAndKeepOpen = () ->
+    private static String resolvedType(ComboBox<String> typeChoice, TextField customTypeField)
+    {
+        String selected = typeChoice.getValue();
+        return "Custom".equals(selected) ? customTypeField.getText().trim() : selected == null ? "" : selected;
+    }
+
+    private static TextArea textArea(String value, int rows)
+    {
+        TextArea area = new TextArea(value == null ? "" : value);
+        area.setWrapText(true);
+        area.setPrefRowCount(rows);
+        return area;
+    }
+
+    private static ScrollPane scrollable(VBox content)
+    {
+        ScrollPane scrollPane = new ScrollPane(content);
+        scrollPane.setFitToWidth(true);
+        scrollPane.setPannable(false);
+        return scrollPane;
+    }
+
+    private static void setDialogActionsDisabled(Dialog<?> dialog, boolean disabled)
+    {
+        for (ButtonType type : dialog.getDialogPane().getButtonTypes())
         {
-            String title = titleField.getText().trim();
-            if (title.isEmpty())
+            Node control = dialog.getDialogPane().lookupButton(type);
+            if (control != null)
             {
-                showInfo.accept("Card title cannot be empty.");
-                return;
+                control.setDisable(disabled);
             }
-            String contentText = contentArea.getText().trim();
-            if (contentText.isEmpty())
-            {
-                showInfo.accept("Card content cannot be empty.");
-                return;
-            }
-            StoryCard newCard = new StoryCard(
-                    Ids.newId(),
-                    storyId,
-                    title,
-                    triggersField.getText().trim(),
-                    contentText,
-                    pinnedBox.isSelected());
+        }
+    }
+
+    private static void loadPresetChoices(StoryCardPresetService service,
+            ComboBox<StoryCardCommands.PresetChoice> choices, String selectedId,
+            BiConsumer<String, Throwable> showError)
+    {
+        try
+        {
+            choices.getItems().setAll(service.listChoices());
+            StoryCardCommands.PresetChoice selected = choices.getItems().stream()
+                    .filter(choice -> choice.id().equals(selectedId))
+                    .findFirst()
+                    .orElseGet(() -> findDefaultPreset(choices.getItems()));
+            choices.setValue(selected);
+        }
+        catch (Exception e)
+        {
+            showError.accept("Failed to load Story Card command presets", e);
+        }
+    }
+
+    private static StoryCardCommands.PresetChoice findDefaultPreset(
+            List<StoryCardCommands.PresetChoice> choices)
+    {
+        return choices.stream()
+                .filter(choice -> choice.id().equals(StoryCardCommands.defaultPreset().id()))
+                .findFirst()
+                .orElse(StoryCardCommands.defaultPreset());
+    }
+
+    private static void saveOrUpdatePreset(Stage owner, StoryCardPresetService service,
+            ComboBox<StoryCardCommands.PresetChoice> choices, TextArea commandArea,
+            Consumer<String> showInfo, BiConsumer<String, Throwable> showError)
+    {
+        StoryCardCommands.PresetChoice selected = choices.getValue();
+        boolean update = selected != null && !selected.builtIn();
+        TextInputDialog nameDialog = new TextInputDialog(update ? selected.name() : "");
+        nameDialog.initOwner(owner);
+        nameDialog.setTitle("Save Story Card Command");
+        nameDialog.setHeaderText(update ? "Update this reusable preset" : "Save as a new reusable preset");
+        nameDialog.setContentText("Preset name:");
+        nameDialog.showAndWait().ifPresent(name ->
+        {
             try
             {
-                saver.save(newCard);
-                titleField.clear();
-                triggersField.clear();
-                contentArea.clear();
+                StoryCardCommandPreset saved = update
+                        ? service.update(selected.id(), name, commandArea.getText())
+                        : service.create(name, commandArea.getText());
+                loadPresetChoices(service, choices, saved.id(), showError);
+                showInfo.accept(update ? "Story Card command preset updated." : "Story Card command preset saved.");
             }
             catch (Exception e)
             {
-                showError.accept("Failed to create story card", e);
-            }
-        };
-
-        createButton.setOnAction(event -> saveAndKeepOpen.run());
-        createAndCloseButton.setOnAction(event ->
-        {
-            String beforeTitle = titleField.getText();
-            saveAndKeepOpen.run();
-            if (!beforeTitle.equals(titleField.getText()))
-            {
-                dialog.close();
+                showError.accept("Failed to save Story Card command preset", e);
             }
         });
-        cancelButton.setOnAction(event -> dialog.close());
+    }
 
-        generateButton.setOnAction(event ->
+    private static void deletePreset(Stage owner, StoryCardPresetService service,
+            ComboBox<StoryCardCommands.PresetChoice> choices, Consumer<String> showInfo,
+            BiConsumer<String, Throwable> showError)
+    {
+        StoryCardCommands.PresetChoice selected = choices.getValue();
+        if (selected == null || selected.builtIn())
         {
-            String request = promptArea.getText().trim();
-            if (request.isEmpty())
-            {
-                showInfo.accept("Prompt cannot be empty.");
-                return;
-            }
-
-            generateButton.setDisable(true);
-            createButton.setDisable(true);
-            createAndCloseButton.setDisable(true);
-            setStatus.accept("Generating story card...");
-            draftGenerator.generate(request,
-                    generated ->
-                    {
-                        restoreButtons.run();
-                        if (generated == null)
-                        {
-                            setStatus.accept("Generate card: no result");
-                            return;
-                        }
-                        titleField.setText(generated.title());
-                        triggersField.setText(generated.triggers());
-                        contentArea.setText(generated.content());
-                        setStatus.accept("Generated story card draft");
-                    },
-                    error ->
-                    {
-                        restoreButtons.run();
-                        setStatus.accept("Generate card failed");
-                        showError.accept("Failed to generate story card", error);
-                    });
-        });
-
-        dialog.showAndWait();
+            showInfo.accept("Built-in Story Card command presets cannot be deleted.");
+            return;
+        }
+        Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
+        confirm.initOwner(owner);
+        confirm.setTitle("Delete Story Card Command");
+        confirm.setHeaderText("Delete preset \"" + selected.name() + "\"?");
+        if (confirm.showAndWait().filter(ButtonType.OK::equals).isEmpty())
+        {
+            return;
+        }
+        try
+        {
+            service.delete(selected.id());
+            loadPresetChoices(service, choices, StoryCardCommands.defaultPreset().id(), showError);
+            showInfo.accept("Story Card command preset deleted.");
+        }
+        catch (Exception e)
+        {
+            showError.accept("Failed to delete Story Card command preset", e);
+        }
     }
 }

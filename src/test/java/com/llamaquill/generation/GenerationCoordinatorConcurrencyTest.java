@@ -64,7 +64,6 @@ class GenerationCoordinatorConcurrencyTest
             GenerationCoordinator.ContinueResult result = coordinator.continueStory(
                     story,
                     GenerationSettings.defaults(),
-                    null,
                     new GenerationCoordinator.GenerationObserver()
                     {
                         @Override
@@ -106,7 +105,6 @@ class GenerationCoordinatorConcurrencyTest
             GenerationCoordinator.ContinueResult result = coordinator.continueStory(
                     story,
                     GenerationSettings.defaults(),
-                    null,
                     new GenerationCoordinator.GenerationObserver()
                     {
                         @Override
@@ -216,7 +214,7 @@ class GenerationCoordinatorConcurrencyTest
             AtomicReference<String> observedText = new AtomicReference<>("");
 
             Future<GenerationCoordinator.TurnResult> future = executor.submit(
-                    () -> fixture.coordinator.takeTurn(story, "User action", GenerationSettings.defaults(), null,
+                    () -> fixture.coordinator.takeTurn(story, "User action", GenerationSettings.defaults(),
                             new GenerationCoordinator.GenerationObserver()
                             {
                                 @Override

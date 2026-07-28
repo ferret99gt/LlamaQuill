@@ -1,9 +1,5 @@
 package com.llamaquill;
 
-import com.llamaquill.autocards.AutoCards;
-import com.llamaquill.autocards.AutoCardsCoordinator;
-import com.llamaquill.autocards.AutoCardsDialogs;
-import com.llamaquill.autocards.AutoCardsService;
 import com.llamaquill.db.ImageRepository;
 import com.llamaquill.db.BlockRepository;
 import com.llamaquill.db.Database;
@@ -11,9 +7,8 @@ import com.llamaquill.db.StoryCardRepository;
 import com.llamaquill.db.StoryRepository;
 import com.llamaquill.db.AppSettingsRepository;
 import com.llamaquill.db.ModelSettingsRepository;
-import com.llamaquill.db.AppAutoCardsRepository;
-import com.llamaquill.db.StoryAutoCardsRepository;
-import com.llamaquill.db.ModelAutoCardsRepository;
+import com.llamaquill.db.StoryCardCommandPresetRepository;
+import com.llamaquill.generation.AuxiliaryGenerationService;
 import com.llamaquill.generation.GenerationCoordinator;
 import com.llamaquill.generation.PromptDialog;
 import com.llamaquill.generation.StoryPromptCoordinator;
@@ -27,9 +22,6 @@ import com.llamaquill.model.Role;
 import com.llamaquill.model.Story;
 import com.llamaquill.model.StoryCard;
 import com.llamaquill.model.StoryImage;
-import com.llamaquill.model.AppAutoCardsSettings;
-import com.llamaquill.model.StoryAutoCardsSettings;
-import com.llamaquill.model.ModelAutoCardsSettings;
 import com.llamaquill.imports.AIDungeonImports;
 import com.llamaquill.imports.ImportDialogs;
 import com.llamaquill.prompt.PromptCompiler;
@@ -46,6 +38,8 @@ import com.llamaquill.session.StorySession;
 import com.llamaquill.settings.SettingsCoordinator;
 import com.llamaquill.stories.StoryDialogs;
 import com.llamaquill.storycards.StoryCardDialogs;
+import com.llamaquill.storycards.StoryCardGenerationCoordinator;
+import com.llamaquill.storycards.StoryCardPresetService;
 import com.llamaquill.storyview.StoryPaneController;
 import com.llamaquill.util.Ids;
 import com.llamaquill.util.Timestamps;
@@ -131,24 +125,19 @@ public class App extends Application
     private StoryCardRepository cardRepository;
     private AppSettingsRepository appSettingsRepository;
     private ModelSettingsRepository modelSettingsRepository;
-    private AppAutoCardsRepository appAutoCardsRepository;
-    private StoryAutoCardsRepository storyAutoCardsRepository;
-    private ModelAutoCardsRepository modelAutoCardsRepository;
     private PromptCompiler promptCompiler;
     private GenerationCoordinator generationCoordinator;
+    private AuxiliaryGenerationService auxiliaryGenerationService;
     private StoryPromptCoordinator storyPromptCoordinator;
     private ImageGenerationCoordinator imageGenerationCoordinator;
-    private AutoCardsService autoCardsService;
-    private AutoCardsCoordinator autoCardsCoordinator;
+    private StoryCardGenerationCoordinator storyCardGenerationCoordinator;
+    private StoryCardPresetService storyCardPresetService;
     private AIDungeonImports aiDungeonImports;
     private OllamaClient ollamaClient;
     private ComfyUiClient comfyUiClient;
     private AppSettings appSettings;
     private ModelSettings activeModelSettings;
     private GenerationSettings settings;
-    private AppAutoCardsSettings appAutoCardsSettings;
-    private StoryAutoCardsSettings storyAutoCardsSettings;
-    private ModelAutoCardsSettings modelAutoCardsSettings;
     private ExecutorService executor;
 
     private Story activeStory;
@@ -188,34 +177,8 @@ public class App extends Application
     private TextArea authorNoteArea;
 
     private Button newCardButton;
-    private Button generateCardButton;
-    private Button autoCardsRunButton;
     private Button importCardsButton;
     private ListView<StoryCard> cardList;
-
-    private CheckBox autoCardsEnabledBox;
-    private Spinner<Integer> autoCardsCooldownSpinner;
-    private Spinner<Integer> autoCardsMaxPerRunSpinner;
-    private Spinner<Integer> autoCardsWindowSpinner;
-    private CheckBox autoCardsUpdateExistingBox;
-    private CheckBox autoCardsCreateNewBox;
-    private CheckBox autoCardsPinNewBox;
-    private CheckBox autoCardsPreviewBox;
-    private Spinner<Integer> autoCardsLengthLimitSpinner;
-    private CheckBox autoCardsSummarizeBox;
-    private CheckBox autoCardsBulletedListsBox;
-
-    private ComboBox<String> autoCardsCandidateSelectionMode;
-    private ComboBox<String> autoCardsContextMode;
-
-    private TextArea autoCardsCreatePrompt;
-    private TextArea autoCardsUpdatePrompt;
-    private TextArea autoCardsSummarizePrompt;
-    private Spinner<Integer> autoCardsMaxTokensCreate;
-    private Spinner<Integer> autoCardsMaxTokensUpdate;
-    private Spinner<Integer> autoCardsMaxTokensSummarize;
-
-    private boolean updatingAutoCardsControls;
 
     private final StoryRetryHistory<RetryHistoryEntry> retryHistory = new StoryRetryHistory<>();
 
@@ -293,9 +256,8 @@ public class App extends Application
         }
     }
 
-    private record AutoCardsRunContext(StorySession session, Story story, AppSettings appSettings,
-            StoryAutoCardsSettings storySettings, AppAutoCardsSettings appAutoCardsSettings,
-            ModelSettings modelSettings, ModelAutoCardsSettings modelAutoCardsSettings)
+    private record StoryTaskContext(StorySession session, Story story, AppSettings appSettings,
+            GenerationSettings generationSettings)
     {
     }
 
@@ -317,9 +279,7 @@ public class App extends Application
             ImageRepository imageRepository = new ImageRepository(database);
             appSettingsRepository = new AppSettingsRepository(database);
             modelSettingsRepository = new ModelSettingsRepository(database);
-            appAutoCardsRepository = new AppAutoCardsRepository(database);
-            storyAutoCardsRepository = new StoryAutoCardsRepository(database);
-            modelAutoCardsRepository = new ModelAutoCardsRepository(database);
+            StoryCardCommandPresetRepository presetRepository = new StoryCardCommandPresetRepository(database);
             promptCompiler = new PromptCompiler();
             aiDungeonImports = new AIDungeonImports(database, storyRepository, blockRepository, cardRepository,
                     imageRepository, DEFAULT_SYSTEM_PROMPT);
@@ -327,19 +287,20 @@ public class App extends Application
             comfyUiClient = new ComfyUiClient();
             generationCoordinator = new GenerationCoordinator(database, blockRepository, storyRepository, cardRepository,
                     promptCompiler, ollamaClient);
-            autoCardsService = new AutoCardsService(ollamaClient, promptCompiler);
-            autoCardsCoordinator = new AutoCardsCoordinator(blockRepository, cardRepository, autoCardsService);
-            storyPromptCoordinator = new StoryPromptCoordinator(blockRepository, cardRepository, autoCardsService);
+            auxiliaryGenerationService = new AuxiliaryGenerationService(promptCompiler, ollamaClient);
+            storyPromptCoordinator = new StoryPromptCoordinator(
+                    blockRepository, cardRepository, auxiliaryGenerationService);
+            storyCardGenerationCoordinator = new StoryCardGenerationCoordinator(
+                    blockRepository, cardRepository, auxiliaryGenerationService);
+            storyCardPresetService = new StoryCardPresetService(presetRepository);
             imageGenerationCoordinator = new ImageGenerationCoordinator(database, imageRepository, blockRepository,
-                    storyRepository, cardRepository, autoCardsService, comfyUiClient);
+                    storyRepository, cardRepository, auxiliaryGenerationService, comfyUiClient);
             appSettings = loadOrCreateAppSettings();
-            appAutoCardsSettings = loadOrCreateAppAutoCardsSettings();
             refreshComfyWorkflowNames();
             ensureValidComfyWorkflowSelection();
             ollamaClient.setHost(appSettings.ollamaUrl());
             comfyUiClient.setHost(appSettings.comfyUiUrl());
             activeModelSettings = loadActiveModelSettings(appSettings.selectedModel());
-            modelAutoCardsSettings = loadOrCreateModelAutoCardsSettings(activeModelSettings.modelName());
             ollamaClient.setModel(activeModelSettings.modelName());
             settings = buildGenerationSettings();
             executor = Executors.newSingleThreadExecutor();
@@ -347,7 +308,6 @@ public class App extends Application
             activeStory = loadOrCreateStory();
             blocks = blockRepository.listForStory(activeStory.id());
             activateStorySession();
-            storyAutoCardsSettings = loadOrCreateStoryAutoCardsSettings(activeStory.id());
         }
         catch (SQLException e)
         {
@@ -402,9 +362,6 @@ public class App extends Application
         refreshStoryList(activeStory.id());
         refreshCardList(activeStory.id());
         populateStoryDetails(activeStory);
-        updateAppAutoCardsControls();
-        updateModelAutoCardsControls();
-        updateStoryAutoCardsControls();
         renderStoryBlocks(true);
         setStoryDependentControlsEnabled(activeStory != null);
 
@@ -557,32 +514,8 @@ public class App extends Application
         attachSaveOnBlur(plotEssentialsArea);
         attachSaveOnBlur(authorNoteArea);
 
-        autoCardsEnabledBox = new CheckBox("Enable Automatic Story Cards");
-        autoCardsEnabledBox.setOnAction(event -> updateStoryAutoCardsEnabled(autoCardsEnabledBox.isSelected()));
-
-        autoCardsCreateNewBox = new CheckBox("Create new cards");
-        autoCardsUpdateExistingBox = new CheckBox("Update existing cards");
-        autoCardsPinNewBox = new CheckBox("Pin newly created cards");
-        autoCardsPreviewBox = new CheckBox("Preview first");
-        autoCardsCreateNewBox.setOnAction(event ->
-            updateStoryAutoCardsCreateNew(autoCardsCreateNewBox.isSelected()));        
-        autoCardsUpdateExistingBox.setOnAction(event ->
-                updateStoryAutoCardsUpdateExisting(autoCardsUpdateExistingBox.isSelected()));
-        autoCardsPinNewBox.setOnAction(event ->
-                updateStoryAutoCardsPinNew(autoCardsPinNewBox.isSelected()));
-        autoCardsPreviewBox.setOnAction(event ->
-                updateStoryAutoCardsPreview(autoCardsPreviewBox.isSelected()));
-
-        VBox autoCardsSection = new VBox(8,
-                new Label("Auto Cards"),
-                autoCardsEnabledBox,
-                autoCardsCreateNewBox,                
-                autoCardsUpdateExistingBox,
-                autoCardsPinNewBox,
-                autoCardsPreviewBox);
-
         VBox content = new VBox(10, new Label("System Prompt"), systemPromptArea, new Label("Plot Essentials"),
-                plotEssentialsArea, new Label("Author's Note"), authorNoteArea, autoCardsSection);
+                plotEssentialsArea, new Label("Author's Note"), authorNoteArea);
         content.setPadding(new Insets(10));
 
         ScrollPane scrollPane = new ScrollPane(content);
@@ -596,14 +529,6 @@ public class App extends Application
         newCardButton.setMaxWidth(Double.MAX_VALUE);
         newCardButton.setOnAction(event -> showCardDialog(null));
 
-        generateCardButton = new Button("Generate New Card");
-        generateCardButton.setMaxWidth(Double.MAX_VALUE);
-        generateCardButton.setOnAction(event -> showGenerateCardDialog());
-
-        autoCardsRunButton = new Button("Run Auto Cards");
-        autoCardsRunButton.setMaxWidth(Double.MAX_VALUE);
-        autoCardsRunButton.setOnAction(event -> runAutoCardsManual());
-
         importCardsButton = new Button("Import AI Dungeon Cards");
         importCardsButton.setMaxWidth(Double.MAX_VALUE);
         importCardsButton.setOnAction(event -> showImportCardsDialog());
@@ -613,10 +538,12 @@ public class App extends Application
         {
             private final Label title = new Label();
             private final Label snippet = new Label();
-            private final VBox box = new VBox(2, title, snippet);
+            private final Label group = new Label();
+            private final VBox box = new VBox(2, group, title, snippet);
 
             {
                 snippet.setStyle("-fx-font-size: 11px;");
+                group.setStyle("-fx-font-size: 12px; -fx-font-weight: bold; -fx-padding: 8 0 4 0;");
             }
 
             @Override
@@ -629,7 +556,20 @@ public class App extends Application
                 }
                 else
                 {
-                    title.setText(item.title());
+                    String type = item.displayType();
+                    int index = getIndex();
+                    boolean firstInGroup = index <= 0 || index > cardItems.size() - 1
+                            || !cardItems.get(index - 1).displayType().equalsIgnoreCase(type);
+                    group.setVisible(firstInGroup);
+                    group.setManaged(firstInGroup);
+                    if (firstInGroup)
+                    {
+                        long count = cardItems.stream()
+                                .filter(candidate -> candidate.displayType().equalsIgnoreCase(type))
+                                .count();
+                        group.setText(type + "  " + count);
+                    }
+                    title.setText((item.pinned() ? "\uD83D\uDCCC " : "") + item.title());
                     snippet.setText(snippetFor(item.content()));
                     setGraphic(box);
                 }
@@ -647,7 +587,7 @@ public class App extends Application
             }
         });
 
-        VBox content = new VBox(8, newCardButton, generateCardButton, cardList, autoCardsRunButton, importCardsButton);
+        VBox content = new VBox(8, newCardButton, cardList, importCardsButton);
         content.setPadding(new Insets(10));
         VBox.setVgrow(cardList, Priority.ALWAYS);
 
@@ -713,87 +653,6 @@ public class App extends Application
         refreshModelsButton.setOnAction(event -> refreshModelsFromOllama(true));
         modelDetailsLabel = new Label("Model metadata has not been loaded.");
         modelDetailsLabel.setWrapText(true);
-
-        autoCardsCandidateSelectionMode = new ComboBox<>();
-        autoCardsCandidateSelectionMode.setItems(FXCollections.observableArrayList(
-                AutoCards.CANDIDATE_SELECTION_MODE_HEURISTICS,
-                AutoCards.CANDIDATE_SELECTION_MODE_ASK_MODEL));
-        autoCardsCandidateSelectionMode.setMaxWidth(Double.MAX_VALUE);
-        autoCardsCandidateSelectionMode.setOnAction(event ->
-        {
-            if (autoCardsCandidateSelectionMode.getValue() != null)
-            {
-                updateAppAutoCardsCandidateSelectionMode(autoCardsCandidateSelectionMode.getValue());
-            }
-        });
-
-        autoCardsContextMode = new ComboBox<>();
-        autoCardsContextMode.setItems(FXCollections.observableArrayList(
-                AutoCards.CONTEXT_MODE_WINDOWED_EXCERPT,
-                AutoCards.CONTEXT_MODE_FULL_STORY));
-        autoCardsContextMode.setMaxWidth(Double.MAX_VALUE);
-        autoCardsContextMode.setOnAction(event ->
-        {
-            if (autoCardsContextMode.getValue() != null)
-            {
-                updateAppAutoCardsContextMode(autoCardsContextMode.getValue());
-            }
-        });
-
-        autoCardsCooldownSpinner = buildSpinner(0, 100, appAutoCardsSettings.cooldownTurns());
-
-        autoCardsMaxPerRunSpinner = buildSpinner(1, 10, appAutoCardsSettings.maxCardsPerRun());
-
-        autoCardsWindowSpinner = buildSpinner(1, 50, appAutoCardsSettings.candidateWindow());
-
-        autoCardsLengthLimitSpinner = buildSpinner(200, 10000, appAutoCardsSettings.cardLengthLimit());
-
-        autoCardsSummarizeBox = new CheckBox("Summarize instead of trim");
-        autoCardsSummarizeBox.setOnAction(event ->
-                updateAppAutoCardsSummarize(autoCardsSummarizeBox.isSelected()));
-
-        autoCardsBulletedListsBox = new CheckBox("Use Bulleted Lists");
-        autoCardsBulletedListsBox.setOnAction(event ->
-                updateAppAutoCardsUseBulletedLists(autoCardsBulletedListsBox.isSelected()));
-
-        autoCardsCreatePrompt = buildStoryArea();
-        autoCardsCreatePrompt.setMaxHeight(160);
-        autoCardsUpdatePrompt = buildStoryArea();
-        autoCardsUpdatePrompt.setMaxHeight(160);
-        autoCardsSummarizePrompt = buildStoryArea();
-        autoCardsSummarizePrompt.setMaxHeight(160);
-
-        autoCardsCreatePrompt.focusedProperty().addListener((obs, oldValue, newValue) ->
-        {
-            if (!newValue)
-            {
-                updateModelAutoCardsPrompts();
-            }
-        });
-        autoCardsUpdatePrompt.focusedProperty().addListener((obs, oldValue, newValue) ->
-        {
-            if (!newValue)
-            {
-                updateModelAutoCardsPrompts();
-            }
-        });
-        autoCardsSummarizePrompt.focusedProperty().addListener((obs, oldValue, newValue) ->
-        {
-            if (!newValue)
-            {
-                updateModelAutoCardsPrompts();
-            }
-        });
-
-        autoCardsMaxTokensCreate = buildSpinner(32, 2048, 256);
-        autoCardsMaxTokensUpdate = buildSpinner(32, 2048, 192);
-        autoCardsMaxTokensSummarize = buildSpinner(32, 2048, 192);
-        autoCardsMaxTokensCreate.valueProperty().addListener((obs, oldValue, newValue) ->
-                updateModelAutoCardsTokens());
-        autoCardsMaxTokensUpdate.valueProperty().addListener((obs, oldValue, newValue) ->
-                updateModelAutoCardsTokens());
-        autoCardsMaxTokensSummarize.valueProperty().addListener((obs, oldValue, newValue) ->
-                updateModelAutoCardsTokens());
 
         contextLimitSlider = buildIntSlider(ModelSettings.MIN_CONTEXT_LIMIT,
                 Math.max(131072, activeModelSettings.contextLimit()), activeModelSettings.contextLimit(), 512);
@@ -906,25 +765,6 @@ public class App extends Application
                         value -> updateMinStoryPercent(value.intValue())),
                 spinnerRow("Story Card Look Back", storyCardLookbackSpinner, this::updateStoryCardLookback),
                 spinnerRow("Author's Note Insertion Point", anPlacementSpinner, this::updateAnPlacement),
-                underlinedLabel("Auto Cards (Global)"),
-                comboRow("Candidation Selection Mode", autoCardsCandidateSelectionMode),
-                comboRow("Context Mode", autoCardsContextMode),
-                spinnerRow("Cooldown (turns)", autoCardsCooldownSpinner, this::updateAppAutoCardsCooldown),
-                spinnerRow("Max cards per run", autoCardsMaxPerRunSpinner, this::updateAppAutoCardsMaxPerRun),
-                spinnerRow("Candidate window (blocks)", autoCardsWindowSpinner, this::updateAppAutoCardsWindow),
-                spinnerRow("Card length limit (chars)", autoCardsLengthLimitSpinner, this::updateAppAutoCardsLengthLimit),
-                autoCardsSummarizeBox,
-                autoCardsBulletedListsBox,
-                underlinedLabel("Auto Cards (Model)"),
-                new Label("Create Prompt"),
-                autoCardsCreatePrompt,
-                new Label("Update Prompt"),
-                autoCardsUpdatePrompt,
-                new Label("Summarize Prompt"),
-                autoCardsSummarizePrompt,
-                spinnerRow("Max tokens (create)", autoCardsMaxTokensCreate, value -> updateModelAutoCardsTokens()),
-                spinnerRow("Max tokens (update)", autoCardsMaxTokensUpdate, value -> updateModelAutoCardsTokens()),
-                spinnerRow("Max tokens (summarize)", autoCardsMaxTokensSummarize, value -> updateModelAutoCardsTokens()),
                 underlinedLabel("Image Generation"),
                 textFieldRow("ComfyUI URL", comfyUiUrlField),
                 comboRow("ComfyUI Workflow", comfyWorkflowSelect),
@@ -1053,42 +893,6 @@ public class App extends Application
         {
             showError("Failed to save default settings", e);
         }
-        return defaults;
-    }
-
-    private AppAutoCardsSettings loadOrCreateAppAutoCardsSettings() throws SQLException
-    {
-        Optional<AppAutoCardsSettings> current = appAutoCardsRepository.load();
-        if (current.isPresent())
-        {
-            return current.get();
-        }
-        AppAutoCardsSettings defaults = AppAutoCardsSettings.defaults();
-        appAutoCardsRepository.save(defaults);
-        return defaults;
-    }
-
-    private StoryAutoCardsSettings loadOrCreateStoryAutoCardsSettings(String storyId) throws SQLException
-    {
-        Optional<StoryAutoCardsSettings> current = storyAutoCardsRepository.load(storyId);
-        if (current.isPresent())
-        {
-            return current.get();
-        }
-        StoryAutoCardsSettings defaults = StoryAutoCardsSettings.defaults(storyId);
-        storyAutoCardsRepository.save(defaults);
-        return defaults;
-    }
-
-    private ModelAutoCardsSettings loadOrCreateModelAutoCardsSettings(String modelName) throws SQLException
-    {
-        Optional<ModelAutoCardsSettings> current = modelAutoCardsRepository.load(modelName);
-        if (current.isPresent())
-        {
-            return current.get();
-        }
-        ModelAutoCardsSettings defaults = ModelAutoCardsSettings.defaults(modelName);
-        modelAutoCardsRepository.save(defaults);
         return defaults;
     }
 
@@ -1326,13 +1130,11 @@ public class App extends Application
         }
         activeModelSettings = selected.get();
         modelSettingsRepository.save(activeModelSettings);
-        modelAutoCardsSettings = loadOrCreateModelAutoCardsSettings(modelName);
         appSettings = SettingsCoordinator.withSelectedModel(appSettings, modelName);
         persistAppSettings();
         ollamaClient.setModel(modelName);
         applyModelDetails(details);
         updateModelControls();
-        updateModelAutoCardsControls();
         refreshGenerationSettings();
     }
 
@@ -1688,20 +1490,6 @@ public class App extends Application
         }
     }
 
-    private boolean runAutoCardsForGeneration(AutoCardsRunContext context, List<Block> currentBlocks,
-            List<StoryCard> currentCards) throws Exception
-    {
-        try
-        {
-            return runAutoCardsIfNeeded(context, currentBlocks, currentCards, false).ran();
-        }
-        catch (Exception e)
-        {
-            logAutoCardsError("Auto Cards failed to run", e);
-            return false;
-        }
-    }
-
     private <T> Task<T> submitTask(Callable<T> work, Consumer<T> onSuccess, Consumer<Throwable> onFailure)
     {
         Task<T> task = new Task<>()
@@ -1808,396 +1596,13 @@ public class App extends Application
         updatingModelControls = false;
     }
 
-    private void updateAppAutoCardsControls()
+    private StoryTaskContext captureStoryTaskContext()
     {
-        if (appAutoCardsSettings == null)
-        {
-            return;
-        }
-        updatingAutoCardsControls = true;
-        String candidationMode = AutoCards.normalizeCandidateSelectionMode(
-                appAutoCardsSettings.candidateSelectionMode());
-        String contextMode = AutoCards.normalizeContextMode(appAutoCardsSettings.contextMode());
-        if (!candidationMode.equals(appAutoCardsSettings.candidateSelectionMode())
-                || !contextMode.equals(appAutoCardsSettings.contextMode()))
-        {
-            appAutoCardsSettings = SettingsCoordinator.withCandidateSelectionMode(appAutoCardsSettings, candidationMode);
-            appAutoCardsSettings = SettingsCoordinator.withContextMode(appAutoCardsSettings, contextMode);
-            persistAppAutoCardsSettings();
-        }
-        autoCardsCandidateSelectionMode.setValue(candidationMode);
-        autoCardsContextMode.setValue(contextMode);
-        autoCardsCooldownSpinner.getValueFactory().setValue(appAutoCardsSettings.cooldownTurns());
-        autoCardsMaxPerRunSpinner.getValueFactory().setValue(appAutoCardsSettings.maxCardsPerRun());
-        autoCardsWindowSpinner.getValueFactory().setValue(appAutoCardsSettings.candidateWindow());
-        autoCardsLengthLimitSpinner.getValueFactory().setValue(appAutoCardsSettings.cardLengthLimit());
-        autoCardsSummarizeBox.setSelected(appAutoCardsSettings.summarizeInsteadOfTrim());
-        autoCardsBulletedListsBox.setSelected(appAutoCardsSettings.useBulletedLists());
-        updatingAutoCardsControls = false;
-        updateAutoCardsRunButtonState();
-    }
-
-    private void updateModelAutoCardsControls()
-    {
-        if (modelAutoCardsSettings == null)
-        {
-            return;
-        }
-        updatingAutoCardsControls = true;
-        autoCardsCreatePrompt.setText(modelAutoCardsSettings.createPrompt());
-        autoCardsUpdatePrompt.setText(modelAutoCardsSettings.updatePrompt());
-        autoCardsSummarizePrompt.setText(modelAutoCardsSettings.summarizePrompt());
-        autoCardsMaxTokensCreate.getValueFactory().setValue(modelAutoCardsSettings.maxTokensCreate());
-        autoCardsMaxTokensUpdate.getValueFactory().setValue(modelAutoCardsSettings.maxTokensUpdate());
-        autoCardsMaxTokensSummarize.getValueFactory().setValue(modelAutoCardsSettings.maxTokensSummarize());
-        updatingAutoCardsControls = false;
-    }
-
-    private void updateStoryAutoCardsControls()
-    {
-        if (storyAutoCardsSettings == null)
-        {
-            return;
-        }
-        updatingAutoCardsControls = true;
-        autoCardsEnabledBox.setSelected(storyAutoCardsSettings.enabled());
-        autoCardsUpdateExistingBox.setSelected(storyAutoCardsSettings.updateExisting());
-        autoCardsCreateNewBox.setSelected(storyAutoCardsSettings.createNew());
-        autoCardsPinNewBox.setSelected(storyAutoCardsSettings.pinNew());
-        autoCardsPreviewBox.setSelected(storyAutoCardsSettings.previewFirst());
-        updatingAutoCardsControls = false;
-        updateAutoCardsRunButtonState();
-    }
-
-    private void updateAppAutoCardsCandidateSelectionMode(String mode)
-    {
-        if (updatingAutoCardsControls || appAutoCardsSettings == null || mode == null)
-        {
-            return;
-        }
-        String normalized = AutoCards.normalizeCandidateSelectionMode(mode);
-        if (normalized.equals(appAutoCardsSettings.candidateSelectionMode()))
-        {
-            return;
-        }
-        appAutoCardsSettings = SettingsCoordinator.withCandidateSelectionMode(appAutoCardsSettings, normalized);
-        persistAppAutoCardsSettings();
-    }
-
-    private void updateAppAutoCardsContextMode(String mode)
-    {
-        if (updatingAutoCardsControls || appAutoCardsSettings == null || mode == null)
-        {
-            return;
-        }
-        String normalized = AutoCards.normalizeContextMode(mode);
-        if (normalized.equals(appAutoCardsSettings.contextMode()))
-        {
-            return;
-        }
-        appAutoCardsSettings = SettingsCoordinator.withContextMode(appAutoCardsSettings, normalized);
-        persistAppAutoCardsSettings();
-    }
-
-    private void updateStoryAutoCardsEnabled(boolean enabled)
-    {
-        if (updatingAutoCardsControls || storyAutoCardsSettings == null)
-        {
-            return;
-        }
-        if (enabled == storyAutoCardsSettings.enabled())
-        {
-            return;
-        }
-        storyAutoCardsSettings = SettingsCoordinator.withEnabled(storyAutoCardsSettings, enabled);
-        persistStoryAutoCardsSettings();
-        updateAutoCardsRunButtonState();
-    }
-
-    private void updateAppAutoCardsCooldown(int value)
-    {
-        if (updatingAutoCardsControls || appAutoCardsSettings == null)
-        {
-            return;
-        }
-        AppAutoCardsSettings updated = SettingsCoordinator.withCooldownTurns(appAutoCardsSettings, value);
-        if (updated.cooldownTurns() == appAutoCardsSettings.cooldownTurns())
-        {
-            return;
-        }
-        appAutoCardsSettings = updated;
-        persistAppAutoCardsSettings();
-    }
-
-    private void updateAppAutoCardsMaxPerRun(int value)
-    {
-        if (updatingAutoCardsControls || appAutoCardsSettings == null)
-        {
-            return;
-        }
-        AppAutoCardsSettings updated = SettingsCoordinator.withMaxCardsPerRun(appAutoCardsSettings, value);
-        if (updated.maxCardsPerRun() == appAutoCardsSettings.maxCardsPerRun())
-        {
-            return;
-        }
-        appAutoCardsSettings = updated;
-        persistAppAutoCardsSettings();
-    }
-
-    private void updateAppAutoCardsWindow(int value)
-    {
-        if (updatingAutoCardsControls || appAutoCardsSettings == null)
-        {
-            return;
-        }
-        AppAutoCardsSettings updated = SettingsCoordinator.withCandidateWindow(appAutoCardsSettings, value);
-        if (updated.candidateWindow() == appAutoCardsSettings.candidateWindow())
-        {
-            return;
-        }
-        appAutoCardsSettings = updated;
-        persistAppAutoCardsSettings();
-    }
-
-    private void updateStoryAutoCardsUpdateExisting(boolean value)
-    {
-        if (updatingAutoCardsControls || storyAutoCardsSettings == null)
-        {
-            return;
-        }
-        if (value == storyAutoCardsSettings.updateExisting())
-        {
-            return;
-        }
-        storyAutoCardsSettings = SettingsCoordinator.withUpdateExisting(storyAutoCardsSettings, value);
-        persistStoryAutoCardsSettings();
-    }
-
-    private void updateStoryAutoCardsCreateNew(boolean value)
-    {
-        if (updatingAutoCardsControls || storyAutoCardsSettings == null)
-        {
-            return;
-        }
-        if (value == storyAutoCardsSettings.createNew())
-        {
-            return;
-        }
-        storyAutoCardsSettings = SettingsCoordinator.withCreateNew(storyAutoCardsSettings, value);
-        persistStoryAutoCardsSettings();
-    }
-
-    private void updateStoryAutoCardsPinNew(boolean value)
-    {
-        if (updatingAutoCardsControls || storyAutoCardsSettings == null)
-        {
-            return;
-        }
-        if (value == storyAutoCardsSettings.pinNew())
-        {
-            return;
-        }
-        storyAutoCardsSettings = SettingsCoordinator.withPinNew(storyAutoCardsSettings, value);
-        persistStoryAutoCardsSettings();
-    }
-
-    private void updateStoryAutoCardsPreview(boolean value)
-    {
-        if (updatingAutoCardsControls || storyAutoCardsSettings == null)
-        {
-            return;
-        }
-        if (value == storyAutoCardsSettings.previewFirst())
-        {
-            return;
-        }
-        storyAutoCardsSettings = SettingsCoordinator.withPreviewFirst(storyAutoCardsSettings, value);
-        persistStoryAutoCardsSettings();
-    }
-
-    private void updateAppAutoCardsLengthLimit(int value)
-    {
-        if (updatingAutoCardsControls || appAutoCardsSettings == null)
-        {
-            return;
-        }
-        AppAutoCardsSettings updated = SettingsCoordinator.withCardLengthLimit(appAutoCardsSettings, value);
-        if (updated.cardLengthLimit() == appAutoCardsSettings.cardLengthLimit())
-        {
-            return;
-        }
-        appAutoCardsSettings = updated;
-        persistAppAutoCardsSettings();
-    }
-
-    private void updateAppAutoCardsSummarize(boolean value)
-    {
-        if (updatingAutoCardsControls || appAutoCardsSettings == null)
-        {
-            return;
-        }
-        if (value == appAutoCardsSettings.summarizeInsteadOfTrim())
-        {
-            return;
-        }
-        appAutoCardsSettings = SettingsCoordinator.withSummarizeInsteadOfTrim(appAutoCardsSettings, value);
-        persistAppAutoCardsSettings();
-    }
-
-    private void updateAppAutoCardsUseBulletedLists(boolean value)
-    {
-        if (updatingAutoCardsControls || appAutoCardsSettings == null)
-        {
-            return;
-        }
-        if (value == appAutoCardsSettings.useBulletedLists())
-        {
-            return;
-        }
-        appAutoCardsSettings = SettingsCoordinator.withUseBulletedLists(appAutoCardsSettings, value);
-        persistAppAutoCardsSettings();
-    }
-
-    private void updateModelAutoCardsPrompts()
-    {
-        if (updatingAutoCardsControls || modelAutoCardsSettings == null)
-        {
-            return;
-        }
-        String createPrompt = autoCardsCreatePrompt.getText();
-        String updatePrompt = autoCardsUpdatePrompt.getText();
-        String summarizePrompt = autoCardsSummarizePrompt.getText();
-        if (createPrompt.equals(modelAutoCardsSettings.createPrompt())
-                && updatePrompt.equals(modelAutoCardsSettings.updatePrompt())
-                && summarizePrompt.equals(modelAutoCardsSettings.summarizePrompt()))
-        {
-            return;
-        }
-        modelAutoCardsSettings = SettingsCoordinator.withPrompts(modelAutoCardsSettings, createPrompt, updatePrompt,
-                summarizePrompt);
-        persistModelAutoCardsSettings();
-    }
-
-    private void updateModelAutoCardsTokens()
-    {
-        if (updatingAutoCardsControls || modelAutoCardsSettings == null)
-        {
-            return;
-        }
-        Integer createTokens = autoCardsMaxTokensCreate.getValue();
-        Integer updateTokens = autoCardsMaxTokensUpdate.getValue();
-        Integer summarizeTokens = autoCardsMaxTokensSummarize.getValue();
-        if (createTokens == null || updateTokens == null || summarizeTokens == null)
-        {
-            return;
-        }
-        if (createTokens == modelAutoCardsSettings.maxTokensCreate()
-                && updateTokens == modelAutoCardsSettings.maxTokensUpdate()
-                && summarizeTokens == modelAutoCardsSettings.maxTokensSummarize())
-        {
-            return;
-        }
-        modelAutoCardsSettings = SettingsCoordinator.withTokenCaps(modelAutoCardsSettings,
-                createTokens, updateTokens, summarizeTokens);
-        persistModelAutoCardsSettings();
-    }
-
-    private void updateAutoCardsRunButtonState()
-    {
-        if (autoCardsRunButton == null || appAutoCardsSettings == null)
-        {
-            return;
-        }
-        boolean enabled = activeStory != null && storyAutoCardsSettings != null;
-        autoCardsRunButton.setDisable(!enabled);
-    }
-
-    private void runAutoCardsManual()
-    {
-        if (activeStory == null)
-        {
-            showInfo("Select a story first.");
-            return;
-        }
-        if (storyAutoCardsSettings == null)
-        {
-            showInfo("Story settings are not loaded yet.");
-            return;
-        }
-
-        AutoCardsRunContext context = captureAutoCardsRunContext();
-        if (context == null)
-        {
-            showInfo("Auto Cards settings are not loaded yet.");
-            return;
-        }
-
-        statusLabel.setText("Auto Cards...");
-        autoCardsRunButton.setDisable(true);
-        submitStoryTask(context.session(), "Auto Cards", () ->
-                {
-                    List<Block> currentBlocks = blockRepository.listForStory(context.story().id());
-                    List<StoryCard> currentCards = cardRepository.listForStory(context.story().id());
-                    return runAutoCardsIfNeeded(context, currentBlocks, currentCards, true);
-                },
-                result ->
-                {
-                    if (activeStory != null && activeStory.id().equals(context.story().id()))
-                    {
-                        refreshCardList(context.story().id());
-                    }
-                    if (result != null && result.ran())
-                    {
-                        statusLabel.setText("Auto Cards updated (" + result.created() + " new, " + result.updated() + " updated)");
-                    }
-                    else
-                    {
-                        statusLabel.setText("Auto Cards: no changes");
-                    }
-                    updateAutoCardsRunButtonState();
-                },
-                error ->
-                {
-                    statusLabel.setText("Auto Cards error: " + taskErrorMessage(error));
-                    updateAutoCardsRunButtonState();
-                });
-    }
-
-    private AutoCardsCoordinator.RunResult runAutoCardsIfNeeded(AutoCardsRunContext context, List<Block> currentBlocks,
-            List<StoryCard> currentCards, boolean manual)
-            throws IOException, InterruptedException, SQLException
-    {
-        if (context == null)
-        {
-            return new AutoCardsCoordinator.RunResult(0, 0, false);
-        }
-        AutoCardsCoordinator.PreviewCallbacks previewCallbacks = new AutoCardsCoordinator.PreviewCallbacks(
-                draft -> runOnUiThreadAndWait(
-                        () -> AutoCardsDialogs.showCreateDialog(primaryStage, context.story().id(), draft)),
-                (existing, proposed, summarized) -> runOnUiThreadAndWait(
-                        () -> AutoCardsDialogs.showUpdateDialog(primaryStage, existing, proposed, summarized)));
-        return autoCardsCoordinator.runIfNeeded(
-                context.story(),
-                currentBlocks,
-                currentCards,
-                manual,
-                context.appSettings(),
-                context.storySettings(),
-                context.appAutoCardsSettings(),
-                context.modelSettings(),
-                context.modelAutoCardsSettings(),
-                previewCallbacks);
-    }
-
-    private AutoCardsRunContext captureAutoCardsRunContext()
-    {
-        if (activeSession == null || activeStory == null || appSettings == null || storyAutoCardsSettings == null
-                || appAutoCardsSettings == null || activeModelSettings == null || modelAutoCardsSettings == null)
+        if (activeSession == null || activeStory == null || appSettings == null || activeModelSettings == null)
         {
             return null;
         }
-        return new AutoCardsRunContext(activeSession, activeStory, appSettings, storyAutoCardsSettings,
-                appAutoCardsSettings, activeModelSettings, modelAutoCardsSettings);
+        return new StoryTaskContext(activeSession, activeStory, appSettings, buildGenerationSettings());
     }
 
     private void refreshStoryList(String selectedId)
@@ -2288,17 +1693,33 @@ public class App extends Application
 
     private void showCardDialog(StoryCard card)
     {
-        if (activeStory == null)
+        StoryTaskContext context = captureStoryTaskContext();
+        if (context == null)
         {
-            showInfo("Select a story first.");
+            showInfo("Select a story and model first.");
             return;
         }
+        Story story = context.story();
         StoryCardDialogs.showCardDialog(
                 primaryStage,
-                activeStory.id(),
+                story.id(),
                 card,
+                storyCardPresetService,
                 this::showInfo,
                 this::showError,
+                statusLabel::setText,
+                (request, onSuccess, onFailure) -> submitStoryTask(
+                        context.session(),
+                        "Generate Story Card",
+                        () -> storyCardGenerationCoordinator.generate(
+                                story, request, context.generationSettings()),
+                        result ->
+                        {
+                            recordOllamaResponse(
+                                    result.compilation().estimatedTokens(), result.response());
+                            onSuccess.accept(result);
+                        },
+                        onFailure),
                 savedCard ->
                 {
                     if (card == null)
@@ -2309,7 +1730,10 @@ public class App extends Application
                     {
                         cardRepository.update(savedCard);
                     }
-                    refreshCardList(activeStory.id());
+                    if (activeStory != null && activeStory.id().equals(story.id()))
+                    {
+                        refreshCardList(story.id());
+                    }
                 },
                 () ->
                 {
@@ -2322,70 +1746,15 @@ public class App extends Application
                 });
     }
 
-    private void showGenerateCardDialog()
-    {
-        if (activeStory == null)
-        {
-            showInfo("Select a story first.");
-            return;
-        }
-        if (appAutoCardsSettings == null || modelAutoCardsSettings == null)
-        {
-            showInfo("Auto Cards settings are not loaded yet.");
-            return;
-        }
-        AutoCardsRunContext context = captureAutoCardsRunContext();
-        if (context == null)
-        {
-            showInfo("Auto Cards settings are not loaded yet.");
-            return;
-        }
-        Story story = context.story();
-        StoryCardDialogs.showGenerateDialog(
-                primaryStage,
-                story.id(),
-                this::showInfo,
-                this::showError,
-                text -> statusLabel.setText(text),
-                (request, onSuccess, onFailure) -> submitStoryTask(context.session(), "Generate Story Card",
-                        () -> autoCardsCoordinator.generateCardDraftFromPrompt(
-                                story,
-                                request,
-                                context.appSettings(),
-                                context.appAutoCardsSettings(),
-                                context.modelSettings(),
-                                context.modelAutoCardsSettings()),
-                        onSuccess,
-                        onFailure),
-                savedCard ->
-                {
-                    cardRepository.insert(savedCard);
-                    if (activeStory != null && activeStory.id().equals(story.id()))
-                    {
-                        refreshCardList(story.id());
-                    }
-                });
-    }
-
     private void showPromptDialog()
     {
-        if (activeStory == null)
+        StoryTaskContext context = captureStoryTaskContext();
+        if (context == null)
         {
-            showInfo("Select a story first.");
-            return;
-        }
-        if (appAutoCardsSettings == null || modelAutoCardsSettings == null)
-        {
-            showInfo("Auto Cards settings are not loaded yet.");
+            showInfo("Select a story and model first.");
             return;
         }
 
-        AutoCardsRunContext context = captureAutoCardsRunContext();
-        if (context == null)
-        {
-            showInfo("Auto Cards settings are not loaded yet.");
-            return;
-        }
         Story story = context.story();
         PromptDialog.show(
                 primaryStage,
@@ -2401,11 +1770,13 @@ public class App extends Application
                                 story,
                                 systemPrompt,
                                 userPrompt,
-                                context.appSettings(),
-                                context.appAutoCardsSettings(),
-                                context.modelSettings(),
-                                context.modelAutoCardsSettings()),
-                        onSuccess,
+                                context.generationSettings()),
+                        result ->
+                        {
+                            recordOllamaResponse(
+                                    result.compilation().estimatedTokens(), result.response());
+                            onSuccess.accept(result.content());
+                        },
                         onFailure));
     }
 
@@ -2416,21 +1787,10 @@ public class App extends Application
 
     private void showSeeDialog(String initialPrompt, Block replaceImageBlock)
     {
-        if (activeStory == null)
-        {
-            showInfo("Select a story first.");
-            return;
-        }
-        if (appAutoCardsSettings == null || modelAutoCardsSettings == null)
-        {
-            showInfo("Auto Cards settings are not loaded yet.");
-            return;
-        }
-
-        AutoCardsRunContext context = captureAutoCardsRunContext();
+        StoryTaskContext context = captureStoryTaskContext();
         if (context == null)
         {
-            showInfo("Auto Cards settings are not loaded yet.");
+            showInfo("Select a story and model first.");
             return;
         }
         String header = replaceImageBlock == null ? "Generate an image prompt from the story" : "Retry image generation";
@@ -2450,14 +1810,16 @@ public class App extends Application
                 () -> setStoryActionButtonsBusy(true),
                 this::restoreStoryActionButtonsState,
                 (request, onSuccess, onFailure) -> submitStoryTask(session, "Image Prompt",
-                        () -> imageGenerationCoordinator.generateImagePrompt(
+                        () -> imageGenerationCoordinator.generateImagePromptResult(
                                 story,
                                 request,
-                                context.appSettings(),
-                                context.modelSettings(),
-                                context.appAutoCardsSettings(),
-                                context.modelAutoCardsSettings()),
-                        onSuccess,
+                                context.generationSettings()),
+                        result ->
+                        {
+                            recordOllamaResponse(
+                                    result.compilation().estimatedTokens(), result.response());
+                            onSuccess.accept(result.content());
+                        },
                         onFailure),
                 (promptText, onSuccess, onFailure) -> submitStoryTask(session, "Image Generation",
                         () ->
@@ -2708,12 +2070,9 @@ public class App extends Application
             activeStory = story;
             blocks = blockRepository.listForStory(story.id());
             activateStorySession();
-            storyAutoCardsSettings = loadOrCreateStoryAutoCardsSettings(story.id());
             renderStoryBlocks(true);
             statusLabel.setText("Ready");
             populateStoryDetails(story);
-            updateStoryAutoCardsControls();
-            updateAutoCardsRunButtonState();
             refreshCardList(story.id());
             setStoryDependentControlsEnabled(true);
             restoreStoryActionButtonsState();
@@ -2796,7 +2155,7 @@ public class App extends Application
             return;
         }
 
-        AutoCardsRunContext context = captureAutoCardsRunContext();
+        StoryTaskContext context = captureStoryTaskContext();
         if (context == null)
         {
             showInfo("Generation settings are not loaded yet.");
@@ -2804,7 +2163,7 @@ public class App extends Application
         }
         StorySession session = context.session();
         List<Block> blockSnapshot = List.copyOf(blocks);
-        GenerationSettings operationSettings = buildGenerationSettings();
+        GenerationSettings operationSettings = context.generationSettings();
         if (retryHistory.isEmpty(session))
         {
             retryHistory.add(session, new TextRetryHistoryEntry(head.text()));
@@ -3000,48 +2359,6 @@ public class App extends Application
                 imported -> refreshCardList(storyId));
     }
 
-    private <T> T runOnUiThreadAndWait(java.util.concurrent.Callable<T> action)
-    {
-        if (Platform.isFxApplicationThread())
-        {
-            try
-            {
-                return action.call();
-            }
-            catch (Exception e)
-            {
-                throw new RuntimeException(e);
-            }
-        }
-
-        CompletableFuture<T> future = new CompletableFuture<>();
-        Platform.runLater(() ->
-        {
-            try
-            {
-                future.complete(action.call());
-            }
-            catch (Exception e)
-            {
-                future.completeExceptionally(e);
-            }
-        });
-
-        try
-        {
-            return future.get();
-        }
-        catch (InterruptedException e)
-        {
-            Thread.currentThread().interrupt();
-            return null;
-        }
-        catch (ExecutionException e)
-        {
-            throw new RuntimeException(e.getCause());
-        }
-    }
-
     private void populateStoryDetails(Story story)
     {
         if (story == null)
@@ -3069,15 +2386,8 @@ public class App extends Application
         plotEssentialsArea.setDisable(!enabled);
         authorNoteArea.setDisable(!enabled);
         newCardButton.setDisable(!enabled);
-        generateCardButton.setDisable(!enabled);
-        autoCardsRunButton.setDisable(!enabled);
         importCardsButton.setDisable(!enabled);
         cardList.setDisable(!enabled);
-        autoCardsEnabledBox.setDisable(!enabled);
-        autoCardsUpdateExistingBox.setDisable(!enabled);
-        autoCardsCreateNewBox.setDisable(!enabled);
-        autoCardsPinNewBox.setDisable(!enabled);
-        autoCardsPreviewBox.setDisable(!enabled);
     }
 
     private void submitTurn()
@@ -3110,13 +2420,13 @@ public class App extends Application
             return;
         }
 
-        AutoCardsRunContext context = captureAutoCardsRunContext();
+        StoryTaskContext context = captureStoryTaskContext();
         if (context == null)
         {
             showInfo("Generation settings are not loaded yet.");
             return;
         }
-        GenerationSettings operationSettings = buildGenerationSettings();
+        GenerationSettings operationSettings = context.generationSettings();
         clearRetryHistory();
         setStoryActionButtonsBusy(true);
         statusLabel.setText("Generating...");
@@ -3124,10 +2434,7 @@ public class App extends Application
         GenerationCoordinator.GenerationObserver observer = streamingObserver(streamingToken);
         submitStoryTask(context.session(), "Continue", () ->
                 {
-                    return generationCoordinator.continueStory(context.story(), operationSettings,
-                            (currentBlocks, currentCards) ->
-                                    runAutoCardsForGeneration(context, currentBlocks, currentCards),
-                            observer);
+                    return generationCoordinator.continueStory(context.story(), operationSettings, observer);
                 },
                 result ->
                 {
@@ -3179,23 +2486,20 @@ public class App extends Application
 
     private void runTurn(String userText)
     {
-        AutoCardsRunContext context = captureAutoCardsRunContext();
+        StoryTaskContext context = captureStoryTaskContext();
         if (context == null)
         {
             showInfo("Generation settings are not loaded yet.");
             return;
         }
-        GenerationSettings operationSettings = buildGenerationSettings();
+        GenerationSettings operationSettings = context.generationSettings();
         setStoryActionButtonsBusy(true);
         statusLabel.setText("Generating...");
         long streamingToken = storyPaneController.startStreaming(StoryPaneController.StreamingMode.TURN);
         GenerationCoordinator.GenerationObserver observer = streamingObserver(streamingToken);
         submitStoryTask(context.session(), "Take A Turn", () ->
                 {
-                    return generationCoordinator.takeTurn(context.story(), userText, operationSettings,
-                            (currentBlocks, currentCards) ->
-                                    runAutoCardsForGeneration(context, currentBlocks, currentCards),
-                            observer);
+                    return generationCoordinator.takeTurn(context.story(), userText, operationSettings, observer);
                 },
                 result ->
                 {
@@ -3726,54 +3030,6 @@ public class App extends Application
         }
     }
 
-    private void persistAppAutoCardsSettings()
-    {
-        if (appAutoCardsRepository == null || appAutoCardsSettings == null)
-        {
-            return;
-        }
-        try
-        {
-            appAutoCardsRepository.save(appAutoCardsSettings);
-        }
-        catch (SQLException e)
-        {
-            showError("Failed to save auto cards settings", e);
-        }
-    }
-
-    private void persistStoryAutoCardsSettings()
-    {
-        if (storyAutoCardsRepository == null || storyAutoCardsSettings == null)
-        {
-            return;
-        }
-        try
-        {
-            storyAutoCardsRepository.save(storyAutoCardsSettings);
-        }
-        catch (SQLException e)
-        {
-            showError("Failed to save auto cards settings", e);
-        }
-    }
-
-    private void persistModelAutoCardsSettings()
-    {
-        if (modelAutoCardsRepository == null || modelAutoCardsSettings == null)
-        {
-            return;
-        }
-        try
-        {
-            modelAutoCardsRepository.save(modelAutoCardsSettings);
-        }
-        catch (SQLException e)
-        {
-            showError("Failed to save auto cards settings", e);
-        }
-    }
-
     private void refreshGenerationSettings()
     {
         settings = buildGenerationSettings();
@@ -3943,11 +3199,6 @@ public class App extends Application
             return e;
         }
         return new RuntimeException(current);
-    }
-
-    private void logAutoCardsError(String message, Exception e)
-    {
-        System.err.println(message + ": " + e.getMessage());
     }
 
     private void showError(String message, Exception e)

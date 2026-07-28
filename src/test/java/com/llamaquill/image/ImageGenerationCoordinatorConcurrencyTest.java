@@ -4,13 +4,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import com.llamaquill.autocards.AutoCardsService;
 import com.llamaquill.db.AppPaths;
 import com.llamaquill.db.BlockRepository;
 import com.llamaquill.db.Database;
 import com.llamaquill.db.ImageRepository;
 import com.llamaquill.db.StoryCardRepository;
 import com.llamaquill.db.StoryRepository;
+import com.llamaquill.generation.AuxiliaryGenerationService;
 import com.llamaquill.model.Block;
 import com.llamaquill.model.Role;
 import com.llamaquill.model.Story;
@@ -53,7 +53,7 @@ class ImageGenerationCoordinatorConcurrencyTest
 
             ImageGenerationCoordinator coordinator = new ImageGenerationCoordinator(
                     database, images, blocks, stories, cards,
-                    new AutoCardsService(new OllamaClient(), new PromptCompiler()), new ComfyUiClient());
+                    new AuxiliaryGenerationService(new PromptCompiler(), new OllamaClient()), new ComfyUiClient());
             ImageGenerationCoordinator.PendingImage pending = new ImageGenerationCoordinator.PendingImage(
                     ONE_PIXEL_PNG, "image/png", "{}");
 

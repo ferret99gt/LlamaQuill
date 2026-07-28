@@ -1,21 +1,20 @@
 package com.llamaquill.image;
 
-import com.llamaquill.autocards.AutoCards;
-import com.llamaquill.autocards.AutoCardsService;
 import com.llamaquill.db.BlockRepository;
 import com.llamaquill.db.Database;
 import com.llamaquill.db.ImageRepository;
 import com.llamaquill.db.StoryCardRepository;
 import com.llamaquill.db.StoryRepository;
-import com.llamaquill.model.AppAutoCardsSettings;
+import com.llamaquill.generation.AuxiliaryGenerationService;
 import com.llamaquill.model.AppSettings;
 import com.llamaquill.model.Block;
-import com.llamaquill.model.ModelAutoCardsSettings;
-import com.llamaquill.model.ModelSettings;
+import com.llamaquill.model.ChatMessage;
+import com.llamaquill.model.GenerationSettings;
 import com.llamaquill.model.Role;
 import com.llamaquill.model.Story;
 import com.llamaquill.model.StoryCard;
 import com.llamaquill.model.StoryImage;
+import com.llamaquill.prompt.PromptAuxiliaryInput;
 import com.llamaquill.serviceClients.ComfyUiClient;
 import com.llamaquill.util.Ids;
 import com.llamaquill.util.Timestamps;
@@ -39,62 +38,53 @@ public final class ImageGenerationCoordinator
     private final BlockRepository blockRepository;
     private final StoryRepository storyRepository;
     private final StoryCardRepository storyCardRepository;
-    private final AutoCardsService autoCardsService;
+    private final AuxiliaryGenerationService auxiliaryGenerationService;
     private final ComfyUiClient comfyUiClient;
     private final Map<String, StoryImage> storyImageCache = new HashMap<>();
     private final Map<String, String> workflowTemplateCache = new HashMap<>();
 
     public ImageGenerationCoordinator(Database database, ImageRepository imageRepository, BlockRepository blockRepository,
-            StoryRepository storyRepository, StoryCardRepository storyCardRepository, AutoCardsService autoCardsService,
-            ComfyUiClient comfyUiClient)
+            StoryRepository storyRepository, StoryCardRepository storyCardRepository,
+            AuxiliaryGenerationService auxiliaryGenerationService, ComfyUiClient comfyUiClient)
     {
         this.database = Objects.requireNonNull(database, "database");
         this.imageRepository = Objects.requireNonNull(imageRepository, "imageRepository");
         this.blockRepository = Objects.requireNonNull(blockRepository, "blockRepository");
         this.storyRepository = Objects.requireNonNull(storyRepository, "storyRepository");
         this.storyCardRepository = Objects.requireNonNull(storyCardRepository, "storyCardRepository");
-        this.autoCardsService = Objects.requireNonNull(autoCardsService, "autoCardsService");
+        this.auxiliaryGenerationService = Objects.requireNonNull(
+                auxiliaryGenerationService, "auxiliaryGenerationService");
         this.comfyUiClient = Objects.requireNonNull(comfyUiClient, "comfyUiClient");
     }
 
-    public String generateImagePrompt(Story story, String request, AppSettings appSettings, ModelSettings modelSettings,
-            AppAutoCardsSettings appAutoCardsSettings, ModelAutoCardsSettings modelAutoCardsSettings) throws Exception
+    public String generateImagePrompt(Story story, String request, GenerationSettings settings) throws Exception
+    {
+        return generateImagePromptResult(story, request, settings).content();
+    }
+
+    public AuxiliaryGenerationService.Result generateImagePromptResult(
+            Story story, String request, GenerationSettings settings) throws Exception
     {
         Objects.requireNonNull(story, "story");
-        Objects.requireNonNull(appSettings, "appSettings");
-        Objects.requireNonNull(modelSettings, "modelSettings");
-        Objects.requireNonNull(appAutoCardsSettings, "appAutoCardsSettings");
-        Objects.requireNonNull(modelAutoCardsSettings, "modelAutoCardsSettings");
+        Objects.requireNonNull(settings, "settings");
 
         List<Block> currentBlocks = blockRepository.listForStory(story.id());
         List<StoryCard> currentCards = storyCardRepository.listForStory(story.id());
-
-        String contextMode = AutoCards.normalizeContextMode(appAutoCardsSettings.contextMode());
-        String excerpt = "";
-        if (!AutoCards.CONTEXT_MODE_FULL_STORY.equals(contextMode))
+        String userPrompt = """
+                Your job is to generate a prompt for an image generator that describes the most recent scene in the story. The prompt must describe each of the important subjects (gender, age, hair, eyes, build, clothing, and other visible details), what they are doing (eating, walking, talking, holding an object, using a weapon, etc), and where they are doing it (describe the room and theme, such as "an opulent castle bedroom during the morning").""";
+        String trimmedRequest = request == null ? "" : request.trim();
+        if (!trimmedRequest.isBlank())
         {
-            excerpt = buildAutoCardsExcerpt(currentBlocks, appAutoCardsSettings.candidateWindow());
+            userPrompt += "\n\n# User specific request\n" + trimmedRequest;
         }
-
-        AutoCardsService.PromptContext fullStoryContext = AutoCardsService.PromptContext.empty();
-        if (AutoCards.CONTEXT_MODE_FULL_STORY.equals(contextMode))
-        {
-            fullStoryContext = autoCardsService.buildFullStoryContext(
-                    story,
-                    currentBlocks,
-                    currentCards,
-                    appSettings,
-                    modelSettings,
-                    modelAutoCardsSettings);
-        }
-
-        return autoCardsService.generateImagePromptFromUserPrompt(
-                request,
-                excerpt,
-                fullStoryContext,
-                appSettings,
-                modelSettings,
-                modelAutoCardsSettings);
+        PromptAuxiliaryInput auxiliaryInput = new PromptAuxiliaryInput(
+                List.of(
+                        new ChatMessage("system", "You create image generation prompts for story scenes."),
+                        new ChatMessage("user", userPrompt)),
+                "",
+                null);
+        return auxiliaryGenerationService.generate(
+                story, currentBlocks, currentCards, settings, auxiliaryInput);
     }
 
     public ComfyUiClient.GenerationResult generateImages(AppSettings appSettings, String promptText)
@@ -260,24 +250,6 @@ public final class ImageGenerationCoordinator
     private Story touchStory(Story story) throws SQLException
     {
         return storyRepository.touch(story.id(), Timestamps.now());
-    }
-
-    private static String buildAutoCardsExcerpt(List<Block> currentBlocks, int window)
-    {
-        int start = Math.max(0, currentBlocks.size() - Math.max(1, window));
-        StringBuilder sb = new StringBuilder();
-        for (int i = start; i < currentBlocks.size(); i++)
-        {
-            Block block = currentBlocks.get(i);
-            if (block.role() != Role.USER && block.role() != Role.ASSISTANT)
-            {
-                continue;
-            }
-            sb.append(block.role() == Role.USER ? "User: " : "Story: ");
-            sb.append(block.text().trim());
-            sb.append("\n\n");
-        }
-        return sb.toString().trim();
     }
 
     public record PendingImage(byte[] bytes, String mimeType, String workflowJson)

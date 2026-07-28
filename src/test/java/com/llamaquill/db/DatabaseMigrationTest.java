@@ -12,6 +12,8 @@ import com.llamaquill.model.Block;
 import com.llamaquill.model.ModelSettings;
 import com.llamaquill.model.Role;
 import com.llamaquill.model.Story;
+import com.llamaquill.model.StoryCard;
+import com.llamaquill.model.StoryCardCommandPreset;
 import com.llamaquill.util.Timestamps;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -46,6 +48,11 @@ class DatabaseMigrationTest
                     "SELECT app_version FROM schema_migrations WHERE schema_version = "
                             + AppVersion.DATABASE_SCHEMA));
             assertFalse(columns(database, "app_settings").contains("use_ollama_templates"));
+            assertTrue(columns(database, "story_cards").containsAll(List.of("type", "notes")));
+            assertTrue(tableExists(database, "story_card_command_presets"));
+            assertFalse(tableExists(database, "app_auto_cards"));
+            assertFalse(tableExists(database, "story_auto_cards"));
+            assertFalse(tableExists(database, "model_auto_cards"));
             assertEquals("ok", scalarText(database, "PRAGMA integrity_check"));
             assertEquals(1, scalarInt(database, "PRAGMA foreign_keys"));
             Database.Diagnostics diagnostics = database.diagnostics();
@@ -103,6 +110,36 @@ class DatabaseMigrationTest
     }
 
     @Test
+    void reopensSchemaFourWithoutRemigratingOrLosingCardMetadata() throws Exception
+    {
+        AppPaths paths = paths("schema-four-reopen");
+        try (Database database = Database.open(paths))
+        {
+            String now = Timestamps.now();
+            new StoryRepository(database).insert(
+                    new Story("story", "Story", "", "", "", now, now));
+            new StoryCardRepository(database).insert(
+                    new StoryCard("card", "story", "Mia", "Mia", "Entry",
+                            "Character", "Player-only note", true));
+            new StoryCardCommandPresetRepository(database).insert(
+                    new StoryCardCommandPreset("preset", "Custom", "Write {{title}}.", now, now));
+        }
+
+        try (Database database = Database.open(paths))
+        {
+            Database.StartupReport report = database.startupReport();
+            assertFalse(report.migration().freshDatabase());
+            assertEquals(AppVersion.DATABASE_SCHEMA, report.migration().sourceSchema());
+            assertEquals(AppVersion.DATABASE_SCHEMA, report.migration().targetSchema());
+            assertTrue(report.migration().backup().isEmpty());
+            StoryCard card = new StoryCardRepository(database).findById("card").orElseThrow();
+            assertEquals("Character", card.type());
+            assertEquals("Player-only note", card.notes());
+            assertEquals(1, new StoryCardCommandPresetRepository(database).listAll().size());
+        }
+    }
+
+    @Test
     void migratesTheEarliestUnversionedDatabaseWithoutLosingRows() throws Exception
     {
         AppPaths paths = paths("earliest");
@@ -123,6 +160,8 @@ class DatabaseMigrationTest
             List<Block> migratedBlocks = blocks.listForStory("story-1");
             assertEquals(List.of(1, 2), migratedBlocks.stream().map(Block::position).toList());
             assertEquals(1, scalarInt(database, "SELECT COUNT(*) FROM story_cards WHERE id = 'card-1'"));
+            assertEquals("", scalarText(database, "SELECT type FROM story_cards WHERE id = 'card-1'"));
+            assertEquals("", scalarText(database, "SELECT notes FROM story_cards WHERE id = 'card-1'"));
             assertEquals(8192, scalarInt(database,
                     "SELECT context_limit FROM model_settings WHERE model_name = "
                             + "'hf.co/LatitudeGames/Muse-12B-GGUF:BF16'"));
@@ -153,13 +192,11 @@ class DatabaseMigrationTest
             assertEquals("http://legacy-ollama:11434",
                     scalarText(database, "SELECT ollama_url FROM app_settings WHERE id = 1"));
             assertFalse(columns(database, "app_settings").contains("use_ollama_templates"));
-            assertEquals(6, scalarInt(database, "SELECT cooldown_turns FROM app_auto_cards WHERE id = 1"));
-            assertEquals("Proper Noun Heuristics",
-                    scalarText(database, "SELECT candidate_selection_mode FROM app_auto_cards WHERE id = 1"));
-            assertEquals(0, scalarInt(database,
-                    "SELECT preview_first FROM story_auto_cards WHERE story_id = 'story-late'"));
-            assertFalse(columns(database, "app_auto_cards").contains("run_mode"));
-            assertFalse(columns(database, "model_auto_cards").contains("temperature_override"));
+            assertFalse(tableExists(database, "app_auto_cards"));
+            assertFalse(tableExists(database, "story_auto_cards"));
+            assertFalse(tableExists(database, "model_auto_cards"));
+            assertTrue(tableExists(database, "story_card_command_presets"));
+            assertTrue(columns(database, "story_cards").containsAll(List.of("type", "notes")));
             assertEquals(1, scalarInt(database,
                     "SELECT response_length_enabled FROM app_settings WHERE id = 1"));
             assertEquals(7, enabledModelOptionCount(database, "legacy-model"));
@@ -214,7 +251,7 @@ class DatabaseMigrationTest
         {
             Database.StartupReport report = database.startupReport();
             assertEquals(3, report.migration().sourceSchema());
-            assertEquals(3, report.migration().targetSchema());
+            assertEquals(AppVersion.DATABASE_SCHEMA, report.migration().targetSchema());
             assertTrue(Files.isRegularFile(report.migration().backup().orElseThrow()));
             assertFalse(columns(database, "app_settings").contains("context_limit"));
             assertFalse(columns(database, "app_settings").contains("min_story_window"));
@@ -344,5 +381,14 @@ class DatabaseMigrationTest
                 return names;
             }
         });
+    }
+
+    private static boolean tableExists(Database database, String table) throws SQLException
+    {
+        return scalarInt(database, """
+                SELECT COUNT(*)
+                FROM sqlite_master
+                WHERE type = 'table' AND name = '%s'
+                """.formatted(table.replace("'", "''"))) == 1;
     }
 }

@@ -28,7 +28,9 @@ public record PromptContextReport(PromptBudget budget, int estimatedInputTokens,
         PLOT_ESSENTIALS,
         AUTHOR_NOTE,
         PINNED_STORY_CARD,
-        TRIGGERED_STORY_CARD
+        TRIGGERED_STORY_CARD,
+        FORCED_STORY_CARD,
+        AUXILIARY_TASK
     }
 
     public enum Status

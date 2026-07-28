@@ -24,6 +24,7 @@ public final class DatabaseMigrator
     private static final int UNVERSIONED = 0;
     private static final int VERSION_0_1_0 = 1;
     private static final int INITIAL_0_2_0_SCHEMA = 2;
+    private static final int OLLAMA_HARDENING_SCHEMA = 3;
     private static final int CURRENT_SCHEMA = AppVersion.DATABASE_SCHEMA;
     private static final DateTimeFormatter BACKUP_TIMESTAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS");
 
@@ -63,9 +64,11 @@ public final class DatabaseMigrator
                 Path backup = createBackup(paths);
                 runMigrationTransaction(connection, () ->
                 {
-                    migrateFromInitialVersionTwo(connection);
+                    normalizeSchemaThreeFoundation(connection);
+                    migrateFromVersionThree(connection);
                     recordMigration(connection, CURRENT_SCHEMA,
                             AppVersion.CURRENT + "-schema-" + CURRENT_SCHEMA + "-provisional");
+                    setUserVersion(connection, CURRENT_SCHEMA);
                     validateDatabase(connection);
                 });
                 enableWal(connection);
@@ -75,7 +78,8 @@ public final class DatabaseMigrator
             enableWal(connection);
             return new MigrationReport(sourceVersion, CURRENT_SCHEMA, Optional.empty(), false);
         }
-        if (sourceVersion != VERSION_0_1_0 && sourceVersion != INITIAL_0_2_0_SCHEMA)
+        if (sourceVersion != VERSION_0_1_0 && sourceVersion != INITIAL_0_2_0_SCHEMA
+                && sourceVersion != OLLAMA_HARDENING_SCHEMA)
         {
             throw new SQLException("Unsupported database migration source: " + sourceVersion);
         }
@@ -90,8 +94,9 @@ public final class DatabaseMigrator
             }
             else
             {
-                migrateFromInitialVersionTwo(connection);
+                normalizeSchemaThreeFoundation(connection);
             }
+            migrateFromVersionThree(connection);
             String sourceLabel = sourceVersion == VERSION_0_1_0
                     ? AppVersion.FIRST_MIGRATION_SOURCE
                     : AppVersion.CURRENT + "-schema-" + sourceVersion;
@@ -109,9 +114,16 @@ public final class DatabaseMigrator
         migrateAppAndModelSettings(connection);
         createImagesTable(connection);
         rebuildBlocks(connection);
-        rebuildAutoCardsTables(connection);
         createIndexesAndMetadata(connection);
         dropLegacyGenerationSettings(connection);
+    }
+
+    private static void normalizeSchemaThreeFoundation(Connection connection) throws SQLException
+    {
+        if (needsSchemaThreeSettingsNormalization(connection))
+        {
+            migrateFromInitialVersionTwo(connection);
+        }
     }
 
     private static void migrateFromInitialVersionTwo(Connection connection) throws SQLException
@@ -121,7 +133,17 @@ public final class DatabaseMigrator
         addModelSettingColumns(connection, legacyContextLimit);
     }
 
-    private static boolean needsCurrentSchemaNormalization(Connection connection) throws SQLException
+    private static void migrateFromVersionThree(Connection connection) throws SQLException
+    {
+        createCoreTables(connection);
+        createImagesTable(connection);
+        rebuildStoryCardsForSchemaFour(connection);
+        createStoryCardCommandPresetsTable(connection);
+        dropAutoCardsTables(connection);
+        createIndexesAndMetadata(connection);
+    }
+
+    private static boolean needsSchemaThreeSettingsNormalization(Connection connection) throws SQLException
     {
         if (!tableExists(connection, "app_settings") || !tableExists(connection, "model_settings"))
         {
@@ -140,13 +162,29 @@ public final class DatabaseMigrator
                 || !modelColumns.contains("repeat_last_n");
     }
 
+    private static boolean needsCurrentSchemaNormalization(Connection connection) throws SQLException
+    {
+        if (needsSchemaThreeSettingsNormalization(connection)
+                || !tableExists(connection, "story_cards")
+                || !tableExists(connection, "story_card_command_presets"))
+        {
+            return true;
+        }
+        Set<String> storyCardColumns = columns(connection, "story_cards");
+        return !storyCardColumns.contains("type")
+                || !storyCardColumns.contains("notes")
+                || tableExists(connection, "app_auto_cards")
+                || tableExists(connection, "story_auto_cards")
+                || tableExists(connection, "model_auto_cards");
+    }
+
     private static void createCurrentSchema(Connection connection) throws SQLException
     {
         createCoreTables(connection);
         createImagesTable(connection);
         createAppSettingsTable(connection);
         createModelSettingsTable(connection);
-        createAutoCardsTables(connection);
+        createStoryCardCommandPresetsTable(connection);
         createIndexesAndMetadata(connection);
     }
 
@@ -171,6 +209,8 @@ public final class DatabaseMigrator
                     title TEXT NOT NULL,
                     triggers TEXT NOT NULL,
                     content TEXT NOT NULL,
+                    type TEXT NOT NULL DEFAULT '',
+                    notes TEXT NOT NULL DEFAULT '',
                     pinned INTEGER NOT NULL CHECK (pinned IN (0,1)),
                     FOREIGN KEY (story_id) REFERENCES stories(id) ON DELETE CASCADE
                 )
@@ -230,11 +270,17 @@ public final class DatabaseMigrator
                 """);
     }
 
-    private static void createAutoCardsTables(Connection connection) throws SQLException
+    private static void createStoryCardCommandPresetsTable(Connection connection) throws SQLException
     {
-        execute(connection, appAutoCardsTableSql("app_auto_cards"));
-        execute(connection, storyAutoCardsTableSql("story_auto_cards"));
-        execute(connection, modelAutoCardsTableSql("model_auto_cards"));
+        execute(connection, """
+                CREATE TABLE IF NOT EXISTS story_card_command_presets (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                    command TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """);
     }
 
     private static void createIndexesAndMetadata(Connection connection) throws SQLException
@@ -247,6 +293,13 @@ public final class DatabaseMigrator
                 CREATE INDEX IF NOT EXISTS idx_cards_story_pinned
                 ON story_cards(story_id, pinned)
                 """);
+        if (tableExists(connection, "story_cards") && columns(connection, "story_cards").contains("type"))
+        {
+            execute(connection, """
+                    CREATE INDEX IF NOT EXISTS idx_cards_story_type_title
+                    ON story_cards(story_id, type COLLATE NOCASE, pinned DESC, title COLLATE NOCASE)
+                    """);
+        }
         execute(connection, """
                 CREATE INDEX IF NOT EXISTS idx_images_story_created
                 ON images(story_id, created_at)
@@ -399,94 +452,45 @@ public final class DatabaseMigrator
         execute(connection, "ALTER TABLE app_settings_v3 RENAME TO app_settings");
     }
 
-    private static void rebuildAutoCardsTables(Connection connection) throws SQLException
+    private static void rebuildStoryCardsForSchemaFour(Connection connection) throws SQLException
     {
-        rebuildAppAutoCards(connection);
-        rebuildStoryAutoCards(connection);
-        rebuildModelAutoCards(connection);
-    }
-
-    private static void rebuildAppAutoCards(Connection connection) throws SQLException
-    {
-        boolean existed = tableExists(connection, "app_auto_cards");
-        Set<String> oldColumns = existed ? columns(connection, "app_auto_cards") : Set.of();
-        execute(connection, "DROP TABLE IF EXISTS app_auto_cards_v2");
-        execute(connection, appAutoCardsTableSql("app_auto_cards_v2"));
+        boolean existed = tableExists(connection, "story_cards");
+        Set<String> oldColumns = existed ? columns(connection, "story_cards") : Set.of();
+        execute(connection, "DROP TABLE IF EXISTS story_cards_v4");
+        execute(connection, """
+                CREATE TABLE story_cards_v4 (
+                    id TEXT PRIMARY KEY,
+                    story_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    triggers TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    type TEXT NOT NULL DEFAULT '',
+                    notes TEXT NOT NULL DEFAULT '',
+                    pinned INTEGER NOT NULL CHECK (pinned IN (0,1)),
+                    FOREIGN KEY (story_id) REFERENCES stories(id) ON DELETE CASCADE
+                )
+                """);
         if (existed)
         {
             execute(connection, """
-                    INSERT INTO app_auto_cards_v2 (
-                        id, cooldown_turns, max_cards_per_run, candidate_window, card_length_limit,
-                        summarize_instead_of_trim, use_bulleted_lists, candidate_selection_mode, context_mode
+                    INSERT INTO story_cards_v4 (
+                        id, story_id, title, triggers, content, type, notes, pinned
                     )
-                    SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s
-                    FROM app_auto_cards
+                    SELECT id, story_id, title, triggers, content, %s, %s, pinned
+                    FROM story_cards
                     """.formatted(
-                    value(oldColumns, "id", "1"),
-                    value(oldColumns, "cooldown_turns", "8"),
-                    value(oldColumns, "max_cards_per_run", "3"),
-                    value(oldColumns, "candidate_window", "12"),
-                    value(oldColumns, "card_length_limit", "3200"),
-                    value(oldColumns, "summarize_instead_of_trim", "1"),
-                    value(oldColumns, "use_bulleted_lists", "0"),
-                    value(oldColumns, "candidate_selection_mode", "'Proper Noun Heuristics'"),
-                    value(oldColumns, "context_mode", "'Full Story Context'")));
-            execute(connection, "DROP TABLE app_auto_cards");
+                    value(oldColumns, "type", "''"),
+                    value(oldColumns, "notes", "''")));
+            execute(connection, "DROP TABLE story_cards");
         }
-        execute(connection, "ALTER TABLE app_auto_cards_v2 RENAME TO app_auto_cards");
+        execute(connection, "ALTER TABLE story_cards_v4 RENAME TO story_cards");
     }
 
-    private static void rebuildStoryAutoCards(Connection connection) throws SQLException
+    private static void dropAutoCardsTables(Connection connection) throws SQLException
     {
-        boolean existed = tableExists(connection, "story_auto_cards");
-        Set<String> oldColumns = existed ? columns(connection, "story_auto_cards") : Set.of();
-        execute(connection, "DROP TABLE IF EXISTS story_auto_cards_v2");
-        execute(connection, storyAutoCardsTableSql("story_auto_cards_v2"));
-        if (existed)
-        {
-            execute(connection, """
-                    INSERT INTO story_auto_cards_v2 (
-                        story_id, enabled, update_existing, create_new, pin_new, preview_first
-                    )
-                    SELECT story_id, %s, %s, %s, %s, %s
-                    FROM story_auto_cards
-                    """.formatted(
-                    value(oldColumns, "enabled", "0"),
-                    value(oldColumns, "update_existing", "1"),
-                    value(oldColumns, "create_new", "1"),
-                    value(oldColumns, "pin_new", "0"),
-                    value(oldColumns, "preview_first", "0")));
-            execute(connection, "DROP TABLE story_auto_cards");
-        }
-        execute(connection, "ALTER TABLE story_auto_cards_v2 RENAME TO story_auto_cards");
-    }
-
-    private static void rebuildModelAutoCards(Connection connection) throws SQLException
-    {
-        boolean existed = tableExists(connection, "model_auto_cards");
-        Set<String> oldColumns = existed ? columns(connection, "model_auto_cards") : Set.of();
-        execute(connection, "DROP TABLE IF EXISTS model_auto_cards_v2");
-        execute(connection, modelAutoCardsTableSql("model_auto_cards_v2"));
-        if (existed)
-        {
-            execute(connection, """
-                    INSERT INTO model_auto_cards_v2 (
-                        model_name, create_prompt, update_prompt, summarize_prompt,
-                        max_tokens_create, max_tokens_update, max_tokens_summarize
-                    )
-                    SELECT model_name, %s, %s, %s, %s, %s, %s
-                    FROM model_auto_cards
-                    WHERE model_name IN (SELECT model_name FROM model_settings)
-                    """.formatted(
-                    value(oldColumns, "create_prompt", "''"),
-                    value(oldColumns, "update_prompt", "''"),
-                    value(oldColumns, "summarize_prompt", "''"),
-                    value(oldColumns, "max_tokens_create", "512"),
-                    value(oldColumns, "max_tokens_update", "512"),
-                    value(oldColumns, "max_tokens_summarize", "512")));
-            execute(connection, "DROP TABLE model_auto_cards");
-        }
-        execute(connection, "ALTER TABLE model_auto_cards_v2 RENAME TO model_auto_cards");
+        execute(connection, "DROP TABLE IF EXISTS app_auto_cards");
+        execute(connection, "DROP TABLE IF EXISTS story_auto_cards");
+        execute(connection, "DROP TABLE IF EXISTS model_auto_cards");
     }
 
     private static String blocksTableSql(String table)
@@ -524,54 +528,6 @@ public final class DatabaseMigrator
                     comfy_width INTEGER NOT NULL DEFAULT 720,
                     comfy_height INTEGER NOT NULL DEFAULT 720,
                     comfy_batch_size INTEGER NOT NULL DEFAULT 4
-                )
-                """.formatted(table);
-    }
-
-    private static String appAutoCardsTableSql(String table)
-    {
-        return """
-                CREATE TABLE IF NOT EXISTS %s (
-                    id INTEGER PRIMARY KEY CHECK (id = 1),
-                    cooldown_turns INTEGER NOT NULL,
-                    max_cards_per_run INTEGER NOT NULL,
-                    candidate_window INTEGER NOT NULL,
-                    card_length_limit INTEGER NOT NULL,
-                    summarize_instead_of_trim INTEGER NOT NULL CHECK (summarize_instead_of_trim IN (0,1)),
-                    use_bulleted_lists INTEGER NOT NULL CHECK (use_bulleted_lists IN (0,1)),
-                    candidate_selection_mode TEXT NOT NULL,
-                    context_mode TEXT NOT NULL
-                )
-                """.formatted(table);
-    }
-
-    private static String storyAutoCardsTableSql(String table)
-    {
-        return """
-                CREATE TABLE IF NOT EXISTS %s (
-                    story_id TEXT PRIMARY KEY,
-                    enabled INTEGER NOT NULL CHECK (enabled IN (0,1)),
-                    update_existing INTEGER NOT NULL CHECK (update_existing IN (0,1)),
-                    create_new INTEGER NOT NULL CHECK (create_new IN (0,1)),
-                    pin_new INTEGER NOT NULL CHECK (pin_new IN (0,1)),
-                    preview_first INTEGER NOT NULL CHECK (preview_first IN (0,1)),
-                    FOREIGN KEY (story_id) REFERENCES stories(id) ON DELETE CASCADE
-                )
-                """.formatted(table);
-    }
-
-    private static String modelAutoCardsTableSql(String table)
-    {
-        return """
-                CREATE TABLE IF NOT EXISTS %s (
-                    model_name TEXT PRIMARY KEY,
-                    create_prompt TEXT NOT NULL,
-                    update_prompt TEXT NOT NULL,
-                    summarize_prompt TEXT NOT NULL,
-                    max_tokens_create INTEGER NOT NULL,
-                    max_tokens_update INTEGER NOT NULL,
-                    max_tokens_summarize INTEGER NOT NULL,
-                    FOREIGN KEY (model_name) REFERENCES model_settings(model_name) ON DELETE CASCADE
                 )
                 """.formatted(table);
     }

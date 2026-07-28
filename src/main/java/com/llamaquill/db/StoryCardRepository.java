@@ -7,6 +7,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 public class StoryCardRepository
 {
@@ -23,8 +24,8 @@ public class StoryCardRepository
         {
             try (PreparedStatement stmt = connection.prepareStatement("""
                     INSERT INTO story_cards (
-                        id, story_id, title, triggers, content, pinned
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        id, story_id, title, triggers, content, type, notes, pinned
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """))
             {
                 stmt.setString(1, card.id());
@@ -32,7 +33,9 @@ public class StoryCardRepository
                 stmt.setString(3, card.title());
                 stmt.setString(4, card.triggers());
                 stmt.setString(5, card.content());
-                stmt.setInt(6, card.pinned() ? 1 : 0);
+                stmt.setString(6, card.type());
+                stmt.setString(7, card.notes());
+                stmt.setInt(8, card.pinned() ? 1 : 0);
                 stmt.executeUpdate();
             }
         });
@@ -44,15 +47,17 @@ public class StoryCardRepository
         {
             try (PreparedStatement stmt = connection.prepareStatement("""
                     UPDATE story_cards
-                    SET title = ?, triggers = ?, content = ?, pinned = ?
+                    SET title = ?, triggers = ?, content = ?, type = ?, notes = ?, pinned = ?
                     WHERE id = ?
                     """))
             {
                 stmt.setString(1, card.title());
                 stmt.setString(2, card.triggers());
                 stmt.setString(3, card.content());
-                stmt.setInt(4, card.pinned() ? 1 : 0);
-                stmt.setString(5, card.id());
+                stmt.setString(4, card.type());
+                stmt.setString(5, card.notes());
+                stmt.setInt(6, card.pinned() ? 1 : 0);
+                stmt.setString(7, card.id());
                 stmt.executeUpdate();
             }
         });
@@ -63,10 +68,13 @@ public class StoryCardRepository
         return database.withConnection(connection ->
         {
             try (PreparedStatement stmt = connection.prepareStatement("""
-                    SELECT id, story_id, title, triggers, content, pinned
+                    SELECT id, story_id, title, triggers, content, type, notes, pinned
                     FROM story_cards
                     WHERE story_id = ?
-                    ORDER BY pinned DESC, title ASC
+                    ORDER BY
+                        CASE WHEN TRIM(type) = '' THEN 'Untyped' ELSE type END COLLATE NOCASE,
+                        pinned DESC,
+                        title COLLATE NOCASE
                     """))
             {
                 stmt.setString(1, storyId);
@@ -78,6 +86,25 @@ public class StoryCardRepository
                         cards.add(mapCard(rs));
                     }
                     return cards;
+                }
+            }
+        });
+    }
+
+    public Optional<StoryCard> findById(String id) throws SQLException
+    {
+        return database.withConnection(connection ->
+        {
+            try (PreparedStatement stmt = connection.prepareStatement("""
+                    SELECT id, story_id, title, triggers, content, type, notes, pinned
+                    FROM story_cards
+                    WHERE id = ?
+                    """))
+            {
+                stmt.setString(1, id);
+                try (ResultSet rs = stmt.executeQuery())
+                {
+                    return rs.next() ? Optional.of(mapCard(rs)) : Optional.empty();
                 }
             }
         });
@@ -114,6 +141,6 @@ public class StoryCardRepository
     private StoryCard mapCard(ResultSet rs) throws SQLException
     {
         return new StoryCard(rs.getString("id"), rs.getString("story_id"), rs.getString("title"), rs.getString("triggers"),
-                rs.getString("content"), rs.getInt("pinned") == 1);
+                rs.getString("content"), rs.getString("type"), rs.getString("notes"), rs.getInt("pinned") == 1);
     }
 }

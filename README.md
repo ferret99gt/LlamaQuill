@@ -98,16 +98,19 @@ Version `0.2.0` treats an unversioned database as `0.1.0`. On first launch it:
 - copies a legacy `./data/llamaquill.db` into the stable data directory when no stable database exists;
 - leaves the original legacy database untouched;
 - creates a timestamped pre-migration backup under the stable `backups` directory;
-- migrates the database to schema version 2 and records the application version in `schema_migrations`.
+- migrates the database to schema version 4 and records the application version in `schema_migrations`;
+- adds Story Card types, player-only notes, and global reusable generation-command presets;
+- removes the retired automatic AutoCards configuration tables.
 
 ## Notes
 
 - LlamaQuill stores stories, cards, settings, and inserted images locally.
 - It supports AI Dungeon adventure import and story card import.
-- It includes Auto Cards, image generation through ComfyUI, and one-shot story-context prompting.
+- Story Card creation includes optional full-context AI entry generation, built-in and reusable command presets, and revision logging in player-only Notes.
+- It includes image generation through ComfyUI and one-shot story-context prompting.
 - It is deliberately targeted and opinionated. You can tune models and workflows, but the application is not trying to expose every possible backend feature or become a generic prompt lab.
 
 ## Credits
 
 - AI Dungeon and Latitude Games for the model ecosystem and workflow inspiration
-- LewdLeah's Auto-Cards for ideas and reference points around automatic story card generation
+- LewdLeah's Auto-Cards for ideas and reference points during LlamaQuill's earlier automatic-card experiments

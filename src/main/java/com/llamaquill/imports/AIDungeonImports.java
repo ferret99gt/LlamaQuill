@@ -119,7 +119,7 @@ public final class AIDungeonImports
                 }
 
                 StoryCard created = new StoryCard(Ids.newId(), storyId, cardImport.title(),
-                        cardImport.triggers(), cardImport.content(), false);
+                        cardImport.triggers(), cardImport.content(), cardImport.type(), cardImport.notes(), false);
                 cardRepository.insert(created);
                 incrementSignature(signatureCounts, newSignature);
                 imported++;
@@ -320,8 +320,10 @@ public final class AIDungeonImports
             String title = explicitTitle.isBlank() ? UNTITLED_CARD : explicitTitle;
             String content = readFirstNonBlank(obj, "entry", "content", "text", "value");
             String triggers = readStoryCardTriggers(obj);
+            String type = readFirstNonBlank(obj, "type");
+            String notes = readFirstNonBlank(obj, "notes", "description");
             boolean pinned = obj.optBoolean("pinned", false);
-            StoryCard card = new StoryCard(Ids.newId(), storyId, title, triggers, content, pinned);
+            StoryCard card = new StoryCard(Ids.newId(), storyId, title, triggers, content, type, notes, pinned);
             CardSignature signature = signatureOf(card);
             StoryCard duplicate = uniqueCards.get(signature);
             if (duplicate == null || pinned && !duplicate.pinned())
@@ -735,7 +737,11 @@ public final class AIDungeonImports
             String explicitTitle = obj.opt("title") instanceof String title ? title.trim() : "";
             String title = explicitTitle.isBlank() ? UNTITLED_CARD : explicitTitle;
             String triggers = joinJsonList(keys);
-            imports.add(new CardImport(title, triggers, content.trim()));
+            String type = obj.opt("type") instanceof String cardType ? cardType.trim() : "";
+            String notes = obj.opt("notes") instanceof String cardNotes
+                    ? cardNotes
+                    : obj.opt("description") instanceof String description ? description : "";
+            imports.add(new CardImport(title, triggers, content.trim(), type, notes));
         }
         return imports;
     }
@@ -759,7 +765,7 @@ public final class AIDungeonImports
 
     private static CardSignature signatureOf(StoryCard card)
     {
-        return new CardSignature(card.triggers(), card.content());
+        return new CardSignature(card.triggers(), card.content(), card.type(), card.notes());
     }
 
     private static void incrementSignature(Map<CardSignature, Integer> counts, CardSignature signature)
@@ -767,15 +773,15 @@ public final class AIDungeonImports
         counts.merge(signature, 1, Integer::sum);
     }
 
-    private record CardImport(String title, String triggers, String content)
+    private record CardImport(String title, String triggers, String content, String type, String notes)
     {
         private CardSignature signature()
         {
-            return new CardSignature(triggers, content);
+            return new CardSignature(triggers, content, type, notes);
         }
     }
 
-    private record CardSignature(String triggers, String content)
+    private record CardSignature(String triggers, String content, String type, String notes)
     {
     }
 

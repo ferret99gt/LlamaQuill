@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.llamaquill.model.ChatMessage;
 import com.llamaquill.model.GenerationSettings;
+import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
 
 import javax.net.ssl.SSLSession;
@@ -100,6 +101,71 @@ class OllamaClientContractTest
         assertEquals("POST", client.lastStreamRequest.method());
         assertEquals("/api/chat", client.lastStreamRequest.uri().getPath());
         assertEquals("application/json", client.lastStreamRequest.headers().firstValue("Content-Type").orElseThrow());
+    }
+
+    @Test
+    void nonStreamingChatUsesTheChatContractAndReturnsTypedMetadata() throws Exception
+    {
+        StubOllamaClient client = new StubOllamaClient();
+        client.stringBody = """
+                {
+                  "model":"equinox:Q6_K",
+                  "message":{"role":"assistant","content":"Generated card text."},
+                  "done":true,
+                  "done_reason":"stop",
+                  "prompt_eval_count":123,
+                  "eval_count":19,
+                  "total_duration":9000
+                }
+                """;
+
+        OllamaChatResult result = client.chatNonStreaming(
+                List.of(new ChatMessage("user", "Generate a card.")),
+                GenerationSettings.defaults());
+        JSONObject payload = new JSONObject(client.buildChatPayload(
+                List.of(new ChatMessage("user", "Generate a card.")),
+                GenerationSettings.defaults(),
+                false));
+
+        assertEquals("Generated card text.", result.content());
+        assertEquals("equinox:Q6_K", result.model());
+        assertEquals(123, result.promptEvalCount());
+        assertEquals(19, result.evalCount());
+        assertEquals("stop", result.doneReason());
+        assertEquals(9000L, result.totalDurationNanos());
+        assertFalse(payload.getBoolean("stream"));
+        assertFalse(payload.getBoolean("think"));
+        assertEquals("POST", client.lastStringRequest.method());
+        assertEquals("/api/chat", client.lastStringRequest.uri().getPath());
+    }
+
+    @Test
+    void nonStreamingChatRejectsErrorsAndIncompleteResponses()
+    {
+        StubOllamaClient failed = new StubOllamaClient();
+        failed.stringStatus = 400;
+        failed.stringBody = """
+                {"error":{"code":400,"message":"invalid sequence","type":"invalid_request_error"}}
+                """;
+        IOException statusError = assertThrows(IOException.class, () -> failed.chatNonStreaming(
+                List.of(new ChatMessage("user", "Generate.")), GenerationSettings.defaults()));
+        assertEquals("Ollama returned status 400 for /api/chat: invalid sequence", statusError.getMessage());
+
+        StubOllamaClient incomplete = new StubOllamaClient();
+        incomplete.stringBody = """
+                {"message":{"role":"assistant","content":"partial"},"done":false}
+                """;
+        IOException terminalError = assertThrows(IOException.class, () -> incomplete.chatNonStreaming(
+                List.of(new ChatMessage("user", "Generate.")), GenerationSettings.defaults()));
+        assertEquals("Ollama non-streaming chat response was not terminal", terminalError.getMessage());
+
+        StubOllamaClient missingContent = new StubOllamaClient();
+        missingContent.stringBody = """
+                {"message":{"role":"assistant"},"done":true}
+                """;
+        IOException contentError = assertThrows(IOException.class, () -> missingContent.chatNonStreaming(
+                List.of(new ChatMessage("user", "Generate.")), GenerationSettings.defaults()));
+        assertEquals("Ollama non-streaming chat response has no message.content", contentError.getMessage());
     }
 
     @Test
