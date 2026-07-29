@@ -3,6 +3,7 @@ package com.llamaquill.storyview;
 import com.llamaquill.model.Block;
 import com.llamaquill.model.Role;
 import com.llamaquill.model.StoryImage;
+import javafx.animation.AnimationTimer;
 import javafx.application.Platform;
 import javafx.scene.Node;
 import javafx.scene.Parent;
@@ -32,6 +33,7 @@ import java.util.Comparator;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -202,6 +204,12 @@ class StoryPaneControllerTest
         try
         {
             runOnFxThread(() -> fireClick(findText(fixture.root(), longText)));
+            waitForFxCondition(() ->
+            {
+                TextArea editor = findNode(fixture.root(), TextArea.class,
+                        node -> longText.equals(node.getText()));
+                return editor != null && editor.getHeight() > 300;
+            }, "Long editor did not complete its wrapped-content layout.");
             runOnFxThread(() ->
             {
                 TextArea editor = assertVisibleEditor(fixture.root(), longText);
@@ -1010,6 +1018,44 @@ class StoryPaneControllerTest
         {
             throw error;
         }
+    }
+
+    private static void waitForFxCondition(BooleanSupplier condition, String message) throws Exception
+    {
+        CountDownLatch satisfied = new CountDownLatch(1);
+        AtomicReference<AnimationTimer> timerReference = new AtomicReference<>();
+        runOnFxThread(() ->
+        {
+            AnimationTimer timer = new AnimationTimer()
+            {
+                @Override
+                public void handle(long now)
+                {
+                    if (condition.getAsBoolean())
+                    {
+                        stop();
+                        satisfied.countDown();
+                    }
+                }
+            };
+            timerReference.set(timer);
+            timer.start();
+            Platform.requestNextPulse();
+        });
+
+        boolean completed = satisfied.await(5, TimeUnit.SECONDS);
+        if (!completed)
+        {
+            runOnFxThread(() ->
+            {
+                AnimationTimer timer = timerReference.get();
+                if (timer != null)
+                {
+                    timer.stop();
+                }
+            });
+        }
+        assertTrue(completed, message);
     }
 
     private record EditorFixture(BorderPane root, Stage stage, StoryPaneController controller)
