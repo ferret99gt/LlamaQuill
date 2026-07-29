@@ -116,7 +116,7 @@
         <artifactId>maven-surefire-plugin</artifactId>
         <version>${maven.surefire.plugin.version}</version>
         <configuration>
-          <argLine>--enable-native-access=org.xerial.sqlitejdbc,javafx.graphics --add-modules java.desktop --add-reads com.llamaquill=java.desktop</argLine>
+          <argLine>--enable-native-access=org.xerial.sqlitejdbc,javafx.graphics</argLine>
           <failIfNoTests>true</failIfNoTests>
         </configuration>
       </plugin>

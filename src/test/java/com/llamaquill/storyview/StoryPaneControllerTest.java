@@ -25,11 +25,9 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 
-import javax.imageio.ImageIO;
-import java.awt.image.BufferedImage;
-import java.io.ByteArrayOutputStream;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Comparator;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -530,6 +528,167 @@ class StoryPaneControllerTest
     }
 
     @Test
+    void streamingAfterAnEditorInteractionKeepsTheDraftAndCommittedHeadInView() throws Exception
+    {
+        List<Block> blocks = new ArrayList<>();
+        int position = 0;
+        for (int i = 0; i < 20; i++)
+        {
+            Role role = i % 2 == 0 ? Role.USER : Role.ASSISTANT;
+            blocks.add(new Block("block-" + i, "story", role,
+                    "Scrollable " + role + " block " + i
+                            + " with enough manuscript text to occupy a wrapped row.",
+                    "", position++));
+        }
+        Block tallPrefix = new Block("tall-prefix", "story", Role.ASSISTANT,
+                "A long uninterrupted assistant passage keeps the final TextFlow taller than the viewport. "
+                        .repeat(110),
+                "", position++);
+        Block edited = new Block("edited", "story", Role.ASSISTANT,
+                "A non-lead assistant block near the bottom. ", "", position++);
+        Block head = new Block("head", "story", Role.ASSISTANT,
+                "The current head remains visible.", "", position++);
+        blocks.add(tallPrefix);
+        blocks.add(edited);
+        blocks.add(head);
+
+        EditorFixture fixture = createFixture(blocks);
+        long[] token = { 0 };
+        String streamed = "\n\nThe streamed response grows into a second paragraph while the viewport follows.";
+        String fullGrowth = "\n\n"
+                + "A sustained generation keeps adding prose while the final assistant span grows. ".repeat(85);
+        try
+        {
+            runOnFxThread(() -> fixture.controller().renderBlocks(blocks, true));
+            runOnFxThread(() -> { });
+            runOnFxThread(() -> { });
+            runOnFxThread(() ->
+            {
+                Text target = findText(fixture.root(), edited.text());
+                assertNotNull(target);
+                assertNodeInsideListViewport(fixture.root(), target,
+                        "The requested block was not visible before opening its editor.");
+                fireClick(target);
+            });
+            runOnFxThread(() ->
+            {
+                TextArea editor = assertVisibleEditor(fixture.root(), edited.text());
+                assertNodeInsideListViewport(fixture.root(), editor,
+                        "Opening the editor moved it outside the viewport.");
+                ListView<?> list = findNode(fixture.root(), ListView.class, ignored -> true);
+                assertNotNull(list);
+                fireMouseEvent(list, MouseEvent.MOUSE_PRESSED);
+                token[0] = fixture.controller().startStreaming(StoryPaneController.StreamingMode.APPEND);
+                fixture.controller().queueStreamingText(token[0], streamed);
+                fixture.controller().renderQueuedStreamingFrame();
+            });
+            runOnFxThread(() -> { });
+            runOnFxThread(() -> { });
+            runOnFxThread(() ->
+            {
+                Text draft = findText(fixture.root(), streamed);
+                assertNotNull(draft, "Streaming draft disappeared after the editor closed.");
+                assertNodeInsideListViewport(fixture.root(), draft,
+                        "Streaming draft was displaced outside the viewport.");
+                assertStoryAtBottom(fixture.root());
+            });
+
+            runOnFxThread(() ->
+            {
+                fixture.controller().queueStreamingText(token[0], fullGrowth);
+                fixture.controller().renderQueuedStreamingFrame();
+            });
+            runOnFxThread(() -> { });
+            runOnFxThread(() -> { });
+            runOnFxThread(() ->
+            {
+                Text grownDraft = findText(fixture.root(), streamed + fullGrowth);
+                assertNotNull(grownDraft);
+                assertNodeBottomInsideListViewport(fixture.root(), grownDraft,
+                        "A tall growing streaming response was displaced above or below the viewport.");
+            });
+
+            List<Block> committed = new ArrayList<>(blocks);
+            committed.add(new Block("generated", "story", Role.ASSISTANT,
+                    streamed + fullGrowth, "", position));
+            runOnFxThread(() ->
+            {
+                fixture.controller().endStreaming(token[0]);
+                fixture.controller().renderBlocks(committed, true);
+            });
+            runOnFxThread(() -> { });
+            runOnFxThread(() -> { });
+            runOnFxThread(() ->
+            {
+                Text generated = findText(fixture.root(), streamed + fullGrowth);
+                assertNotNull(generated);
+                assertNodeBottomInsideListViewport(fixture.root(), generated,
+                        "Committed response was replaced by stale blank cell height.");
+                assertStoryAtBottom(fixture.root());
+                assertVisibleCellGraphicsAreContained(
+                        findNode(fixture.root(), ListView.class, ignored -> true));
+            });
+        }
+        finally
+        {
+            runOnFxThread(() ->
+            {
+                fixture.controller().cancelStreaming(token[0]);
+                fixture.stage().close();
+            });
+        }
+    }
+
+    @Test
+    void openingTheHeadEditorAtTheBottomKeepsTheEditorInTheViewport() throws Exception
+    {
+        List<Block> blocks = new ArrayList<>();
+        for (int i = 0; i < 28; i++)
+        {
+            Role role = i % 2 == 0 ? Role.USER : Role.ASSISTANT;
+            blocks.add(new Block("block-" + i, "story", role,
+                    "Bottom-anchor " + role + " block " + i
+                            + " with wrapped text for variable-height virtualization.",
+                    "", i));
+        }
+        Block tallPrefix = new Block("tall-prefix", "story", Role.ASSISTANT,
+                "A long uninterrupted assistant passage keeps the final TextFlow taller than the viewport. "
+                        .repeat(110),
+                "", blocks.size());
+        blocks.add(tallPrefix);
+        Block head = new Block("head", "story", Role.ASSISTANT,
+                "The newest editable response.", "", blocks.size());
+        blocks.add(head);
+        EditorFixture fixture = createFixture(blocks);
+        try
+        {
+            runOnFxThread(() -> fixture.controller().renderBlocks(blocks, true));
+            runOnFxThread(() -> { });
+            runOnFxThread(() -> { });
+            runOnFxThread(() ->
+            {
+                Text headText = findText(fixture.root(), head.text());
+                assertNotNull(headText);
+                assertNodeInsideListViewport(fixture.root(), headText,
+                        "The tall final assistant cell was aligned to its top instead of its bottom.");
+                fireClick(headText);
+            });
+            runOnFxThread(() -> { });
+            runOnFxThread(() -> { });
+            runOnFxThread(() ->
+            {
+                TextArea editor = assertVisibleEditor(fixture.root(), head.text());
+                assertNodeInsideListViewport(fixture.root(), editor,
+                        "Opening the newest editor moved it outside the viewport.");
+            });
+        }
+        finally
+        {
+            runOnFxThread(fixture.stage()::close);
+        }
+    }
+
+    @Test
     void retryKeepsTheOldHeadUntilTextArrivesAndRestoresItBetweenAttempts() throws Exception
     {
         String oldResponse = "The response being retried.";
@@ -665,12 +824,40 @@ class StoryPaneControllerTest
         }
     }
 
-    private static byte[] squarePng() throws Exception
+    private static void assertStoryAtBottom(Parent root)
     {
-        BufferedImage image = new BufferedImage(720, 720, BufferedImage.TYPE_INT_RGB);
-        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-        ImageIO.write(image, "png", bytes);
-        return bytes.toByteArray();
+        ScrollBar vertical = findNode(root, ScrollBar.class,
+                bar -> bar.getOrientation() == javafx.geometry.Orientation.VERTICAL
+                        && enclosingList(bar) != null);
+        assertNotNull(vertical);
+        assertTrue(vertical.getValue() >= vertical.getMax() - 0.01,
+                "Story viewport is not at the bottom: " + vertical.getValue() + " / " + vertical.getMax());
+    }
+
+    private static void assertNodeInsideListViewport(Parent root, Node node, String message)
+    {
+        ListView<?> list = findNode(root, ListView.class, ignored -> true);
+        assertNotNull(list);
+        Bounds listBounds = list.localToScene(list.getBoundsInLocal());
+        Bounds nodeBounds = node.localToScene(node.getBoundsInLocal());
+        assertTrue(listBounds.intersects(nodeBounds), message + " list=" + listBounds + ", node=" + nodeBounds);
+    }
+
+    private static void assertNodeBottomInsideListViewport(Parent root, Node node, String message)
+    {
+        ListView<?> list = findNode(root, ListView.class, ignored -> true);
+        assertNotNull(list);
+        Bounds listBounds = list.localToScene(list.getBoundsInLocal());
+        Bounds nodeBounds = node.localToScene(node.getBoundsInLocal());
+        assertTrue(nodeBounds.getMaxY() >= listBounds.getMinY() - 1
+                        && nodeBounds.getMaxY() <= listBounds.getMaxY() + 1,
+                message + " list=" + listBounds + ", node=" + nodeBounds);
+    }
+
+    private static byte[] squarePng()
+    {
+        return Base64.getDecoder().decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
     }
 
     private static TextArea assertVisibleEditor(Parent root, String text)

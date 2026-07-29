@@ -15,11 +15,13 @@ import javafx.beans.property.StringProperty;
 import javafx.beans.value.ChangeListener;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
+import javafx.geometry.Bounds;
 import javafx.geometry.Insets;
 import javafx.geometry.Orientation;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
+import javafx.scene.control.IndexedCell;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
@@ -96,7 +98,7 @@ public final class StoryPaneController
     private final ChangeListener<Number> storyScrollListener =
             (observable, oldValue, newValue) ->
             {
-                if (!suppressPostScrollLayout)
+                if (shouldSchedulePostScrollLayout())
                 {
                     schedulePostScrollLayout(newValue.doubleValue());
                 }
@@ -117,7 +119,7 @@ public final class StoryPaneController
                 lastStreamingRenderNanos = now;
                 renderQueuedStreamingFrame();
             }
-            advanceStreamingBottomFollow(now);
+            advanceStreamingBottomFollow();
         }
     };
 
@@ -128,11 +130,16 @@ public final class StoryPaneController
     private String activeAssistantEditId;
     private final TextArea blockEditor;
     private StoryCell activeEditorCell;
+    private boolean activeEditorOpenedAtBottom;
+    private double activeEditorRequestedSceneY = Double.NaN;
+    private long editorAnchorSequence;
+    private long queuedEditorAnchorSequence = -1;
     private ScrollBar observedStoryScrollBar;
     private boolean postScrollLayoutQueued;
     private double requestedScrollValue;
-    private double pendingStreamingScrollPixels;
-    private long lastStreamingScrollNanos;
+    private long viewportLayoutSequence;
+    private long bottomScrollSequence;
+    private int pendingStreamingBottomAnchorPasses;
     private boolean streamingFlowLayoutPending;
 
     private boolean streamingActive;
@@ -241,6 +248,8 @@ public final class StoryPaneController
 
     public long startStreaming(StreamingMode mode)
     {
+        commitActiveEdit();
+        invalidateViewportPreservation();
         synchronized (streamingLock)
         {
             streamingToken = ++streamingSequence;
@@ -872,7 +881,7 @@ public final class StoryPaneController
                     return;
                 }
                 resizeBlockEditorToContent(editor);
-                relayoutStoryPreserveViewport();
+                queueActiveEditorAnchor();
             });
         };
         editor.textProperty().addListener((obs, oldValue, newValue) -> queueResize.run());
@@ -901,14 +910,22 @@ public final class StoryPaneController
         {
             return;
         }
+        boolean openedAtBottom = isStoryAtBottom();
+        Bounds clickedBounds = clickedNode.localToScene(clickedNode.getBoundsInLocal());
+        double requestedSceneY = clickedBounds == null ? Double.NaN : clickedBounds.getMinY();
         if (activeAssistantEditId != null)
         {
             commitBlockEdit(blockEditor.getText());
         }
 
+        invalidateViewportPreservation();
+        bottomScrollSequence++;
         Block block = currentBlock(requestedBlock);
         activeAssistantEditId = block.id();
         activeEditorCell = targetCell;
+        activeEditorOpenedAtBottom = openedAtBottom;
+        activeEditorRequestedSceneY = requestedSceneY;
+        editorAnchorSequence++;
         blockEditor.setText(block.text());
         targetCell.showBlockEditor(block);
         resizeBlockEditorToContent(blockEditor);
@@ -921,7 +938,7 @@ public final class StoryPaneController
             resizeBlockEditorToContent(blockEditor);
             blockEditor.requestFocus();
             blockEditor.positionCaret(blockEditor.getText().length());
-            relayoutStoryPreserveViewport();
+            queueActiveEditorAnchor();
         });
     }
 
@@ -934,6 +951,7 @@ public final class StoryPaneController
         String blockId = activeAssistantEditId;
         Block originalBlock = findBlockById(blockId);
         StoryCell editedCell = activeEditorCell;
+        boolean restoreBottom = activeEditorOpenedAtBottom;
         discardActiveBlockEditor();
         if (originalBlock == null)
         {
@@ -942,7 +960,7 @@ public final class StoryPaneController
         String normalized = newText == null ? "" : newText;
         if (normalized.equals(originalBlock.text()))
         {
-            relayoutStoryPreserveViewport();
+            relayoutAfterBlockEdit(restoreBottom);
             return;
         }
 
@@ -951,7 +969,7 @@ public final class StoryPaneController
         {
             editedCell.updateDisplayedText(blockId, normalized);
         }
-        relayoutStoryPreserveViewport();
+        relayoutAfterBlockEdit(restoreBottom);
         blockTextPersister.persist(blockId, normalized, () ->
         {
             clearStoryListSelection();
@@ -1000,6 +1018,9 @@ public final class StoryPaneController
         }
         activeAssistantEditId = null;
         activeEditorCell = null;
+        activeEditorOpenedAtBottom = false;
+        activeEditorRequestedSceneY = Double.NaN;
+        editorAnchorSequence++;
     }
 
     private Region buildUserBlockNode(Block block)
@@ -1245,14 +1266,45 @@ public final class StoryPaneController
 
     private void scrollToBottom()
     {
-        Platform.runLater(() ->
+        invalidateViewportPreservation();
+        long request = ++bottomScrollSequence;
+        Platform.runLater(() -> settleStoryBottom(request, 2));
+    }
+
+    private void settleStoryBottom(long request, int remainingPasses)
+    {
+        if (request != bottomScrollSequence || storyRows.isEmpty())
         {
-            if (storyRows.isEmpty())
+            return;
+        }
+
+        suppressPostScrollLayout = true;
+        try
+        {
+            int lastIndex = storyRows.size() - 1;
+            VirtualFlow<?> flow = findStoryVirtualFlow();
+            if (flow == null)
             {
-                return;
+                storyListView.scrollTo(lastIndex);
             }
-            storyListView.scrollTo(storyRows.size() - 1);
+            else
+            {
+                flow.scrollTo(lastIndex);
+            }
             storyListView.applyCss();
+            storyListView.layout();
+            remeasureVisibleStoryCells();
+            storyListView.requestLayout();
+            storyListView.layout();
+            flow = findStoryVirtualFlow();
+            if (flow == null)
+            {
+                storyListView.scrollTo(lastIndex);
+            }
+            else
+            {
+                scrollFlowCellToBottom(flow, lastIndex);
+            }
             storyListView.layout();
             hideStoryHorizontalScrollBar();
             ScrollBar bar = findStoryVerticalScrollBar();
@@ -1260,7 +1312,117 @@ public final class StoryPaneController
             {
                 bar.setValue(bar.getMax());
             }
+        }
+        finally
+        {
+            suppressPostScrollLayout = false;
+        }
+
+        if (remainingPasses > 1)
+        {
+            Platform.runLater(() -> settleStoryBottom(request, remainingPasses - 1));
+        }
+    }
+
+    private void relayoutAfterBlockEdit(boolean restoreBottom)
+    {
+        if (restoreBottom)
+        {
+            scrollToBottom();
+        }
+        else
+        {
+            relayoutStoryPreserveViewport();
+        }
+    }
+
+    private void queueActiveEditorAnchor()
+    {
+        if (activeAssistantEditId == null || activeEditorCell == null)
+        {
+            return;
+        }
+        long request = editorAnchorSequence;
+        if (queuedEditorAnchorSequence == request)
+        {
+            return;
+        }
+        queuedEditorAnchorSequence = request;
+        Platform.runLater(() ->
+        {
+            if (queuedEditorAnchorSequence == request)
+            {
+                queuedEditorAnchorSequence = -1;
+            }
+            settleActiveEditorAnchor(request, 2);
         });
+    }
+
+    private void settleActiveEditorAnchor(long request, int remainingPasses)
+    {
+        if (request != editorAnchorSequence || activeAssistantEditId == null
+                || activeEditorCell == null || blockEditor.getParent() == null)
+        {
+            return;
+        }
+
+        suppressPostScrollLayout = true;
+        try
+        {
+            activeEditorCell.remeasure();
+            storyListView.applyCss();
+            storyListView.layout();
+
+            Bounds viewport = storyListView.localToScene(storyListView.getBoundsInLocal());
+            Bounds editor = blockEditor.localToScene(blockEditor.getBoundsInLocal());
+            if (viewport == null || editor == null)
+            {
+                return;
+            }
+
+            double viewportTop = viewport.getMinY() + 8;
+            double viewportBottom = viewport.getMaxY() - 8;
+            double requestedTop = Double.isNaN(activeEditorRequestedSceneY)
+                    ? viewportTop
+                    : activeEditorRequestedSceneY;
+            double targetTop = editor.getHeight() >= viewportBottom - viewportTop
+                    ? viewportBottom - editor.getHeight()
+                    : Math.max(viewportTop,
+                            Math.min(requestedTop, viewportBottom - editor.getHeight()));
+            double adjustment = editor.getMinY() - targetTop;
+            VirtualFlow<?> flow = findStoryVirtualFlow();
+            if (flow != null && Math.abs(adjustment) > 0.5)
+            {
+                flow.scrollPixels(adjustment);
+                flow.layout();
+            }
+        }
+        finally
+        {
+            suppressPostScrollLayout = false;
+        }
+
+        if (remainingPasses > 1)
+        {
+            Platform.runLater(() -> settleActiveEditorAnchor(request, remainingPasses - 1));
+        }
+    }
+
+    private boolean isStoryAtBottom()
+    {
+        ScrollBar bar = findStoryVerticalScrollBar();
+        return bar == null || bar.getValue() >= bar.getMax() - 0.01;
+    }
+
+    private void invalidateViewportPreservation()
+    {
+        viewportLayoutSequence++;
+        storyViewportRefreshDebounce.stop();
+    }
+
+    private boolean shouldSchedulePostScrollLayout()
+    {
+        return !suppressPostScrollLayout && !streamingActive;
     }
 
     private void queueStreamingBottomFollow(double heightIncrease)
@@ -1269,13 +1431,20 @@ public final class StoryPaneController
         {
             return;
         }
-        pendingStreamingScrollPixels += heightIncrease;
+        pendingStreamingBottomAnchorPasses = Math.max(pendingStreamingBottomAnchorPasses, 2);
         streamingFlowLayoutPending = true;
+        settleStreamingBottomFollow();
     }
 
-    private void advanceStreamingBottomFollow(long now)
+    private void advanceStreamingBottomFollow()
     {
-        if (!streamingActive || pendingStreamingScrollPixels <= 0.1)
+        settleStreamingBottomFollow();
+    }
+
+    private void settleStreamingBottomFollow()
+    {
+        if (!streamingActive || pendingStreamingBottomAnchorPasses <= 0
+                || streamingDraftItem == null)
         {
             return;
         }
@@ -1297,32 +1466,60 @@ public final class StoryPaneController
                 streamingFlowLayoutPending = false;
             }
 
-            long elapsedNanos = lastStreamingScrollNanos == 0
-                    ? 16_666_667L
-                    : Math.max(1, now - lastStreamingScrollNanos);
-            lastStreamingScrollNanos = now;
-            double fraction = 1.0 - Math.exp(-elapsedNanos / 45_000_000.0);
-            double requested = Math.min(pendingStreamingScrollPixels,
-                    Math.max(0.75, pendingStreamingScrollPixels * fraction));
-            double moved = flow.scrollPixels(requested);
-            if (moved <= 0.05 || moved + 0.5 < requested)
+            int draftIndex = storyRows.indexOf(streamingDraftItem);
+            if (draftIndex < 0)
             {
-                pendingStreamingScrollPixels = 0;
+                clearStreamingBottomFollow();
+                return;
+            }
+
+            IndexedCell<?> draftCell = flow.getVisibleCell(draftIndex);
+            if (draftCell == null)
+            {
+                flow.scrollTo(draftIndex);
+                flow.layout();
+                draftCell = flow.getVisibleCell(draftIndex);
+            }
+
+            Node draftNode = draftCell == null
+                    ? null
+                    : findDisplayedBlockNode(draftCell, STREAMING_DRAFT_ID);
+            Bounds viewport = flow.localToScene(flow.getBoundsInLocal());
+            Bounds draft = draftNode == null ? null : draftNode.localToScene(draftNode.getBoundsInLocal());
+            if (viewport == null || draft == null)
+            {
+                scrollFlowCellToBottom(flow, draftIndex);
             }
             else
             {
-                pendingStreamingScrollPixels = Math.max(0, pendingStreamingScrollPixels - moved);
+                double viewportTop = viewport.getMinY() + 8;
+                double viewportBottom = viewport.getMaxY() - 8;
+                double adjustment = 0;
+                if (draft.getMaxY() > viewportBottom)
+                {
+                    adjustment = draft.getMaxY() - viewportBottom;
+                }
+                else if (draft.getMaxY() < viewportTop)
+                {
+                    adjustment = draft.getMaxY() - viewportBottom;
+                }
+                if (Math.abs(adjustment) > 0.5)
+                {
+                    flow.scrollPixels(adjustment);
+                    flow.layout();
+                }
+
+                Bounds corrected = draftNode.localToScene(draftNode.getBoundsInLocal());
+                if (corrected != null && corrected.getMaxY() > viewportBottom + 1)
+                {
+                    scrollFlowCellToBottom(flow, draftIndex);
+                }
             }
+            pendingStreamingBottomAnchorPasses--;
         }
         finally
         {
             suppressPostScrollLayout = false;
-        }
-
-        if (pendingStreamingScrollPixels <= 0.1)
-        {
-            pendingStreamingScrollPixels = 0;
-            lastStreamingScrollNanos = 0;
         }
     }
 
@@ -1338,10 +1535,30 @@ public final class StoryPaneController
         return null;
     }
 
+    private static <T extends IndexedCell<?>> void scrollFlowCellToBottom(VirtualFlow<T> flow, int index)
+    {
+        flow.scrollTo(index);
+        flow.layout();
+        T cell = flow.getVisibleCell(index);
+        if (cell == null)
+        {
+            flow.setPosition(1.0);
+            flow.layout();
+            cell = flow.getVisibleCell(index);
+        }
+        if (cell != null)
+        {
+            flow.scrollToBottom(cell);
+        }
+        else
+        {
+            flow.setPosition(1.0);
+        }
+    }
+
     private void clearStreamingBottomFollow()
     {
-        pendingStreamingScrollPixels = 0;
-        lastStreamingScrollNanos = 0;
+        pendingStreamingBottomAnchorPasses = 0;
         streamingFlowLayoutPending = false;
         suppressPostScrollLayout = false;
     }
@@ -1353,11 +1570,16 @@ public final class StoryPaneController
 
     private void relayoutStoryPreserveViewport()
     {
+        long request = ++viewportLayoutSequence;
         ScrollBar before = findStoryVerticalScrollBar();
         double previousValue = before == null ? Double.NaN : before.getValue();
         storyListView.requestLayout();
         Platform.runLater(() ->
         {
+            if (streamingActive || request != viewportLayoutSequence)
+            {
+                return;
+            }
             remeasureVisibleStoryCells();
             storyListView.applyCss();
             storyListView.layout();
@@ -1425,9 +1647,10 @@ public final class StoryPaneController
             return;
         }
         postScrollLayoutQueued = true;
+        long request = viewportLayoutSequence;
         Platform.runLater(() ->
         {
-            if (suppressPostScrollLayout)
+            if (streamingActive || suppressPostScrollLayout || request != viewportLayoutSequence)
             {
                 postScrollLayoutQueued = false;
                 return;
