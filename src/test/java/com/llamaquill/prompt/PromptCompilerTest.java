@@ -278,6 +278,29 @@ class PromptCompilerTest
         assertEquals("Perform the task.", compilation.messages().getLast().content());
     }
 
+    @Test
+    void storyTailUserMessageSplitsAnAssistantRunWithoutBecomingTheFinalTurn()
+    {
+        PromptCompilation compilation = new PromptCompiler().compile(
+                story("Narrate.", "", ""),
+                List.of(
+                        block("1", Role.ASSISTANT, "Older response."),
+                        block("2", Role.ASSISTANT, "Newest "),
+                        block("3", Role.ASSISTANT, "continuation.")),
+                List.of(),
+                settings(2048, false, 1, 100),
+                new PromptAuxiliaryInput(
+                        List.of(), "", null, "Continue from last response.", 2));
+
+        assertEquals(List.of("system", "assistant", "user", "assistant"),
+                compilation.messages().stream().map(ChatMessage::role).toList());
+        assertEquals("Older response.", compilation.messages().get(1).content());
+        assertEquals("Continue from last response.", compilation.messages().get(2).content());
+        assertEquals("Newest continuation.", compilation.messages().getLast().content());
+        assertEquals(Status.INCLUDED,
+                compilation.contextReport().entries(Component.AUXILIARY_TASK).getFirst().status());
+    }
+
     private static PromptCompiler exactCompiler()
     {
         PromptCompiler compiler = new PromptCompiler();

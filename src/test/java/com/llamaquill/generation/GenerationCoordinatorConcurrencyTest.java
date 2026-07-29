@@ -84,6 +84,120 @@ class GenerationCoordinatorConcurrencyTest
     }
 
     @Test
+    void longAssistantRunUsesAnEphemeralCueBeforeItsNewestTwoBlocks() throws Exception
+    {
+        Path root = temporaryDirectory.resolve("ephemeral-continue-cue");
+        try (Database database = Database.open(AppPaths.forDirectories(root.resolve("data"), root.resolve("legacy"))))
+        {
+            StoryRepository stories = new StoryRepository(database);
+            BlockRepository blocks = new BlockRepository(database);
+            StoryCardRepository cards = new StoryCardRepository(database);
+            ScriptedOllamaClient ollama = new ScriptedOllamaClient("his eyes narrowed.");
+            GenerationCoordinator coordinator = new GenerationCoordinator(database, blocks, stories, cards,
+                    new PromptCompiler(), ollama);
+            String now = Timestamps.now();
+            Story story = new Story("story-a", "story-a", "System", "", "", now, now);
+            stories.insert(story);
+            blocks.insert(new Block("old", story.id(), Role.ASSISTANT, "Older response.", now, 1));
+            blocks.insert(new Block("recent", story.id(), Role.ASSISTANT, "The heat ", now, 2));
+            blocks.insert(new Block("head", story.id(), Role.ASSISTANT, "of", now, 3));
+            StringBuilder displayed = new StringBuilder();
+
+            GenerationCoordinator.ContinueResult result = coordinator.continueStory(
+                    story, GenerationSettings.defaults(), new GenerationCoordinator.GenerationObserver()
+                    {
+                        @Override
+                        public void onGeneratedText(String chunk)
+                        {
+                            displayed.append(chunk);
+                        }
+                    });
+
+            List<ChatMessage> request = ollama.requests().getFirst();
+            assertEquals(new ChatMessage("user", GenerationCoordinator.CONTINUE_PROMPT),
+                    request.get(request.size() - 2));
+            assertEquals(new ChatMessage("assistant", "The heat of"), request.getLast());
+            assertEquals(List.of("Older response.", "The heat of"),
+                    request.stream()
+                            .filter(message -> "assistant".equals(message.role()))
+                            .map(ChatMessage::content)
+                            .toList());
+            assertEquals(List.of(Role.ASSISTANT, Role.ASSISTANT, Role.ASSISTANT, Role.ASSISTANT),
+                    blocks.listForStory(story.id()).stream().map(Block::role).toList());
+            assertEquals(" his eyes narrowed.", result.block().text());
+            assertEquals(result.block().text(), displayed.toString());
+        }
+    }
+
+    @Test
+    void assistantAfterARecentRealUserTurnDoesNotAddTheEphemeralCue() throws Exception
+    {
+        Path root = temporaryDirectory.resolve("real-user-continue");
+        try (Database database = Database.open(AppPaths.forDirectories(root.resolve("data"), root.resolve("legacy"))))
+        {
+            StoryRepository stories = new StoryRepository(database);
+            BlockRepository blocks = new BlockRepository(database);
+            StoryCardRepository cards = new StoryCardRepository(database);
+            ScriptedOllamaClient ollama = new ScriptedOllamaClient("Mia moves left.");
+            GenerationCoordinator coordinator = new GenerationCoordinator(database, blocks, stories, cards,
+                    new PromptCompiler(), ollama);
+            String now = Timestamps.now();
+            Story story = new Story("story-a", "story-a", "System", "", "", now, now);
+            stories.insert(story);
+            blocks.insert(new Block("turn", story.id(), Role.USER,
+                    "Describe me moving right while Mia moves left.", now, 1));
+            blocks.insert(new Block("head", story.id(), Role.ASSISTANT,
+                    "You move right.", now, 2));
+
+            coordinator.continueStory(story, GenerationSettings.defaults());
+
+            List<ChatMessage> request = ollama.requests().getFirst();
+            assertEquals(new ChatMessage("assistant", "You move right."), request.getLast());
+            assertTrue(request.contains(
+                    new ChatMessage("user", "> Describe me moving right while Mia moves left.")));
+            assertFalse(request.stream().anyMatch(message ->
+                    GenerationCoordinator.CONTINUE_PROMPT.equals(message.content())));
+        }
+    }
+
+    @Test
+    void firstTurnJoinsGeneratedTextToItsAssistantStorySeed() throws Exception
+    {
+        Path root = temporaryDirectory.resolve("first-turn-assistant-join");
+        try (Database database = Database.open(AppPaths.forDirectories(root.resolve("data"), root.resolve("legacy"))))
+        {
+            StoryRepository stories = new StoryRepository(database);
+            BlockRepository blocks = new BlockRepository(database);
+            StoryCardRepository cards = new StoryCardRepository(database);
+            ScriptedOllamaClient ollama = new ScriptedOllamaClient("sun filled the room.");
+            GenerationCoordinator coordinator = new GenerationCoordinator(database, blocks, stories, cards,
+                    new PromptCompiler(), ollama);
+            String now = Timestamps.now();
+            Story story = new Story("story-a", "story-a", "System", "", "", now, now);
+            stories.insert(story);
+            StringBuilder displayed = new StringBuilder();
+
+            GenerationCoordinator.TurnResult result = coordinator.takeTurn(
+                    story, "The heat of the", GenerationSettings.defaults(),
+                    new GenerationCoordinator.GenerationObserver()
+                    {
+                        @Override
+                        public void onGeneratedText(String chunk)
+                        {
+                            displayed.append(chunk);
+                        }
+                    });
+
+            assertTrue(result.generated());
+            assertEquals(" sun filled the room.", displayed.toString());
+            assertEquals(List.of("The heat of the", " sun filled the room."),
+                    blocks.listForStory(story.id()).stream().map(Block::text).toList());
+            assertFalse(ollama.requests().getFirst().stream().anyMatch(message ->
+                    GenerationCoordinator.CONTINUE_PROMPT.equals(message.content())));
+        }
+    }
+
+    @Test
     void continuationFallbackResetsTheDraftAndIncludesItsExactGeneratedPrefix() throws Exception
     {
         Path root = temporaryDirectory.resolve("streaming-fallback");
@@ -126,6 +240,14 @@ class GenerationCoordinatorConcurrencyTest
             assertEquals(" door", result.block().text());
             assertEquals("Open the door",
                     blocks.listForStory(story.id()).stream().map(Block::text).reduce("", String::concat));
+            assertEquals(2, ollama.requests().size());
+            assertTrue(ollama.requests().stream().allMatch(request ->
+                    new ChatMessage("user", GenerationCoordinator.CONTINUE_PROMPT)
+                            .equals(request.get(request.size() - 2))));
+            assertEquals(new ChatMessage("assistant", "Open the"),
+                    ollama.requests().getFirst().getLast());
+            assertEquals(new ChatMessage("assistant", "Open the "),
+                    ollama.requests().get(1).getLast());
         }
     }
 
@@ -339,6 +461,7 @@ class GenerationCoordinatorConcurrencyTest
     private static final class ScriptedOllamaClient extends OllamaClient
     {
         private final ArrayDeque<String> responses;
+        private final List<List<ChatMessage>> requests = new ArrayList<>();
 
         private ScriptedOllamaClient(String... responses)
         {
@@ -349,6 +472,7 @@ class GenerationCoordinatorConcurrencyTest
         public OllamaChatResult chat(List<ChatMessage> messages, GenerationSettings settings,
                 Consumer<String> generatedChunkConsumer)
         {
+            requests.add(List.copyOf(messages));
             String generated = responses.removeFirst();
             if (!generated.isEmpty())
             {
@@ -356,6 +480,11 @@ class GenerationCoordinatorConcurrencyTest
             }
             return new OllamaChatResult(settings.modelName(), generated, 10, generated.length(), "stop",
                     1, 0, 1, 1, 0);
+        }
+
+        private List<List<ChatMessage>> requests()
+        {
+            return List.copyOf(requests);
         }
     }
 

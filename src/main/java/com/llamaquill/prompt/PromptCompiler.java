@@ -55,6 +55,8 @@ public class PromptCompiler
         List<Block> window = new ArrayList<>(originalWindow);
         List<ChatMessage> originalTaskMessages = normalizeTrailingMessages(auxiliary.trailingMessages());
         List<ChatMessage> taskMessages = new ArrayList<>(originalTaskMessages);
+        String storyTailUserMessage = auxiliary.storyTailUserMessage();
+        int storyTailBlockCount = auxiliary.storyTailBlockCount();
         StoryCard originalForcedCard = auxiliary.forcedStoryCard();
         StoryCard forcedCard = originalForcedCard;
 
@@ -83,14 +85,15 @@ public class PromptCompiler
                 authorNote = "";
             }
             CompiledState compiled = compileState(systemText, plotEssentials, authorNote, window, pinned, triggered,
-                    forcedCard, taskMessages, settings.anPlacement());
+                    forcedCard, taskMessages, settings.anPlacement(),
+                    storyTailUserMessage, storyTailBlockCount);
             if (compiled.estimatedTokens() <= budget.inputLimit())
             {
                 return finishCompilation(compiled, budget, story, originalSystem, systemText,
                         originalPlotEssentials, plotEssentials, originalAuthorNote, authorNote,
                         originalWindow, window, originalPinned, pinned, originalTriggered, triggered,
                         selectedCards.triggerMatches(), originalForcedCard, forcedCard,
-                        originalTaskMessages, taskMessages);
+                        originalTaskMessages, taskMessages, storyTailUserMessage, storyTailBlockCount);
             }
 
             int excessTokens = compiled.estimatedTokens() - budget.inputLimit();
@@ -171,7 +174,8 @@ public class PromptCompiler
                     originalPlotEssentials, "", originalAuthorNote, "",
                     originalWindow, List.of(), originalPinned, List.of(),
                     originalTriggered, List.of(), selectedCards.triggerMatches(),
-                    originalForcedCard, null, originalTaskMessages, taskMessages);
+                    originalForcedCard, null, originalTaskMessages, taskMessages,
+                    storyTailUserMessage, storyTailBlockCount);
         }
     }
 
@@ -184,20 +188,23 @@ public class PromptCompiler
             List<StoryCard> originalTriggered, List<StoryCard> triggered,
             Map<StoryCard, List<String>> triggerMatches,
             StoryCard originalForcedCard, StoryCard forcedCard,
-            List<ChatMessage> originalTaskMessages, List<ChatMessage> taskMessages)
+            List<ChatMessage> originalTaskMessages, List<ChatMessage> taskMessages,
+            String storyTailUserMessage, int storyTailBlockCount)
     {
         PromptContextReport report = buildContextReport(budget, compiled.estimatedTokens(), story,
                 originalSystem, systemText, originalPlotEssentials, plotEssentials,
                 originalAuthorNote, authorNote, originalWindow, window,
                 originalPinned, pinned, originalTriggered, triggered, triggerMatches,
-                originalForcedCard, forcedCard, originalTaskMessages, taskMessages);
+                originalForcedCard, forcedCard, originalTaskMessages, taskMessages,
+                storyTailUserMessage, storyTailBlockCount);
         logCompilationReport(report);
         return new PromptCompilation(compiled.messages(), compiled.estimatedTokens(), report);
     }
 
     private CompiledState compileState(String systemText, String plotEssentials, String authorNote,
             List<Block> window, List<StoryCard> pinned, List<StoryCard> triggered,
-            StoryCard forcedCard, List<ChatMessage> taskMessages, int authorNotePlacement)
+            StoryCard forcedCard, List<ChatMessage> taskMessages, int authorNotePlacement,
+            String storyTailUserMessage, int storyTailBlockCount)
     {
         List<Block> windowWithNote = insertAuthorNote(window, authorNotePlacement, authorNote);
         List<Message> messages = new ArrayList<>();
@@ -229,7 +236,7 @@ public class PromptCompiler
                 messages.add(new Message(Role.USER, text));
             }
         }
-        messages.addAll(groupMessages(windowWithNote));
+        messages.addAll(groupMessages(windowWithNote, storyTailUserMessage, storyTailBlockCount));
 
         String mergedSystemText = systemText;
         for (ChatMessage taskMessage : taskMessages)
@@ -260,7 +267,8 @@ public class PromptCompiler
             List<StoryCard> originalTriggered, List<StoryCard> triggered,
             Map<StoryCard, List<String>> triggerMatches,
             StoryCard originalForcedCard, StoryCard forcedCard,
-            List<ChatMessage> originalTaskMessages, List<ChatMessage> taskMessages)
+            List<ChatMessage> originalTaskMessages, List<ChatMessage> taskMessages,
+            String storyTailUserMessage, int storyTailBlockCount)
     {
         List<Entry> entries = new ArrayList<>();
         addTextEntry(entries, Component.SYSTEM, story.id(), "System",
@@ -306,6 +314,16 @@ public class PromptCompiler
             addTextEntry(entries, Component.AUXILIARY_TASK, "task-" + index,
                     "Auxiliary " + original.role() + " message",
                     original.content(), included.content(), original.role());
+        }
+        if (!storyTailUserMessage.isBlank())
+        {
+            String included = shouldInsertStoryTailUserMessage(
+                    window, storyTailUserMessage, storyTailBlockCount)
+                            ? storyTailUserMessage
+                            : "";
+            addTextEntry(entries, Component.AUXILIARY_TASK, "story-tail-user-message",
+                    "Continuation boundary",
+                    storyTailUserMessage, included, "user");
         }
 
         return new PromptContextReport(budget, estimatedInputTokens, entries);
@@ -819,14 +837,43 @@ public class PromptCompiler
 
     private static List<Message> groupMessages(List<Block> window)
     {
+        return groupMessagesRange(window, 0, window.size());
+    }
+
+    private static List<Message> groupMessages(List<Block> window, String storyTailUserMessage,
+            int storyTailBlockCount)
+    {
+        if (!shouldInsertStoryTailUserMessage(window, storyTailUserMessage, storyTailBlockCount))
+        {
+            return groupMessages(window);
+        }
+
+        int boundaryIndex = Math.max(0, window.size() - storyTailBlockCount);
         List<Message> messages = new ArrayList<>();
-        if (window.isEmpty())
+        messages.addAll(groupMessagesRange(window, 0, boundaryIndex));
+        messages.add(new Message(Role.USER, storyTailUserMessage));
+        messages.addAll(groupMessagesRange(window, boundaryIndex, window.size()));
+        return messages;
+    }
+
+    private static boolean shouldInsertStoryTailUserMessage(List<Block> window,
+            String storyTailUserMessage, int storyTailBlockCount)
+    {
+        return window != null && !window.isEmpty()
+                && storyTailUserMessage != null && !storyTailUserMessage.isBlank()
+                && storyTailBlockCount > 0;
+    }
+
+    private static List<Message> groupMessagesRange(List<Block> window, int startInclusive, int endExclusive)
+    {
+        List<Message> messages = new ArrayList<>();
+        if (window.isEmpty() || startInclusive >= endExclusive)
         {
             return messages;
         }
 
-        int index = 0;
-        while (index < window.size())
+        int index = startInclusive;
+        while (index < endExclusive)
         {
             Block block = window.get(index);
             Role role = block.role();
@@ -834,7 +881,7 @@ public class PromptCompiler
             {
                 StringBuilder currentText = new StringBuilder(normalizeBlockText(block));
                 index++;
-                while (index < window.size() && window.get(index).role() == Role.USER)
+                while (index < endExclusive && window.get(index).role() == Role.USER)
                 {
                     currentText.append("\n\n").append(normalizeBlockText(window.get(index)));
                     index++;
@@ -844,7 +891,7 @@ public class PromptCompiler
             }
 
             StringBuilder assistantText = new StringBuilder();
-            while (index < window.size() && window.get(index).role() == Role.ASSISTANT)
+            while (index < endExclusive && window.get(index).role() == Role.ASSISTANT)
             {
                 appendContinuous(assistantText, normalizeBlockText(window.get(index)));
                 index++;

@@ -16,6 +16,11 @@ are treated as 0.1.0 and migrated automatically after a backup is created.
   do not leave partial assistant prose behind.
 - Consecutive model continuations remain seamless, including continuations that begin in the
   middle of a sentence.
+- Long assistant-only runs receive a short generation-only user cue before their newest one or
+  two blocks. This keeps the final assistant continuation small without adding a visible or
+  persisted story action.
+- When joined model responses omit boundary whitespace, LlamaQuill adds a conservative separator
+  while preserving existing whitespace and obvious punctuation or hyphenated joins.
 - Prompt budgeting now reserves response space and deliberately prioritizes the system
   instruction, Plot Essentials, recent story, and contextually triggered Story Cards. Ollama no
   longer gets first chance to trim an arbitrary beginning of the prompt.
