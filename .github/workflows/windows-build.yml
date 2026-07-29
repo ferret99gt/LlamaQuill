@@ -16,11 +16,32 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
+      - name: Download Microsoft OpenJDK 25.0.4
+        shell: pwsh
+        run: |
+          $archive = Join-Path '${{ runner.temp }}' 'microsoft-jdk-25.0.4-windows-x64.zip'
+          $checksumFile = "$archive.sha256sum.txt"
+          Invoke-WebRequest `
+            -Uri 'https://aka.ms/download-jdk/microsoft-jdk-25.0.4-windows-x64.zip' `
+            -OutFile $archive
+          Invoke-WebRequest `
+            -Uri 'https://aka.ms/download-jdk/microsoft-jdk-25.0.4-windows-x64.zip.sha256sum.txt' `
+            -OutFile $checksumFile
+
+          $expected = ((Get-Content -LiteralPath $checksumFile -Raw) -split '\s+')[0].ToLowerInvariant()
+          $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected)
+          {
+            throw "Microsoft OpenJDK archive checksum mismatch: expected $expected, got $actual"
+          }
+
       - name: Set up Microsoft OpenJDK 25.0.4
         uses: actions/setup-java@v5
         with:
-          distribution: microsoft
+          distribution: jdkfile
           java-version: '25.0.4'
+          jdk-file: ${{ runner.temp }}/microsoft-jdk-25.0.4-windows-x64.zip
+          architecture: x64
           cache: maven
 
       - name: Verify clean builds and release packaging
