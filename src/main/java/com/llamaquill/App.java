@@ -39,6 +39,7 @@ import com.llamaquill.session.StoryWorkspace;
 import com.llamaquill.settings.SettingsCoordinator;
 import com.llamaquill.settings.SettingsPaneController;
 import com.llamaquill.stories.StoryBlockService;
+import com.llamaquill.stories.StoryCloneService;
 import com.llamaquill.stories.StoryDialogs;
 import com.llamaquill.stories.StoryLibraryController;
 import com.llamaquill.stories.StoryService;
@@ -128,6 +129,7 @@ public class App extends Application
     private StoryCardGenerationCoordinator storyCardGenerationCoordinator;
     private StoryCardPresetService storyCardPresetService;
     private StoryBlockService storyBlockService;
+    private StoryCloneService storyCloneService;
     private StoryService storyService;
     private StoryCardService storyCardService;
     private AIDungeonImports aiDungeonImports;
@@ -245,6 +247,8 @@ public class App extends Application
             storyService = new StoryService(storyRepository, blockRepository);
             storyCardService = new StoryCardService(cardRepository);
             ImageRepository imageRepository = new ImageRepository(database);
+            storyCloneService = new StoryCloneService(
+                    database, storyRepository, blockRepository, cardRepository, imageRepository);
             appSettingsRepository = new AppSettingsRepository(database);
             modelSettingsRepository = new ModelSettingsRepository(database);
             StoryCardCommandPresetRepository presetRepository = new StoryCardCommandPresetRepository(database);
@@ -1402,8 +1406,28 @@ public class App extends Application
                 this::showInfo,
                 name -> playStory(updateStoryTitleIfNeeded(story, name)),
                 name -> refreshStoryList(updateStoryTitleIfNeeded(story, name).id()),
+                () -> showCloneStoryDialog(story),
                 () -> confirmDelete(story.title()),
                 () -> deleteStory(story));
+    }
+
+    private void showCloneStoryDialog(Story source)
+    {
+        flushPendingEdits();
+        StoryDialogs.showCloneStoryDialog(primaryStage, source, this::showInfo, request ->
+        {
+            try
+            {
+                Story clone = storyCloneService.cloneStory(source.id(), request);
+                refreshStoryList(clone.id());
+                loadStory(clone, true);
+                statusLabel.setText("Story cloned");
+            }
+            catch (SQLException | IllegalArgumentException e)
+            {
+                showError("Failed to clone story", e);
+            }
+        });
     }
 
     private void showCardDialog(StoryCard card)
