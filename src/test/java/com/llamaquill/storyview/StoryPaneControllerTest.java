@@ -2,7 +2,9 @@ package com.llamaquill.storyview;
 
 import com.llamaquill.model.Block;
 import com.llamaquill.model.Role;
+import com.llamaquill.model.Story;
 import com.llamaquill.model.StoryImage;
+import com.llamaquill.stories.StoryLibraryController;
 import javafx.animation.AnimationTimer;
 import javafx.application.Platform;
 import javafx.scene.Node;
@@ -63,6 +65,63 @@ class StoryPaneControllerTest
     static void stopJavaFx()
     {
         Platform.exit();
+    }
+
+    @Test
+    void storyLibraryOpensPressedStoryWhenDetailSaveRefreshesTheListBeforeClick() throws Exception
+    {
+        AtomicReference<Stage> stageReference = new AtomicReference<>();
+        AtomicReference<Story> openedStory = new AtomicReference<>();
+        try
+        {
+            runOnFxThread(() ->
+            {
+                Story active = new Story("new", "New Story", "System", "", "", "created", "updated-1");
+                Story intended = new Story("old", "Older Story", "System", "Plot", "Note", "created", "updated");
+                StoryLibraryController controller = new StoryLibraryController(
+                        280, () -> { }, () -> { }, openedStory::set);
+                controller.setStories(List.of(active, intended), active.id());
+
+                BorderPane root = new BorderPane(controller.root());
+                Stage stage = new Stage();
+                stage.setX(-10_000);
+                stage.setY(-10_000);
+                stage.setOpacity(0);
+                stage.setScene(new Scene(root, 800, 600));
+                stage.show();
+                root.applyCss();
+                root.layout();
+                stageReference.set(stage);
+
+                ListView<?> list = findNode(root, ListView.class, ignored -> true);
+                ListCell<?> intendedCell = findNode(root, ListCell.class,
+                        cell -> intended.equals(cell.getItem()));
+                assertNotNull(list);
+                assertNotNull(intendedCell);
+
+                fireMouseEvent(intendedCell, MouseEvent.MOUSE_PRESSED);
+                list.getSelectionModel().select(1);
+
+                Story savedActive = new Story(
+                        active.id(), active.title(), "Copied instructions", "", "", active.createdAt(), "updated-2");
+                controller.setStories(List.of(savedActive, intended), savedActive.id());
+                assertSame(savedActive, list.getSelectionModel().getSelectedItem());
+
+                fireMouseEvent(intendedCell, MouseEvent.MOUSE_RELEASED);
+                fireMouseEvent(intendedCell, MouseEvent.MOUSE_CLICKED);
+
+                assertSame(intended, openedStory.get(),
+                        "The save-triggered refresh replaced the story selected by the user's mouse press.");
+            });
+        }
+        finally
+        {
+            Stage stage = stageReference.get();
+            if (stage != null)
+            {
+                runOnFxThread(stage::close);
+            }
+        }
     }
 
     @Test
