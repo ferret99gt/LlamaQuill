@@ -62,6 +62,21 @@ class OllamaClientPayloadTest
     }
 
     @Test
+    void oneShotPromptCanOmitNumPredictWithoutChangingOtherModelOptions()
+    {
+        OllamaClient client = new OllamaClient("http://localhost:11434", "test-model");
+        GenerationSettings promptSettings = settings(true).withoutNumPredict();
+        JSONObject options = new JSONObject(client.buildChatPayload(
+                List.of(new ChatMessage("user", "Rewrite the story.")),
+                promptSettings)).getJSONObject("options");
+
+        assertFalse(options.has("num_predict"));
+        assertEquals(150, promptSettings.responseLength());
+        assertEquals(0.0, options.getDouble("temperature"));
+        assertEquals(0, options.getInt("top_k"));
+    }
+
+    @Test
     void coalescesConsecutiveAssistantMessagesBeforeSerialization()
     {
         OllamaClient client = new OllamaClient("http://localhost:11434", "test-model");

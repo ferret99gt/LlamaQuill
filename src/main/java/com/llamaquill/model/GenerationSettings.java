@@ -91,4 +91,26 @@ public record GenerationSettings(String modelName, String ollamaHost, int contex
                 minStoryWindow, 7, 3,
                 AppSettings.DEFAULT_OLLAMA_KEEP_ALIVE_MINUTES);
     }
+
+    public GenerationSettings withoutNumPredict()
+    {
+        if (!responseLengthEnabled)
+        {
+            return this;
+        }
+        return new GenerationSettings(
+                modelName, ollamaHost, contextLimit, promptTokenScale,
+                false, responseLength,
+                temperatureEnabled, temperature,
+                topKEnabled, topK,
+                topPEnabled, topP,
+                minPEnabled, minP,
+                typicalPEnabled, typicalP,
+                presencePenaltyEnabled, presencePenalty,
+                frequencyPenaltyEnabled, frequencyPenalty,
+                repeatLastNEnabled, repeatLastN,
+                repetitionPenaltyEnabled, repetitionPenalty,
+                minStoryWindow, storyCardLookback, anPlacement,
+                ollamaKeepAliveMinutes);
+    }
 }

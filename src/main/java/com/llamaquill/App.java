@@ -1503,13 +1503,15 @@ public class App extends Application
                 text -> statusLabel.setText(text),
                 () -> setStoryActionButtonsBusy(true),
                 this::restoreStoryActionButtonsState,
-                (systemPrompt, userPrompt, onSuccess, onFailure) -> submitStoryTask(
+                (systemPrompt, userPrompt, overrideNumPredict, onSuccess, onFailure) -> submitStoryTask(
                         context.session(), "Story Prompt",
                         () -> storyPromptCoordinator.generateResponse(
                                 story,
                                 systemPrompt,
                                 userPrompt,
-                                context.generationSettings()),
+                                overrideNumPredict
+                                        ? context.generationSettings().withoutNumPredict()
+                                        : context.generationSettings()),
                         result ->
                         {
                             recordOllamaResponse(
