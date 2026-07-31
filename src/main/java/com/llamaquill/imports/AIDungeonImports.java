@@ -342,7 +342,7 @@ public final class AIDungeonImports
             String title = explicitTitle.isBlank() ? UNTITLED_CARD : explicitTitle;
             String content = readFirstNonBlank(obj, "entry", "content", "text", "value");
             String triggers = readStoryCardTriggers(obj);
-            String type = readFirstNonBlank(obj, "type");
+            String type = normalizeStoryCardType(readFirstNonBlank(obj, "type"));
             String notes = readFirstNonBlank(obj, "notes", "description");
             boolean pinned = obj.optBoolean("pinned", false);
             StoryCard card = new StoryCard(Ids.newId(), storyId, title, triggers, content, type, notes, pinned);
@@ -759,7 +759,8 @@ public final class AIDungeonImports
             String explicitTitle = obj.opt("title") instanceof String title ? title.trim() : "";
             String title = explicitTitle.isBlank() ? UNTITLED_CARD : explicitTitle;
             String triggers = joinJsonList(keys);
-            String type = obj.opt("type") instanceof String cardType ? cardType.trim() : "";
+            String type = normalizeStoryCardType(
+                    obj.opt("type") instanceof String cardType ? cardType : "");
             String notes = obj.opt("notes") instanceof String cardNotes
                     ? cardNotes
                     : obj.opt("description") instanceof String description ? description : "";
@@ -788,6 +789,20 @@ public final class AIDungeonImports
     private static CardSignature signatureOf(StoryCard card)
     {
         return new CardSignature(card.triggers(), card.content(), card.type(), card.notes());
+    }
+
+    private static String normalizeStoryCardType(String type)
+    {
+        String trimmed = type == null ? "" : type.trim();
+        return switch (trimmed.toLowerCase(Locale.ROOT))
+        {
+            case "character" -> "Character";
+            case "class" -> "Class";
+            case "race" -> "Race";
+            case "location" -> "Location";
+            case "faction" -> "Faction";
+            default -> trimmed;
+        };
     }
 
     private static void incrementSignature(Map<CardSignature, Integer> counts, CardSignature signature)
