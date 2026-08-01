@@ -2,6 +2,7 @@ package com.llamaquill.prompt;
 
 import com.llamaquill.model.Block;
 import com.llamaquill.model.ChatMessage;
+import com.llamaquill.model.ConversationLayout;
 import com.llamaquill.model.GenerationSettings;
 import com.llamaquill.model.Role;
 import com.llamaquill.model.Story;
@@ -50,6 +51,7 @@ public class PromptCompiler
         Objects.requireNonNull(settings, "settings");
         PromptAuxiliaryInput auxiliary = auxiliaryInput == null ? PromptAuxiliaryInput.none() : auxiliaryInput;
         operationTokenScale = settings.promptTokenScale();
+        ConversationLayout conversationLayout = activeConversationLayout(settings.conversationLayout());
 
         PromptBudget budget = PromptBudget.from(settings);
         List<Block> originalWindow = List.copyOf(filterPromptBlocks(blocks));
@@ -87,7 +89,7 @@ public class PromptCompiler
             }
             CompiledState compiled = compileState(systemText, plotEssentials, authorNote, window, pinned, triggered,
                     forcedCard, taskMessages, storyTailUserMessage, storyTailBlockCount,
-                    settings.storyCardWrappingStyle());
+                    settings.storyCardWrappingStyle(), conversationLayout, auxiliary.continuation());
             if (compiled.estimatedTokens() <= budget.inputLimit())
             {
                 return finishCompilation(compiled, budget, story, originalSystem, systemText,
@@ -210,17 +212,16 @@ public class PromptCompiler
             List<Block> window, List<StoryCard> pinned, List<StoryCard> triggered,
             StoryCard forcedCard, List<ChatMessage> taskMessages,
             String storyTailUserMessage, int storyTailBlockCount,
-            StoryCardWrappingStyle wrappingStyle)
+            StoryCardWrappingStyle wrappingStyle, ConversationLayout conversationLayout,
+            boolean continuation)
     {
-        List<Message> messages = new ArrayList<>();
         String worldContext = buildWorldContext(
                 plotEssentials, forcedCard, pinned, triggered, wrappingStyle);
-        if (!worldContext.isBlank())
-        {
-            messages.add(new Message(Role.USER, worldContext));
-        }
-        messages.addAll(groupStoryMessages(
-                window, authorNote, storyTailUserMessage, storyTailBlockCount));
+        List<Message> messages = conversationLayout == ConversationLayout.ROLE_AWARE
+                ? buildRoleAwareMessages(
+                        worldContext, window, authorNote, storyTailUserMessage, storyTailBlockCount)
+                : buildFlattenedMessages(
+                        worldContext, window, authorNote, conversationLayout, continuation);
 
         String mergedSystemText = systemText;
         for (ChatMessage taskMessage : taskMessages)
@@ -236,7 +237,7 @@ public class PromptCompiler
             if (!"system".equalsIgnoreCase(taskMessage.role())
                     && !taskMessage.role().isBlank() && !taskMessage.content().isBlank())
             {
-                promptMessages.add(taskMessage);
+                appendTaskMessage(promptMessages, taskMessage, conversationLayout);
             }
         }
         return new CompiledState(promptMessages, estimateTokens(promptMessages));
@@ -846,6 +847,106 @@ public class PromptCompiler
     private static StoryCardWrappingStyle activeWrappingStyle(StoryCardWrappingStyle wrappingStyle)
     {
         return wrappingStyle == null ? StoryCardWrappingStyle.NONE : wrappingStyle;
+    }
+
+    private static ConversationLayout activeConversationLayout(ConversationLayout conversationLayout)
+    {
+        return conversationLayout == null ? ConversationLayout.ROLE_AWARE : conversationLayout;
+    }
+
+    private static List<Message> buildRoleAwareMessages(String worldContext, List<Block> window,
+            String authorNote, String storyTailUserMessage, int storyTailBlockCount)
+    {
+        List<Message> messages = new ArrayList<>();
+        if (!worldContext.isBlank())
+        {
+            messages.add(new Message(Role.USER, worldContext));
+        }
+        messages.addAll(groupStoryMessages(
+                window, authorNote, storyTailUserMessage, storyTailBlockCount));
+        return messages;
+    }
+
+    private static List<Message> buildFlattenedMessages(String worldContext, List<Block> window,
+            String authorNote, ConversationLayout conversationLayout, boolean continuation)
+    {
+        List<String> documentSections = new ArrayList<>();
+        addDocumentSection(documentSections, worldContext);
+
+        Block finalBlock = window.isEmpty() ? null : window.getLast();
+        int historyEnd = finalBlock == null ? 0 : window.size() - 1;
+        String history = flattenStoryRange(window, 0, historyEnd);
+        if (finalBlock != null)
+        {
+            addDocumentSection(documentSections,
+                    history.isBlank() ? "Recent story:" : "Recent story:\n" + history);
+        }
+
+        addDocumentSection(documentSections, formatFlattenedAuthorNote(authorNote));
+
+        boolean useAssistantPrefill = conversationLayout == ConversationLayout.FLATTENED_WITH_PREFILL
+                && continuation
+                && finalBlock != null
+                && finalBlock.role() == Role.ASSISTANT
+                && !safeText(finalBlock.text()).isBlank();
+        if (finalBlock != null && !useAssistantPrefill)
+        {
+            addDocumentSection(documentSections, normalizeBlockText(finalBlock));
+        }
+
+        List<Message> messages = new ArrayList<>();
+        String document = String.join("\n\n", documentSections);
+        if (!document.isBlank())
+        {
+            messages.add(new Message(Role.USER, document));
+        }
+        if (useAssistantPrefill)
+        {
+            messages.add(new Message(Role.ASSISTANT, safeText(finalBlock.text())));
+        }
+        return messages;
+    }
+
+    private static String flattenStoryRange(List<Block> window, int startInclusive, int endExclusive)
+    {
+        List<Message> grouped = groupMessagesRange(window, startInclusive, endExclusive);
+        List<String> sections = new ArrayList<>(grouped.size());
+        for (Message message : grouped)
+        {
+            addDocumentSection(sections, message.content());
+        }
+        return String.join("\n\n", sections);
+    }
+
+    private static String formatFlattenedAuthorNote(String authorNote)
+    {
+        return authorNote == null || authorNote.isBlank()
+                ? ""
+                : "[Author's note:\n" + authorNote + "\n]";
+    }
+
+    private static void addDocumentSection(List<String> sections, String text)
+    {
+        if (text != null && !text.isBlank())
+        {
+            sections.add(text);
+        }
+    }
+
+    private static void appendTaskMessage(List<ChatMessage> messages, ChatMessage taskMessage,
+            ConversationLayout conversationLayout)
+    {
+        if (conversationLayout != ConversationLayout.ROLE_AWARE
+                && "user".equalsIgnoreCase(taskMessage.role())
+                && !messages.isEmpty()
+                && "user".equalsIgnoreCase(messages.getLast().role()))
+        {
+            ChatMessage previous = messages.getLast();
+            messages.set(messages.size() - 1,
+                    new ChatMessage(previous.role(), previous.content() + "\n\n" + taskMessage.content()));
+            return;
+        }
+        messages.add(taskMessage);
     }
 
     private static List<Message> groupMessages(List<Block> window)

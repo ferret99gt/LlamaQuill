@@ -17,6 +17,7 @@ import com.llamaquill.image.ImageGenerationCoordinator;
 import com.llamaquill.image.SeeDialog;
 import com.llamaquill.model.Block;
 import com.llamaquill.model.AppSettings;
+import com.llamaquill.model.ConversationLayout;
 import com.llamaquill.model.GenerationSettings;
 import com.llamaquill.model.ModelSettings;
 import com.llamaquill.model.Role;
@@ -541,6 +542,8 @@ public class App extends Application
             case CONTEXT_LIMIT -> updateContextLimit(change.intValue());
             case STORY_CARD_WRAPPING_STYLE -> updateStoryCardWrappingStyle(
                     (StoryCardWrappingStyle) change.value());
+            case CONVERSATION_LAYOUT -> updateConversationLayout(
+                    (ConversationLayout) change.value());
             case RESPONSE_LENGTH -> updateResponseLength(change.intValue());
             case RESPONSE_LENGTH_ENABLED -> updateResponseLengthEnabled(change.booleanValue());
             case TEMPERATURE -> updateTemperature(roundTo(change.doubleValue(), 0.1));
@@ -2372,6 +2375,13 @@ public class App extends Application
     private void updateStoryCardWrappingStyle(StoryCardWrappingStyle value)
     {
         activeModelSettings = SettingsCoordinator.withStoryCardWrappingStyle(activeModelSettings, value);
+        persistModelSettings();
+        refreshGenerationSettings();
+    }
+
+    private void updateConversationLayout(ConversationLayout value)
+    {
+        activeModelSettings = SettingsCoordinator.withConversationLayout(activeModelSettings, value);
         persistModelSettings();
         refreshGenerationSettings();
     }

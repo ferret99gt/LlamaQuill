@@ -6,7 +6,8 @@ import com.llamaquill.model.StoryCard;
 import java.util.List;
 
 public record PromptAuxiliaryInput(List<ChatMessage> trailingMessages, String activationText,
-        StoryCard forcedStoryCard, String storyTailUserMessage, int storyTailBlockCount)
+        StoryCard forcedStoryCard, String storyTailUserMessage, int storyTailBlockCount,
+        boolean continuation)
 {
     public PromptAuxiliaryInput
     {
@@ -17,13 +18,21 @@ public record PromptAuxiliaryInput(List<ChatMessage> trailingMessages, String ac
     }
 
     public PromptAuxiliaryInput(List<ChatMessage> trailingMessages, String activationText,
+            StoryCard forcedStoryCard, String storyTailUserMessage, int storyTailBlockCount)
+    {
+        this(trailingMessages, activationText, forcedStoryCard,
+                storyTailUserMessage, storyTailBlockCount,
+                storyTailUserMessage != null && !storyTailUserMessage.isBlank());
+    }
+
+    public PromptAuxiliaryInput(List<ChatMessage> trailingMessages, String activationText,
             StoryCard forcedStoryCard)
     {
-        this(trailingMessages, activationText, forcedStoryCard, "", 0);
+        this(trailingMessages, activationText, forcedStoryCard, "", 0, false);
     }
 
     public static PromptAuxiliaryInput none()
     {
-        return new PromptAuxiliaryInput(List.of(), "", null, "", 0);
+        return new PromptAuxiliaryInput(List.of(), "", null, "", 0, false);
     }
 }

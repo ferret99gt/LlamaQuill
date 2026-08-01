@@ -1,6 +1,7 @@
 package com.llamaquill.settings;
 
 import com.llamaquill.model.AppSettings;
+import com.llamaquill.model.ConversationLayout;
 import com.llamaquill.model.ModelSettings;
 import com.llamaquill.model.StoryCardWrappingStyle;
 import com.llamaquill.serviceClients.OllamaModelDetails;
@@ -38,6 +39,7 @@ public final class SettingsPaneController
     private final ComboBox<String> comfyWorkflowSelect;
     private final ComboBox<String> modelSelect;
     private final ComboBox<StoryCardWrappingStyle> storyCardWrappingStyleSelect;
+    private final ComboBox<ConversationLayout> conversationLayoutSelect;
     private final Button refreshModelsButton;
     private final Label modelDetailsLabel;
     private final Label contextLimitValueLabel;
@@ -142,6 +144,23 @@ public final class SettingsPaneController
             }
         });
 
+        conversationLayoutSelect = new ComboBox<>();
+        conversationLayoutSelect.getItems().setAll(ConversationLayout.values());
+        conversationLayoutSelect.setValue(modelSettings.conversationLayout());
+        conversationLayoutSelect.setMaxWidth(Double.MAX_VALUE);
+        conversationLayoutSelect.setTooltip(new Tooltip(
+                "Controls how the selected model receives story history. Role-aware uses chat turns; "
+                        + "Flattened sends one user document; Flattened with Prefill keeps the latest AI output "
+                        + "as assistant prefill on Continue."));
+        conversationLayoutSelect.setOnAction(event ->
+        {
+            if (!updating && conversationLayoutSelect.getValue() != null)
+            {
+                actions.settingChanged(new Change(
+                        Setting.CONVERSATION_LAYOUT, conversationLayoutSelect.getValue()));
+            }
+        });
+
         contextLimitSlider = buildIntSlider(ModelSettings.MIN_CONTEXT_LIMIT,
                 Math.max(131072, modelSettings.contextLimit()), modelSettings.contextLimit(), 512);
         contextLimitValueLabel = valueLabel(modelSettings.contextLimit(), "tokens");
@@ -226,6 +245,7 @@ public final class SettingsPaneController
                         valueLabel(appSettings.minStoryPercent(), "%"), Setting.MIN_STORY_PERCENT),
                 spinnerRow("Story Card Look Back", storyCardLookbackSpinner, Setting.STORY_CARD_LOOKBACK),
                 comboRow("Story Card Wrapping Style", storyCardWrappingStyleSelect),
+                comboRow("Conversation Layout", conversationLayoutSelect),
                 underlinedLabel("Image Generation"),
                 textFieldRow("ComfyUI URL", comfyUiUrlField),
                 comboRow("ComfyUI Workflow", comfyWorkflowSelect),
@@ -332,6 +352,7 @@ public final class SettingsPaneController
             repeatLastNEnabledBox.setSelected(settings.repeatLastNEnabled());
             repetitionPenaltyEnabledBox.setSelected(settings.repetitionPenaltyEnabled());
             storyCardWrappingStyleSelect.setValue(settings.storyCardWrappingStyle());
+            conversationLayoutSelect.setValue(settings.conversationLayout());
         }
         finally
         {
@@ -521,6 +542,7 @@ public final class SettingsPaneController
         OLLAMA_KEEP_ALIVE_MINUTES,
         CONTEXT_LIMIT,
         STORY_CARD_WRAPPING_STYLE,
+        CONVERSATION_LAYOUT,
         RESPONSE_LENGTH,
         RESPONSE_LENGTH_ENABLED,
         TEMPERATURE,

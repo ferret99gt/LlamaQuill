@@ -11,6 +11,7 @@ import com.llamaquill.db.StoryCardRepository;
 import com.llamaquill.db.StoryRepository;
 import com.llamaquill.model.Block;
 import com.llamaquill.model.ChatMessage;
+import com.llamaquill.model.ConversationLayout;
 import com.llamaquill.model.GenerationSettings;
 import com.llamaquill.model.Role;
 import com.llamaquill.model.Story;
@@ -157,6 +158,112 @@ class GenerationCoordinatorConcurrencyTest
                     new ChatMessage("user", "> Describe me moving right while Mia moves left.")));
             assertFalse(request.stream().anyMatch(message ->
                     GenerationCoordinator.CONTINUE_PROMPT.equals(message.content())));
+        }
+    }
+
+    @Test
+    void flattenedPrefillContinuesFromTheLatestAiBlockAfterARecentUserTurn() throws Exception
+    {
+        Path root = temporaryDirectory.resolve("flattened-prefill-real-user-continue");
+        try (Database database = Database.open(AppPaths.forDirectories(root.resolve("data"), root.resolve("legacy"))))
+        {
+            StoryRepository stories = new StoryRepository(database);
+            BlockRepository blocks = new BlockRepository(database);
+            StoryCardRepository cards = new StoryCardRepository(database);
+            ScriptedOllamaClient ollama = new ScriptedOllamaClient("Mia moves left.");
+            GenerationCoordinator coordinator = new GenerationCoordinator(database, blocks, stories, cards,
+                    new PromptCompiler(), ollama);
+            String now = Timestamps.now();
+            Story story = new Story("story-a", "story-a", "System", "", "", now, now);
+            stories.insert(story);
+            blocks.insert(new Block("turn", story.id(), Role.USER, "Move left.", now, 1));
+            blocks.insert(new Block("head", story.id(), Role.ASSISTANT, "Latest response.", now, 2));
+
+            coordinator.continueStory(
+                    story, withConversationLayout(ConversationLayout.FLATTENED_WITH_PREFILL));
+
+            List<ChatMessage> request = ollama.requests().getFirst();
+            assertEquals(List.of("system", "user", "assistant"),
+                    request.stream().map(ChatMessage::role).toList());
+            assertEquals("Recent story:\n> Move left.", request.get(1).content());
+            assertEquals("Latest response.", request.getLast().content());
+            assertFalse(request.stream().anyMatch(message ->
+                    GenerationCoordinator.CONTINUE_PROMPT.equals(message.content())));
+        }
+    }
+
+    @Test
+    void flattenedLayoutAddsTheMissingVisualAndPersistedBoundarySpace() throws Exception
+    {
+        Path root = temporaryDirectory.resolve("flattened-boundary-space");
+        try (Database database = Database.open(AppPaths.forDirectories(root.resolve("data"), root.resolve("legacy"))))
+        {
+            StoryRepository stories = new StoryRepository(database);
+            BlockRepository blocks = new BlockRepository(database);
+            StoryCardRepository cards = new StoryCardRepository(database);
+            ScriptedOllamaClient ollama = new ScriptedOllamaClient("his eyes narrowed.");
+            GenerationCoordinator coordinator = new GenerationCoordinator(database, blocks, stories, cards,
+                    new PromptCompiler(), ollama);
+            String now = Timestamps.now();
+            Story story = new Story("story-a", "story-a", "System", "", "", now, now);
+            stories.insert(story);
+            blocks.insert(new Block("head", story.id(), Role.ASSISTANT, "The heat of", now, 1));
+            StringBuilder displayed = new StringBuilder();
+
+            GenerationCoordinator.ContinueResult result = coordinator.continueStory(
+                    story, withConversationLayout(ConversationLayout.FLATTENED),
+                    new GenerationCoordinator.GenerationObserver()
+                    {
+                        @Override
+                        public void onGeneratedText(String chunk)
+                        {
+                            displayed.append(chunk);
+                        }
+                    });
+
+            assertEquals(List.of("system", "user"),
+                    ollama.requests().getFirst().stream().map(ChatMessage::role).toList());
+            assertEquals(" his eyes narrowed.", displayed.toString());
+            assertEquals(displayed.toString(), result.block().text());
+            assertEquals("The heat of his eyes narrowed.",
+                    blocks.listForStory(story.id()).stream().map(Block::text).reduce("", String::concat));
+        }
+    }
+
+    @Test
+    void flattenedWithPrefillPreservesTheModelsExactBoundaryText()
+            throws Exception
+    {
+        Path root = temporaryDirectory.resolve("flattened-prefill-exact-boundary");
+        try (Database database = Database.open(AppPaths.forDirectories(root.resolve("data"), root.resolve("legacy"))))
+        {
+            StoryRepository stories = new StoryRepository(database);
+            BlockRepository blocks = new BlockRepository(database);
+            StoryCardRepository cards = new StoryCardRepository(database);
+            ScriptedOllamaClient ollama = new ScriptedOllamaClient("his eyes narrowed.");
+            GenerationCoordinator coordinator = new GenerationCoordinator(database, blocks, stories, cards,
+                    new PromptCompiler(), ollama);
+            String now = Timestamps.now();
+            Story story = new Story("story-a", "story-a", "System", "", "", now, now);
+            stories.insert(story);
+            blocks.insert(new Block("head", story.id(), Role.ASSISTANT, "The heat of", now, 1));
+            StringBuilder displayed = new StringBuilder();
+
+            GenerationCoordinator.ContinueResult result = coordinator.continueStory(
+                    story, withConversationLayout(ConversationLayout.FLATTENED_WITH_PREFILL),
+                    new GenerationCoordinator.GenerationObserver()
+                    {
+                        @Override
+                        public void onGeneratedText(String chunk)
+                        {
+                            displayed.append(chunk);
+                        }
+                    });
+
+            assertEquals(List.of("system", "user", "assistant"),
+                    ollama.requests().getFirst().stream().map(ChatMessage::role).toList());
+            assertEquals("his eyes narrowed.", displayed.toString());
+            assertEquals(displayed.toString(), result.block().text());
         }
     }
 
@@ -543,6 +650,25 @@ class GenerationCoordinatorConcurrencyTest
         {
             return List.copyOf(requests);
         }
+    }
+
+    private static GenerationSettings withConversationLayout(ConversationLayout conversationLayout)
+    {
+        GenerationSettings defaults = GenerationSettings.defaults();
+        return new GenerationSettings(
+                defaults.modelName(), defaults.ollamaHost(), defaults.contextLimit(), defaults.promptTokenScale(),
+                defaults.responseLengthEnabled(), defaults.responseLength(),
+                defaults.temperatureEnabled(), defaults.temperature(),
+                defaults.topKEnabled(), defaults.topK(),
+                defaults.topPEnabled(), defaults.topP(),
+                defaults.minPEnabled(), defaults.minP(),
+                defaults.typicalPEnabled(), defaults.typicalP(),
+                defaults.presencePenaltyEnabled(), defaults.presencePenalty(),
+                defaults.frequencyPenaltyEnabled(), defaults.frequencyPenalty(),
+                defaults.repeatLastNEnabled(), defaults.repeatLastN(),
+                defaults.repetitionPenaltyEnabled(), defaults.repetitionPenalty(),
+                defaults.minStoryWindow(), defaults.storyCardLookback(),
+                defaults.ollamaKeepAliveMinutes(), defaults.storyCardWrappingStyle(), conversationLayout);
     }
 
     private static final class ChunkingOllamaClient extends OllamaClient

@@ -417,6 +417,126 @@ class PromptCompilerTest
                 compilation.messages());
     }
 
+    @Test
+    void flattenedLayoutBuildsOneUserDocumentWithTheNewestBlockAfterAuthorNote()
+    {
+        StoryCard gretchen = card("gretchen", "", "Gretchen profile.", true);
+        List<Block> blocks = List.of(
+                block("1", Role.ASSISTANT, "Opening scene."),
+                block("2", Role.USER, "Move left.\nStay low."),
+                block("3", Role.ASSISTANT, "Earlier response."),
+                block("4", Role.ASSISTANT, " Latest response."));
+
+        PromptCompilation compilation = new PromptCompiler().compile(
+                story("Narrate.", "Plot facts.", "Keep danger immediate."),
+                blocks,
+                List.of(gretchen),
+                settings(2048, false, 1, 100,
+                        StoryCardWrappingStyle.BRACES, ConversationLayout.FLATTENED));
+
+        assertEquals(List.of("system", "user"),
+                compilation.messages().stream().map(ChatMessage::role).toList());
+        assertEquals("Narrate.", compilation.messages().getFirst().content());
+        assertEquals("Plot facts.\n\n"
+                        + "World Lore:\n{Gretchen profile.}\n\n"
+                        + "Recent story:\nOpening scene.\n\n"
+                        + "> Move left.\n> Stay low.\n\n"
+                        + "Earlier response.\n\n"
+                        + "[Author's note:\nKeep danger immediate.\n]\n\n"
+                        + " Latest response.",
+                compilation.messages().getLast().content());
+    }
+
+    @Test
+    void flattenedWithPrefillMovesOnlyTheNewestAiBlockToAssistantOnContinue()
+    {
+        List<Block> blocks = List.of(
+                block("1", Role.ASSISTANT, "Opening scene."),
+                block("2", Role.USER, "Move left."),
+                block("3", Role.ASSISTANT, "Earlier response."),
+                block("4", Role.ASSISTANT, " Latest response."));
+
+        PromptCompilation compilation = new PromptCompiler().compile(
+                story("Narrate.", "Plot facts.", "Keep danger immediate."),
+                blocks,
+                List.of(),
+                settings(2048, false, 1, 100,
+                        StoryCardWrappingStyle.NONE, ConversationLayout.FLATTENED_WITH_PREFILL),
+                new PromptAuxiliaryInput(
+                        List.of(), "", null, "Continue from last response.", 2, true));
+
+        assertEquals(List.of("system", "user", "assistant"),
+                compilation.messages().stream().map(ChatMessage::role).toList());
+        assertEquals("Plot facts.\n\n"
+                        + "Recent story:\nOpening scene.\n\n"
+                        + "> Move left.\n\n"
+                        + "Earlier response.\n\n"
+                        + "[Author's note:\nKeep danger immediate.\n]",
+                compilation.messages().get(1).content());
+        assertEquals(" Latest response.", compilation.messages().getLast().content());
+        assertFalse(messageText(compilation).contains("Continue from last response."));
+    }
+
+    @Test
+    void flattenedWithPrefillKeepsACurrentTakeTurnAfterAuthorNoteWithoutPrefill()
+    {
+        PromptCompilation compilation = new PromptCompiler().compile(
+                story("Narrate.", "", "Keep danger immediate."),
+                List.of(
+                        block("1", Role.ASSISTANT, "Opening scene."),
+                        block("2", Role.USER, "Describe me moving left.")),
+                List.of(),
+                settings(2048, false, 1, 100,
+                        StoryCardWrappingStyle.NONE, ConversationLayout.FLATTENED_WITH_PREFILL));
+
+        assertEquals(List.of("system", "user"),
+                compilation.messages().stream().map(ChatMessage::role).toList());
+        assertEquals("Recent story:\nOpening scene.\n\n"
+                        + "[Author's note:\nKeep danger immediate.\n]\n\n"
+                        + "> Describe me moving left.",
+                compilation.messages().getLast().content());
+    }
+
+    @Test
+    void flattenedAuxiliaryTaskSharesTheSingleUserDocument()
+    {
+        PromptCompilation compilation = new PromptCompiler().compile(
+                story("Narrate.", "Plot facts.", ""),
+                List.of(block("1", Role.ASSISTANT, "Latest story output.")),
+                List.of(),
+                settings(2048, false, 1, 100,
+                        StoryCardWrappingStyle.NONE, ConversationLayout.FLATTENED),
+                new PromptAuxiliaryInput(
+                        List.of(new ChatMessage("user", "Perform the auxiliary task.")), "", null));
+
+        assertEquals(List.of("system", "user"),
+                compilation.messages().stream().map(ChatMessage::role).toList());
+        assertEquals("Plot facts.\n\nRecent story:\n\nLatest story output.\n\n"
+                        + "Perform the auxiliary task.",
+                compilation.messages().getLast().content());
+    }
+
+    @Test
+    void flattenedPrefillRemainsWithinBudgetWhileRetainingTheNewestAiOutput()
+    {
+        PromptCompiler compiler = exactCompiler();
+        PromptCompilation compilation = compiler.compile(
+                story("", "", ""),
+                List.of(
+                        block("1", Role.ASSISTANT, "OLD-CONTEXT-".repeat(20)),
+                        block("2", Role.USER, "Move left."),
+                        block("3", Role.ASSISTANT, "LATEST-PREFILL")),
+                List.of(),
+                settings(330, false, 1, 100,
+                        StoryCardWrappingStyle.NONE, ConversationLayout.FLATTENED_WITH_PREFILL),
+                new PromptAuxiliaryInput(List.of(), "", null, "", 0, true));
+
+        assertWithinBudget(compilation);
+        assertEquals("assistant", compilation.messages().getLast().role());
+        assertEquals("LATEST-PREFILL", compilation.messages().getLast().content());
+        assertEquals(Status.TRIMMED, entry(compilation, Component.STORY).status());
+    }
+
     private static PromptCompiler exactCompiler()
     {
         PromptCompiler compiler = new PromptCompiler();
@@ -478,6 +598,13 @@ class PromptCompilerTest
     private static GenerationSettings settings(int contextLimit, boolean responseLengthEnabled, int responseLength,
             int minStoryWindow, StoryCardWrappingStyle wrappingStyle)
     {
+        return settings(contextLimit, responseLengthEnabled, responseLength,
+                minStoryWindow, wrappingStyle, ConversationLayout.ROLE_AWARE);
+    }
+
+    private static GenerationSettings settings(int contextLimit, boolean responseLengthEnabled, int responseLength,
+            int minStoryWindow, StoryCardWrappingStyle wrappingStyle, ConversationLayout conversationLayout)
+    {
         return new GenerationSettings(
                 GenerationSettings.DEFAULT_MODEL, GenerationSettings.DEFAULT_OLLAMA_HOST, contextLimit, 1.0,
                 responseLengthEnabled, responseLength,
@@ -493,6 +620,6 @@ class PromptCompilerTest
                 minStoryWindow,
                 7,
                 com.llamaquill.model.AppSettings.DEFAULT_OLLAMA_KEEP_ALIVE_MINUTES,
-                wrappingStyle, ConversationLayout.ROLE_AWARE);
+                wrappingStyle, conversationLayout);
     }
 }
