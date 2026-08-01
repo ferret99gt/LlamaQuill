@@ -627,8 +627,11 @@ class StoryPaneControllerTest
         try
         {
             runOnFxThread(() -> fixture.controller().renderBlocks(blocks, true));
-            runOnFxThread(() -> { });
-            runOnFxThread(() -> { });
+            waitForFxCondition(() ->
+            {
+                Text target = findText(fixture.root(), edited.text());
+                return target != null && isNodeInsideListViewport(fixture.root(), target);
+            }, "The requested block did not settle into the viewport before editing.");
             runOnFxThread(() ->
             {
                 Text target = findText(fixture.root(), edited.text());
@@ -637,6 +640,12 @@ class StoryPaneControllerTest
                         "The requested block was not visible before opening its editor.");
                 fireClick(target);
             });
+            waitForFxCondition(() ->
+            {
+                TextArea editor = findNode(fixture.root(), TextArea.class,
+                        node -> edited.text().equals(node.getText()) && node.isVisible() && node.isManaged());
+                return editor != null && isNodeInsideListViewport(fixture.root(), editor);
+            }, "The edited block did not settle into the viewport.");
             runOnFxThread(() ->
             {
                 TextArea editor = assertVisibleEditor(fixture.root(), edited.text());
@@ -649,8 +658,12 @@ class StoryPaneControllerTest
                 fixture.controller().queueStreamingText(token[0], streamed);
                 fixture.controller().renderQueuedStreamingFrame();
             });
-            runOnFxThread(() -> { });
-            runOnFxThread(() -> { });
+            waitForFxCondition(() ->
+            {
+                Text draft = findText(fixture.root(), streamed);
+                return draft != null && isNodeInsideListViewport(fixture.root(), draft)
+                        && isStoryAtBottom(fixture.root());
+            }, "Streaming draft did not settle at the bottom after the editor closed.");
             runOnFxThread(() ->
             {
                 Text draft = findText(fixture.root(), streamed);
@@ -665,8 +678,11 @@ class StoryPaneControllerTest
                 fixture.controller().queueStreamingText(token[0], fullGrowth);
                 fixture.controller().renderQueuedStreamingFrame();
             });
-            runOnFxThread(() -> { });
-            runOnFxThread(() -> { });
+            waitForFxCondition(() ->
+            {
+                Text grownDraft = findText(fixture.root(), streamed + fullGrowth);
+                return grownDraft != null && isNodeBottomInsideListViewport(fixture.root(), grownDraft);
+            }, "The growing streaming response did not settle at the viewport bottom.");
             runOnFxThread(() ->
             {
                 Text grownDraft = findText(fixture.root(), streamed + fullGrowth);
@@ -683,8 +699,12 @@ class StoryPaneControllerTest
                 fixture.controller().endStreaming(token[0]);
                 fixture.controller().renderBlocks(committed, true);
             });
-            runOnFxThread(() -> { });
-            runOnFxThread(() -> { });
+            waitForFxCondition(() ->
+            {
+                Text generated = findText(fixture.root(), streamed + fullGrowth);
+                return generated != null && isNodeBottomInsideListViewport(fixture.root(), generated)
+                        && isStoryAtBottom(fixture.root());
+            }, "The committed response did not settle at the viewport bottom.");
             runOnFxThread(() ->
             {
                 Text generated = findText(fixture.root(), streamed + fullGrowth);
@@ -730,8 +750,11 @@ class StoryPaneControllerTest
         try
         {
             runOnFxThread(() -> fixture.controller().renderBlocks(blocks, true));
-            runOnFxThread(() -> { });
-            runOnFxThread(() -> { });
+            waitForFxCondition(() ->
+            {
+                Text headText = findText(fixture.root(), head.text());
+                return headText != null && isNodeInsideListViewport(fixture.root(), headText);
+            }, "The newest block did not settle into the bottom viewport.");
             runOnFxThread(() ->
             {
                 Text headText = findText(fixture.root(), head.text());
@@ -740,8 +763,12 @@ class StoryPaneControllerTest
                         "The tall final assistant cell was aligned to its top instead of its bottom.");
                 fireClick(headText);
             });
-            runOnFxThread(() -> { });
-            runOnFxThread(() -> { });
+            waitForFxCondition(() ->
+            {
+                TextArea editor = findNode(fixture.root(), TextArea.class,
+                        node -> head.text().equals(node.getText()) && node.isVisible() && node.isManaged());
+                return editor != null && isNodeInsideListViewport(fixture.root(), editor);
+            }, "The newest editor did not settle into the viewport.");
             runOnFxThread(() ->
             {
                 TextArea editor = assertVisibleEditor(fixture.root(), head.text());
@@ -894,32 +921,51 @@ class StoryPaneControllerTest
 
     private static void assertStoryAtBottom(Parent root)
     {
+        assertTrue(isStoryAtBottom(root), "Story viewport is not at the bottom.");
+    }
+
+    private static boolean isStoryAtBottom(Parent root)
+    {
         ScrollBar vertical = findNode(root, ScrollBar.class,
                 bar -> bar.getOrientation() == javafx.geometry.Orientation.VERTICAL
                         && enclosingList(bar) != null);
-        assertNotNull(vertical);
-        assertTrue(vertical.getValue() >= vertical.getMax() - 0.01,
-                "Story viewport is not at the bottom: " + vertical.getValue() + " / " + vertical.getMax());
+        return vertical != null && vertical.getValue() >= vertical.getMax() - 0.01;
     }
 
     private static void assertNodeInsideListViewport(Parent root, Node node, String message)
     {
+        assertTrue(isNodeInsideListViewport(root, node), message);
+    }
+
+    private static boolean isNodeInsideListViewport(Parent root, Node node)
+    {
         ListView<?> list = findNode(root, ListView.class, ignored -> true);
-        assertNotNull(list);
+        if (list == null)
+        {
+            return false;
+        }
         Bounds listBounds = list.localToScene(list.getBoundsInLocal());
         Bounds nodeBounds = node.localToScene(node.getBoundsInLocal());
-        assertTrue(listBounds.intersects(nodeBounds), message + " list=" + listBounds + ", node=" + nodeBounds);
+        return listBounds != null && nodeBounds != null && listBounds.intersects(nodeBounds);
     }
 
     private static void assertNodeBottomInsideListViewport(Parent root, Node node, String message)
     {
+        assertTrue(isNodeBottomInsideListViewport(root, node), message);
+    }
+
+    private static boolean isNodeBottomInsideListViewport(Parent root, Node node)
+    {
         ListView<?> list = findNode(root, ListView.class, ignored -> true);
-        assertNotNull(list);
+        if (list == null)
+        {
+            return false;
+        }
         Bounds listBounds = list.localToScene(list.getBoundsInLocal());
         Bounds nodeBounds = node.localToScene(node.getBoundsInLocal());
-        assertTrue(nodeBounds.getMaxY() >= listBounds.getMinY() - 1
-                        && nodeBounds.getMaxY() <= listBounds.getMaxY() + 1,
-                message + " list=" + listBounds + ", node=" + nodeBounds);
+        return listBounds != null && nodeBounds != null
+                && nodeBounds.getMaxY() >= listBounds.getMinY() - 1
+                && nodeBounds.getMaxY() <= listBounds.getMaxY() + 1;
     }
 
     private static byte[] squarePng()

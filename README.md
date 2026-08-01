@@ -4,12 +4,13 @@ LlamaQuill is a local-first Windows desktop app for AI-assisted story writing. I
 AI Dungeon-inspired adventure workflow with local Ollama text generation, optional ComfyUI scene
 images, Story Cards, and a SQLite story database that remains under the user's control.
 
-Version `0.2.0` is the first formally versioned release. See the
-[user-facing changelog](CHANGELOG.md) for the upgrade highlights.
+Version `0.3.0` adds model-specific conversation layouts, inspectable prompt construction, Story
+Card context controls, and story cloning. See the [user-facing changelog](CHANGELOG.md) for the
+upgrade highlights.
 
 ## Download and run
 
-1. Download `LlamaQuill-0.2.0-windows-x64.zip` from
+1. Download `LlamaQuill-0.3.0-windows-x64.zip` from
    [GitHub Releases](https://github.com/ferret99gt/LlamaQuill/releases).
 2. Optionally compare its SHA-256 hash with the accompanying `.sha256` file.
 3. Extract the complete `LlamaQuill` folder and run `LlamaQuill.exe` inside it.
@@ -18,7 +19,7 @@ Keep the whole extracted folder together. The executable depends on the adjacent
 `runtime` directories; copying only `LlamaQuill.exe` will not produce a working or updated app.
 The release includes its own Microsoft OpenJDK runtime, so users do not need to install Java.
 
-The 0.2.0 build is not code-signed. Windows may therefore display a SmartScreen warning for the
+The 0.3.0 build is not code-signed. Windows may therefore display a SmartScreen warning for the
 downloaded app.
 
 Runtime requirements:
@@ -134,16 +135,19 @@ To restore a backup:
 `LLAMAQUILL_DATA_DIR` or the `llamaquill.dataDir` Java system property can select an explicit
 portable/test location.
 
-Version 0.2.0 treats an unversioned database as the historical 0.1.0 format. On first launch it:
+Version 0.3.0 still treats an unversioned database as the historical 0.1.0 format. On first launch
+or an upgrade from 0.2.0 it:
 
 - copies a legacy `.\data\llamaquill.db` when the stable data location has no database;
 - leaves the original legacy database untouched;
 - creates a timestamped pre-migration backup;
-- migrates transactionally to schema 4 and records application/schema history.
+- migrates transactionally to schema 5 and records application/schema history.
 
-The migration adds Story Card types, player-only notes, and global reusable generation presets.
-It removes the retired automatic AutoCards configuration. If migration fails, LlamaQuill does not
-replace the source database with a partial migration.
+The 0.3.0 migration adds per-model Conversation Layout and Story Card Wrapping settings and
+retires the separate Author's Note placement control. Earlier migrations add Story Card types,
+player-only notes, and reusable generation presets while removing the retired automatic AutoCards
+configuration. If migration fails, LlamaQuill does not replace the source database with a partial
+migration.
 
 ## AI Dungeon imports
 

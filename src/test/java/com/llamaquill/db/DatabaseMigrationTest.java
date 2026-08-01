@@ -46,7 +46,7 @@ class DatabaseMigrationTest
             assertTrue(database.startupReport().migration().freshDatabase());
             assertEquals(0, database.startupReport().migration().sourceSchema());
             assertEquals(AppVersion.DATABASE_SCHEMA, userVersion(database));
-            assertEquals("0.2.0", scalarText(database,
+            assertEquals("0.3.0", scalarText(database,
                     "SELECT app_version FROM schema_migrations WHERE schema_version = "
                             + AppVersion.DATABASE_SCHEMA));
             assertFalse(columns(database, "app_settings").contains("use_ollama_templates"));

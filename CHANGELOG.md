@@ -3,6 +3,56 @@
 This changelog focuses on what changes for people using LlamaQuill. The Git history contains the
 implementation-level record.
 
+## 0.3.0
+
+Version 0.3.0 focuses on how story context is assembled, inspected, and adapted to different
+Ollama model families. Existing databases are backed up and migrated automatically to schema 5.
+
+### Conversation and prompt layout
+
+- Each Ollama model can use one of three conversation layouts: **Role-aware Turns**, **Flattened**,
+  or **Flattened with Prefill**. Role-aware Turns remains the default.
+- Flattened layouts reproduce the useful parts of AI Dungeon-style context formatting, including
+  `World Lore:`, `Recent story:`, `> ` user turns, and a bracketed Author's Note.
+- Flattened with Prefill keeps the newest model response as assistant prefill on Continue. The
+  ordinary Flattened layout instead applies a conservative visible-story whitespace join.
+- Author's Note placement is now automatic and aligned with the continuation boundary. The old
+  block-position spinner has been removed.
+- **View Last Context** shows the exact role/message sequence and text from the most recently
+  compiled request, making Story Card activation, ordering, and trimming inspectable without
+  exposing private story data outside the app.
+
+### Story Cards and context
+
+- Plot Essentials and active Story Cards now form one coherent lore message separated by the
+  `World Lore:` marker.
+- Pinned-but-untriggered cards are considered first and dropped before contextually triggered
+  cards when space is tight. Triggered cards are ordered so the most recently relevant entry is
+  closest to the recent story.
+- Per-model **Story Card Wrapping Style** can leave entries unwrapped or consistently surround
+  them with braces or brackets. Existing outer wrappers are normalized instead of doubled.
+- AI Dungeon's default lowercase card types import as their familiar sentence-case names while
+  custom type spelling remains untouched.
+
+### Story workflow and diagnostics
+
+- **Clone Story** can copy story details, Story Cards, the initial block, or the complete adventure.
+  Its defaults provide a lightweight reusable-scenario workflow without introducing a separate
+  scenario object.
+- The one-shot **Prompt** window can override Response Length for that request. The override is on
+  by default, avoiding repeated model-settings changes for open-ended utility prompts.
+- The status bar reports processed prompt tokens, full request duration, and model generation
+  duration. Prompt estimates also calibrate against Ollama's returned token counts during a
+  session.
+- Saving AI Instructions, Plot Essentials, or Author's Note no longer steals the user's intended
+  story selection.
+
+### Packaging and maintenance
+
+- The self-contained Windows release remains on Microsoft OpenJDK and JavaFX 25 LTS. Dependabot
+  may propose 25.x fixes, but JavaFX 26 major upgrades are intentionally deferred.
+- GitHub build actions have been updated to their Node 24-compatible major versions.
+
 ## 0.2.0
 
 Version 0.2.0 is the first formally tracked LlamaQuill release. Existing unversioned databases
