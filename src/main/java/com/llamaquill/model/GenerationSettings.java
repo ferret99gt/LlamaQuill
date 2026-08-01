@@ -150,4 +150,28 @@ public record GenerationSettings(String modelName, String ollamaHost, int contex
                 ollamaKeepAliveMinutes,
                 storyCardWrappingStyle, conversationLayout);
     }
+
+    public GenerationSettings withConversationLayout(ConversationLayout value)
+    {
+        ConversationLayout requestedLayout = value == null ? ConversationLayout.ROLE_AWARE : value;
+        if (requestedLayout == conversationLayout)
+        {
+            return this;
+        }
+        return new GenerationSettings(
+                modelName, ollamaHost, contextLimit, promptTokenScale,
+                responseLengthEnabled, responseLength,
+                temperatureEnabled, temperature,
+                topKEnabled, topK,
+                topPEnabled, topP,
+                minPEnabled, minP,
+                typicalPEnabled, typicalP,
+                presencePenaltyEnabled, presencePenalty,
+                frequencyPenaltyEnabled, frequencyPenalty,
+                repeatLastNEnabled, repeatLastN,
+                repetitionPenaltyEnabled, repetitionPenalty,
+                minStoryWindow, storyCardLookback,
+                ollamaKeepAliveMinutes,
+                storyCardWrappingStyle, requestedLayout);
+    }
 }

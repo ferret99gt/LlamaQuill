@@ -1558,22 +1558,23 @@ public class App extends Application
                 text -> statusLabel.setText(text),
                 () -> setStoryActionButtonsBusy(true),
                 this::restoreStoryActionButtonsState,
-                (systemPrompt, userPrompt, overrideNumPredict, onSuccess, onFailure) -> submitStoryTask(
-                        context.session(), "Story Prompt",
-                        () -> storyPromptCoordinator.generateResponse(
-                                story,
-                                systemPrompt,
-                                userPrompt,
-                                overrideNumPredict
-                                        ? context.generationSettings().withoutNumPredict()
-                                        : context.generationSettings()),
-                        result ->
-                        {
-                            recordOllamaResponse(
-                                    result.compilation().estimatedTokens(), result.response());
-                            onSuccess.accept(result.content());
-                        },
-                        onFailure));
+                (systemPrompt, userPrompt, overrideNumPredict, forceRoleAwareTurns, onSuccess, onFailure) ->
+                        submitStoryTask(
+                                context.session(), "Story Prompt",
+                                () -> storyPromptCoordinator.generateResponse(
+                                        story,
+                                        systemPrompt,
+                                        userPrompt,
+                                        context.generationSettings(),
+                                        overrideNumPredict,
+                                        forceRoleAwareTurns),
+                                result ->
+                                {
+                                    recordOllamaResponse(
+                                            result.compilation().estimatedTokens(), result.response());
+                                    onSuccess.accept(result.content());
+                                },
+                                onFailure));
     }
 
     private void showSeeDialog()

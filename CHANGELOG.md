@@ -8,6 +8,9 @@ implementation-level record.
 - When Ollama reports the exact prompt and context token counts for an oversized chat request,
   LlamaQuill now recompiles against the corrected budget and retries once. This also lets the
   existing per-model token calibration learn from the successful retry.
+- The one-shot Prompt window can force Role-aware Turns for that request without changing the
+  model's saved conversation layout. The override is enabled by default so utility instructions
+  remain a distinct final user turn instead of blending into flattened story prose.
 
 ## 0.3.0
 
