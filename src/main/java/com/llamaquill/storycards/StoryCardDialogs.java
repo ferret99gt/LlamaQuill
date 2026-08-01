@@ -60,7 +60,8 @@ public final class StoryCardDialogs
     }
 
     public static void showCardDialog(Stage owner, String storyId, StoryCard card,
-            StoryCardPresetService presetService, Consumer<String> showInfo,
+            StoryCardPresetService presetService, String selectedPresetId, Consumer<String> selectPreset,
+            Consumer<String> showInfo,
             BiConsumer<String, Throwable> showError, Consumer<String> setStatus,
             DraftGenerator draftGenerator, CardSaver saver, CardDeleter deleter)
     {
@@ -138,11 +139,13 @@ public final class StoryCardDialogs
         command.setPadding(new Insets(10));
         commandTab.setContent(scrollable(command));
 
-        loadPresetChoices(presetService, presetChoice, null, showError);
-        StoryCardCommands.PresetChoice defaultPreset = findDefaultPreset(presetChoice.getItems());
-        presetChoice.setValue(defaultPreset);
-        commandArea.setText(defaultPreset.command());
-        deletePresetButton.setDisable(true);
+        loadPresetChoices(presetService, presetChoice, selectedPresetId, showError);
+        StoryCardCommands.PresetChoice initialPreset = presetChoice.getValue() == null
+                ? findDefaultPreset(presetChoice.getItems())
+                : presetChoice.getValue();
+        presetChoice.setValue(initialPreset);
+        commandArea.setText(initialPreset.command());
+        deletePresetButton.setDisable(initialPreset.builtIn());
         presetChoice.setOnAction(event ->
         {
             StoryCardCommands.PresetChoice selected = presetChoice.getValue();
@@ -150,6 +153,7 @@ public final class StoryCardDialogs
             {
                 commandArea.setText(selected.command());
                 deletePresetButton.setDisable(selected.builtIn());
+                selectPreset.accept(selected.id());
             }
         });
 

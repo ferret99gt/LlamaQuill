@@ -135,8 +135,13 @@ class SettingsValidationTest
         assertEquals(4096, settings.comfyHeight());
         assertEquals(1, settings.comfyBatchSize());
         assertEquals(AppSettings.MAX_OLLAMA_KEEP_ALIVE_MINUTES, settings.ollamaKeepAliveMinutes());
+        assertEquals(AppSettings.DEFAULT_STORY_CARD_COMMAND_PRESET_ID,
+                settings.selectedStoryCardCommandPresetId());
         assertEquals(settings, settings.toBuilder().build());
         assertEquals(AppSettings.MAX_OLLAMA_KEEP_ALIVE_MINUTES,
                 SettingsCoordinator.withComfyWidth(settings, 800).ollamaKeepAliveMinutes());
+        assertEquals("builtin:basic-prose",
+                SettingsCoordinator.withSelectedStoryCardCommandPreset(settings, "builtin:basic-prose")
+                        .selectedStoryCardCommandPresetId());
     }
 }

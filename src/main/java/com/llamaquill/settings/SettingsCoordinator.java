@@ -110,6 +110,11 @@ public final class SettingsCoordinator
         return current.toBuilder().storyCardLookback(value).build();
     }
 
+    public static AppSettings withSelectedStoryCardCommandPreset(AppSettings current, String presetId)
+    {
+        return current.toBuilder().selectedStoryCardCommandPresetId(presetId).build();
+    }
+
     public static AppSettings withComfyWorkflow(AppSettings current, String workflow)
     {
         String trimmed = workflow == null ? "" : workflow.trim();

@@ -26,7 +26,7 @@ public class AppSettingsRepository
                     SELECT ollama_url, selected_model, response_length_enabled, response_length,
                            min_story_percent, story_card_lookback, comfyui_url,
                            comfy_workflow, comfy_width, comfy_height, comfy_batch_size,
-                           ollama_keep_alive_minutes
+                           ollama_keep_alive_minutes, selected_story_card_command_preset_id
                     FROM app_settings
                     WHERE id = ?
                     """))
@@ -50,7 +50,8 @@ public class AppSettingsRepository
                             rs.getInt("comfy_width"),
                             rs.getInt("comfy_height"),
                             rs.getInt("comfy_batch_size"),
-                            rs.getInt("ollama_keep_alive_minutes")));
+                            rs.getInt("ollama_keep_alive_minutes"),
+                            rs.getString("selected_story_card_command_preset_id")));
                 }
             }
         });
@@ -65,8 +66,8 @@ public class AppSettingsRepository
                         id, ollama_url, selected_model, response_length_enabled, response_length,
                         min_story_percent, story_card_lookback, comfyui_url,
                         comfy_workflow, comfy_width, comfy_height, comfy_batch_size,
-                        ollama_keep_alive_minutes
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ollama_keep_alive_minutes, selected_story_card_command_preset_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         ollama_url = excluded.ollama_url,
                         comfyui_url = excluded.comfyui_url,
@@ -79,7 +80,8 @@ public class AppSettingsRepository
                         comfy_width = excluded.comfy_width,
                         comfy_height = excluded.comfy_height,
                         comfy_batch_size = excluded.comfy_batch_size,
-                        ollama_keep_alive_minutes = excluded.ollama_keep_alive_minutes
+                        ollama_keep_alive_minutes = excluded.ollama_keep_alive_minutes,
+                        selected_story_card_command_preset_id = excluded.selected_story_card_command_preset_id
                     """))
             {
                 stmt.setInt(1, SETTINGS_ID);
@@ -95,6 +97,7 @@ public class AppSettingsRepository
                 stmt.setInt(11, settings.comfyHeight());
                 stmt.setInt(12, settings.comfyBatchSize());
                 stmt.setInt(13, settings.ollamaKeepAliveMinutes());
+                stmt.setString(14, settings.selectedStoryCardCommandPresetId());
                 stmt.executeUpdate();
             }
         });

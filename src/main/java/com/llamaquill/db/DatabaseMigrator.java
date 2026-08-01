@@ -26,6 +26,7 @@ public final class DatabaseMigrator
     private static final int INITIAL_0_2_0_SCHEMA = 2;
     private static final int OLLAMA_HARDENING_SCHEMA = 3;
     private static final int STORY_CARD_SCHEMA = 4;
+    private static final int PROMPT_LAYOUT_SCHEMA = 5;
     private static final int CURRENT_SCHEMA = AppVersion.DATABASE_SCHEMA;
     private static final DateTimeFormatter BACKUP_TIMESTAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS");
 
@@ -68,6 +69,7 @@ public final class DatabaseMigrator
                     normalizeSchemaThreeFoundation(connection);
                     migrateFromVersionThree(connection);
                     migrateFromVersionFour(connection);
+                    migrateFromVersionFive(connection);
                     recordMigration(connection, CURRENT_SCHEMA,
                             AppVersion.CURRENT + "-schema-" + CURRENT_SCHEMA + "-provisional");
                     setUserVersion(connection, CURRENT_SCHEMA);
@@ -81,7 +83,8 @@ public final class DatabaseMigrator
             return new MigrationReport(sourceVersion, CURRENT_SCHEMA, Optional.empty(), false);
         }
         if (sourceVersion != VERSION_0_1_0 && sourceVersion != INITIAL_0_2_0_SCHEMA
-                && sourceVersion != OLLAMA_HARDENING_SCHEMA && sourceVersion != STORY_CARD_SCHEMA)
+                && sourceVersion != OLLAMA_HARDENING_SCHEMA && sourceVersion != STORY_CARD_SCHEMA
+                && sourceVersion != PROMPT_LAYOUT_SCHEMA)
         {
             throw new SQLException("Unsupported database migration source: " + sourceVersion);
         }
@@ -94,15 +97,19 @@ public final class DatabaseMigrator
             {
                 migrateFromVersionOne(connection);
             }
-            else if (sourceVersion != STORY_CARD_SCHEMA)
+            else if (sourceVersion < STORY_CARD_SCHEMA)
             {
                 normalizeSchemaThreeFoundation(connection);
             }
-            if (sourceVersion != STORY_CARD_SCHEMA)
+            if (sourceVersion < STORY_CARD_SCHEMA)
             {
                 migrateFromVersionThree(connection);
             }
-            migrateFromVersionFour(connection);
+            if (sourceVersion < PROMPT_LAYOUT_SCHEMA)
+            {
+                migrateFromVersionFour(connection);
+            }
+            migrateFromVersionFive(connection);
             String sourceLabel = sourceVersion == VERSION_0_1_0
                     ? AppVersion.FIRST_MIGRATION_SOURCE
                     : AppVersion.CURRENT + "-schema-" + sourceVersion;
@@ -156,6 +163,12 @@ public final class DatabaseMigrator
         createIndexesAndMetadata(connection);
     }
 
+    private static void migrateFromVersionFive(Connection connection) throws SQLException
+    {
+        addColumnIfMissing(connection, "app_settings", "selected_story_card_command_preset_id",
+                "TEXT NOT NULL DEFAULT 'builtin:condensed'");
+    }
+
     private static boolean needsSchemaThreeSettingsNormalization(Connection connection) throws SQLException
     {
         if (!tableExists(connection, "app_settings") || !tableExists(connection, "model_settings"))
@@ -190,6 +203,7 @@ public final class DatabaseMigrator
         return !storyCardColumns.contains("type")
                 || !storyCardColumns.contains("notes")
                 || appColumns.contains("an_placement")
+                || !appColumns.contains("selected_story_card_command_preset_id")
                 || !modelColumns.contains("story_card_wrapping_style")
                 || !modelColumns.contains("conversation_layout")
                 || tableExists(connection, "app_auto_cards")
@@ -436,21 +450,21 @@ public final class DatabaseMigrator
     {
         boolean existed = tableExists(connection, "app_settings");
         Set<String> oldColumns = existed ? columns(connection, "app_settings") : Set.of();
-        execute(connection, "DROP TABLE IF EXISTS app_settings_v5");
-        execute(connection, appSettingsTableSql("app_settings_v5"));
+        execute(connection, "DROP TABLE IF EXISTS app_settings_v6");
+        execute(connection, appSettingsTableSql("app_settings_v6"));
         if (existed)
         {
             execute(connection, """
-                    INSERT INTO app_settings_v5 (
+                    INSERT INTO app_settings_v6 (
                         id, ollama_url, comfyui_url, selected_model,
                         response_length_enabled, response_length,
                         min_story_percent, story_card_lookback,
                         comfy_workflow, comfy_width, comfy_height, comfy_batch_size,
-                        ollama_keep_alive_minutes
+                        ollama_keep_alive_minutes, selected_story_card_command_preset_id
                     )
                     SELECT %s, %s, %s, %s, %s, %s,
                            MAX(10, MIN(100, %s)),
-                           %s, %s, %s, %s, %s, %s
+                           %s, %s, %s, %s, %s, %s, %s
                     FROM app_settings
                     WHERE %s = 1
                     """.formatted(
@@ -471,10 +485,11 @@ public final class DatabaseMigrator
                     value(oldColumns, "comfy_height", "720"),
                     value(oldColumns, "comfy_batch_size", "4"),
                     value(oldColumns, "ollama_keep_alive_minutes", "5"),
+                    value(oldColumns, "selected_story_card_command_preset_id", "'builtin:condensed'"),
                     value(oldColumns, "id", "1")));
             execute(connection, "DROP TABLE app_settings");
         }
-        execute(connection, "ALTER TABLE app_settings_v5 RENAME TO app_settings");
+        execute(connection, "ALTER TABLE app_settings_v6 RENAME TO app_settings");
     }
 
     private static void rebuildStoryCardsForSchemaFour(Connection connection) throws SQLException
@@ -553,7 +568,8 @@ public final class DatabaseMigrator
                     comfy_height INTEGER NOT NULL DEFAULT 720,
                     comfy_batch_size INTEGER NOT NULL DEFAULT 4,
                     ollama_keep_alive_minutes INTEGER NOT NULL DEFAULT 5
-                        CHECK (ollama_keep_alive_minutes BETWEEN 5 AND 30)
+                        CHECK (ollama_keep_alive_minutes BETWEEN 5 AND 30),
+                    selected_story_card_command_preset_id TEXT NOT NULL DEFAULT 'builtin:condensed'
                 )
                 """.formatted(table);
     }

@@ -46,11 +46,12 @@ class DatabaseMigrationTest
             assertTrue(database.startupReport().migration().freshDatabase());
             assertEquals(0, database.startupReport().migration().sourceSchema());
             assertEquals(AppVersion.DATABASE_SCHEMA, userVersion(database));
-            assertEquals("0.3.0", scalarText(database,
+            assertEquals("0.3.1", scalarText(database,
                     "SELECT app_version FROM schema_migrations WHERE schema_version = "
                             + AppVersion.DATABASE_SCHEMA));
             assertFalse(columns(database, "app_settings").contains("use_ollama_templates"));
             assertFalse(columns(database, "app_settings").contains("an_placement"));
+            assertTrue(columns(database, "app_settings").contains("selected_story_card_command_preset_id"));
             assertTrue(columns(database, "story_cards").containsAll(List.of("type", "notes")));
             assertTrue(columns(database, "model_settings").containsAll(
                     List.of("story_card_wrapping_style", "conversation_layout")));
@@ -80,6 +81,12 @@ class DatabaseMigrationTest
                     17);
             appSettings.save(expectedSettings);
             assertEquals(expectedSettings, appSettings.load().orElseThrow());
+            AppSettings prosePresetSettings = expectedSettings.toBuilder()
+                    .selectedStoryCardCommandPresetId("builtin:basic-prose")
+                    .build();
+            appSettings.save(prosePresetSettings);
+            assertEquals("builtin:basic-prose",
+                    appSettings.load().orElseThrow().selectedStoryCardCommandPresetId());
             assertTrue(columns(database, "app_settings").contains("ollama_keep_alive_minutes"));
 
             ModelSettingsRepository modelSettings = new ModelSettingsRepository(database);
@@ -179,6 +186,37 @@ class DatabaseMigrationTest
             StoryCard card = new StoryCardRepository(database).findById("card").orElseThrow();
             assertEquals("Character", card.type());
             assertEquals("Player-only note", card.notes());
+            assertEquals(1, new StoryCardCommandPresetRepository(database).listAll().size());
+        }
+    }
+
+    @Test
+    void migratesSchemaFiveWithAStableDefaultStoryCardCommandSelection() throws Exception
+    {
+        AppPaths paths = paths("schema-five-preset-selection");
+        try (Database database = Database.open(paths))
+        {
+            String now = Timestamps.now();
+            new AppSettingsRepository(database).save(AppSettings.defaults());
+            new StoryCardCommandPresetRepository(database).insert(
+                    new StoryCardCommandPreset("preset", "Custom", "Write {{title}}.", now, now));
+        }
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + paths.databaseFile());
+             Statement statement = connection.createStatement())
+        {
+            statement.execute("ALTER TABLE app_settings DROP COLUMN selected_story_card_command_preset_id");
+            statement.execute("PRAGMA user_version = 5");
+        }
+
+        try (Database database = Database.open(paths))
+        {
+            Database.StartupReport report = database.startupReport();
+            assertEquals(5, report.migration().sourceSchema());
+            assertEquals(AppVersion.DATABASE_SCHEMA, report.migration().targetSchema());
+            assertTrue(Files.isRegularFile(report.migration().backup().orElseThrow()));
+            assertEquals(AppSettings.DEFAULT_STORY_CARD_COMMAND_PRESET_ID,
+                    new AppSettingsRepository(database).load().orElseThrow()
+                            .selectedStoryCardCommandPresetId());
             assertEquals(1, new StoryCardCommandPresetRepository(database).listAll().size());
         }
     }

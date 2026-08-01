@@ -11,6 +11,8 @@ implementation-level record.
 - The one-shot Prompt window can force Role-aware Turns for that request without changing the
   model's saved conversation layout. The override is enabled by default so utility instructions
   remain a distinct final user turn instead of blending into flattened story prose.
+- The most recently selected Story Card command preset is now saved globally and restored when
+  another Story Card is opened, including built-in presets such as Basic Prose Prompt.
 
 ## 0.3.0
 

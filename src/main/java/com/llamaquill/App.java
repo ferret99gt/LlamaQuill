@@ -1499,6 +1499,8 @@ public class App extends Application
                 story.id(),
                 card,
                 storyCardPresetService,
+                appSettings.selectedStoryCardCommandPresetId(),
+                this::updateSelectedStoryCardCommandPreset,
                 this::showInfo,
                 this::showError,
                 statusLabel::setText,
@@ -1538,6 +1540,17 @@ public class App extends Application
                     }
                     return false;
                 });
+    }
+
+    private void updateSelectedStoryCardCommandPreset(String presetId)
+    {
+        AppSettings updated = SettingsCoordinator.withSelectedStoryCardCommandPreset(appSettings, presetId);
+        if (updated.equals(appSettings))
+        {
+            return;
+        }
+        appSettings = updated;
+        persistAppSettings();
     }
 
     private void showPromptDialog()
