@@ -36,6 +36,7 @@ public class OllamaClient implements AutoCloseable
     private final HttpClient client;
     private volatile String host;
     private volatile String model;
+    private volatile Consumer<OllamaChatRequestSnapshot> chatRequestObserver = ignored -> { };
 
     public OllamaClient()
     {
@@ -67,6 +68,11 @@ public class OllamaClient implements AutoCloseable
     public String getHost()
     {
         return host;
+    }
+
+    public void setChatRequestObserver(Consumer<OllamaChatRequestSnapshot> observer)
+    {
+        chatRequestObserver = observer == null ? ignored -> { } : observer;
     }
 
     @Override
@@ -140,8 +146,12 @@ public class OllamaClient implements AutoCloseable
         List<ChatMessage> normalizedMessages = normalizeChatMessages(messages);
         AssistantPrefillFilter prefillFilter = new AssistantPrefillFilter(normalizedMessages,
                 generatedChunkConsumer == null ? ignored -> { } : generatedChunkConsumer);
+        String payload = buildChatPayloadFromNormalized(normalizedMessages, settings);
+        String endpoint = OllamaEndpoint.resolve(settings.ollamaHost(), "/api/chat").toString();
+        notifyChatRequest(new OllamaChatRequestSnapshot(
+                endpoint, requestedModel, true, normalizedMessages));
         return executeStreaming(settings.ollamaHost(), "/api/chat", requestedModel,
-                buildChatPayloadFromNormalized(normalizedMessages, settings), prefillFilter);
+                payload, prefillFilter);
     }
 
     public OllamaChatResult chatNonStreaming(List<ChatMessage> messages, GenerationSettings settings)
@@ -162,6 +172,8 @@ public class OllamaClient implements AutoCloseable
                         buildChatPayloadFromNormalized(normalizedMessages, settings, false),
                         StandardCharsets.UTF_8))
                 .build();
+        notifyChatRequest(new OllamaChatRequestSnapshot(
+                endpoint, requestedModel, false, normalizedMessages));
         long requestStartedNanos = System.nanoTime();
         HttpResponse<String> response = sendString(request);
         long clientRequestDurationNanos = elapsedNanos(requestStartedNanos);
@@ -197,6 +209,18 @@ public class OllamaClient implements AutoCloseable
                 longMetadata(root, "eval_duration"),
                 clientRequestDurationNanos,
                 0);
+    }
+
+    private void notifyChatRequest(OllamaChatRequestSnapshot snapshot)
+    {
+        try
+        {
+            chatRequestObserver.accept(snapshot);
+        }
+        catch (RuntimeException ignored)
+        {
+            // Diagnostics must never prevent a model request.
+        }
     }
 
     private OllamaChatResult executeStreaming(String baseHost, String path, String requestedModel, String payload,

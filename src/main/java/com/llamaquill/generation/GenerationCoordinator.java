@@ -63,11 +63,10 @@ public final class GenerationCoordinator
         String expectedHeadId = headId(currentBlocks);
         List<StoryCard> currentCards = storyCardRepository.listForStory(story.id());
 
-        ContinuationCompilation continuation = compileContinuation(
+        PromptCompilation compilation = compileContinuation(
                 story, currentBlocks, currentCards, settings);
-        PromptCompilation compilation = continuation.compilation();
         GeneratedText generated = generateContinuationWithFallback(
-                compilation, settings, activeObserver, continuation.adjacentAssistantText());
+                compilation, settings, activeObserver);
         if (generated.text().isBlank())
         {
             return new ContinueResult(story, null, compilation.estimatedTokens(), ResultStatus.EMPTY,
@@ -111,11 +110,10 @@ public final class GenerationCoordinator
         promptBlocks.removeLast();
         List<StoryCard> currentCards = storyCardRepository.listForStory(story.id());
 
-        ContinuationCompilation continuation = compileContinuation(
+        PromptCompilation compilation = compileContinuation(
                 story, promptBlocks, currentCards, settings);
-        PromptCompilation compilation = continuation.compilation();
         GeneratedText generated = generateContinuationWithFallback(
-                compilation, settings, activeObserver, continuation.adjacentAssistantText());
+                compilation, settings, activeObserver);
         if (generated.text().isBlank())
         {
             return new RetryResult(null, compilation.estimatedTokens(), ResultStatus.EMPTY, generated.response());
@@ -170,12 +168,9 @@ public final class GenerationCoordinator
         currentCards = storyCardRepository.listForStory(story.id());
 
         PromptCompilation compilation = promptCompiler.compile(story, currentBlocks, currentCards, settings);
-        String adjacentAssistantText = seedRole == Role.ASSISTANT ? seedResult.seedBlock().text() : "";
         activeObserver.onAttemptStarted("");
-        OllamaChatResult response = generateResponse(
-                compilation, settings, activeObserver, adjacentAssistantText);
-        String cleaned = ContinuationJoiner.join(
-                adjacentAssistantText, normalizeOutput(response.content()));
+        OllamaChatResult response = generateResponse(compilation, settings, activeObserver);
+        String cleaned = normalizeOutput(response.content());
         if (cleaned.isBlank())
         {
             return new TurnResult(seedResult.updatedStory(), false, compilation.estimatedTokens(),
@@ -203,7 +198,7 @@ public final class GenerationCoordinator
         return storyRepository.touch(story.id(), Timestamps.now());
     }
 
-    private ContinuationCompilation compileContinuation(Story story, List<Block> blocks,
+    private PromptCompilation compileContinuation(Story story, List<Block> blocks,
             List<StoryCard> storyCards, GenerationSettings settings)
     {
         int assistantTailBlockCount = assistantTailBlockCountAfterContinuationCue(blocks);
@@ -211,10 +206,7 @@ public final class GenerationCoordinator
                 ? new PromptAuxiliaryInput(
                         List.of(), "", null, CONTINUE_PROMPT, assistantTailBlockCount)
                 : PromptAuxiliaryInput.none();
-        PromptCompilation compilation = promptCompiler.compile(
-                story, blocks, storyCards, settings, auxiliaryInput);
-        return new ContinuationCompilation(
-                compilation, adjacentAssistantText(blocks));
+        return promptCompiler.compile(story, blocks, storyCards, settings, auxiliaryInput);
     }
 
     private static int assistantTailBlockCountAfterContinuationCue(List<Block> blocks)
@@ -232,33 +224,21 @@ public final class GenerationCoordinator
                 return 0;
             }
             promptBlockCount++;
-            if (promptBlockCount == 2)
+            if (promptBlockCount > 2)
             {
-                return promptBlockCount;
+                return 2;
             }
         }
-        return promptBlockCount;
-    }
-
-    private static String adjacentAssistantText(List<Block> blocks)
-    {
-        if (blocks.isEmpty())
-        {
-            return "";
-        }
-        Block block = blocks.getLast();
-        return block != null && block.role() == Role.ASSISTANT ? block.text() : "";
+        return Math.min(2, promptBlockCount);
     }
 
     private GeneratedText generateContinuationWithFallback(PromptCompilation compilation, GenerationSettings settings,
-            GenerationObserver observer, String adjacentAssistantText)
+            GenerationObserver observer)
             throws IOException, InterruptedException
     {
         observer.onAttemptStarted("");
-        OllamaChatResult response = generateResponse(
-                compilation, settings, observer, adjacentAssistantText);
-        String cleaned = ContinuationJoiner.join(
-                adjacentAssistantText, normalizeOutput(response.content()));
+        OllamaChatResult response = generateResponse(compilation, settings, observer);
+        String cleaned = normalizeOutput(response.content());
         if (!cleaned.isBlank())
         {
             return new GeneratedText(cleaned, response);
@@ -288,15 +268,7 @@ public final class GenerationCoordinator
             GenerationObserver observer)
             throws IOException, InterruptedException
     {
-        return generateResponse(compilation, settings, observer, "");
-    }
-
-    private OllamaChatResult generateResponse(PromptCompilation compilation, GenerationSettings settings,
-            GenerationObserver observer, String adjacentAssistantText)
-            throws IOException, InterruptedException
-    {
-        StreamingOutputNormalizer normalizer = new StreamingOutputNormalizer(
-                observer, adjacentAssistantText);
+        StreamingOutputNormalizer normalizer = new StreamingOutputNormalizer(observer);
         try
         {
             return ollamaClient.chat(compilation.messages(), settings, normalizer::accept);
@@ -312,7 +284,7 @@ public final class GenerationCoordinator
             String suffix, GenerationObserver observer)
             throws IOException, InterruptedException
     {
-        StreamingOutputNormalizer normalizer = new StreamingOutputNormalizer(observer, "");
+        StreamingOutputNormalizer normalizer = new StreamingOutputNormalizer(observer);
         try
         {
             return ollamaClient.chat(
@@ -391,22 +363,14 @@ public final class GenerationCoordinator
     {
     }
 
-    private record ContinuationCompilation(PromptCompilation compilation, String adjacentAssistantText)
-    {
-    }
-
     private static final class StreamingOutputNormalizer
     {
         private final GenerationObserver observer;
-        private final String adjacentAssistantText;
         private boolean pendingCarriageReturn;
-        private boolean boundaryDecided;
 
-        private StreamingOutputNormalizer(GenerationObserver observer, String adjacentAssistantText)
+        private StreamingOutputNormalizer(GenerationObserver observer)
         {
             this.observer = observer;
-            this.adjacentAssistantText = adjacentAssistantText == null ? "" : adjacentAssistantText;
-            boundaryDecided = this.adjacentAssistantText.isEmpty();
         }
 
         private void accept(String chunk)
@@ -424,15 +388,6 @@ public final class GenerationCoordinator
             String normalized = normalizeOutput(combined);
             if (!normalized.isEmpty())
             {
-                if (!boundaryDecided)
-                {
-                    boundaryDecided = true;
-                    String separator = ContinuationJoiner.separator(adjacentAssistantText, normalized);
-                    if (!separator.isEmpty())
-                    {
-                        observer.onGeneratedText(separator);
-                    }
-                }
                 observer.onGeneratedText(normalized);
             }
         }
@@ -442,7 +397,6 @@ public final class GenerationCoordinator
             if (pendingCarriageReturn)
             {
                 pendingCarriageReturn = false;
-                boundaryDecided = true;
                 observer.onGeneratedText("\n");
             }
         }

@@ -25,6 +25,7 @@ public final class DatabaseMigrator
     private static final int VERSION_0_1_0 = 1;
     private static final int INITIAL_0_2_0_SCHEMA = 2;
     private static final int OLLAMA_HARDENING_SCHEMA = 3;
+    private static final int STORY_CARD_SCHEMA = 4;
     private static final int CURRENT_SCHEMA = AppVersion.DATABASE_SCHEMA;
     private static final DateTimeFormatter BACKUP_TIMESTAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS");
 
@@ -66,6 +67,7 @@ public final class DatabaseMigrator
                 {
                     normalizeSchemaThreeFoundation(connection);
                     migrateFromVersionThree(connection);
+                    migrateFromVersionFour(connection);
                     recordMigration(connection, CURRENT_SCHEMA,
                             AppVersion.CURRENT + "-schema-" + CURRENT_SCHEMA + "-provisional");
                     setUserVersion(connection, CURRENT_SCHEMA);
@@ -79,7 +81,7 @@ public final class DatabaseMigrator
             return new MigrationReport(sourceVersion, CURRENT_SCHEMA, Optional.empty(), false);
         }
         if (sourceVersion != VERSION_0_1_0 && sourceVersion != INITIAL_0_2_0_SCHEMA
-                && sourceVersion != OLLAMA_HARDENING_SCHEMA)
+                && sourceVersion != OLLAMA_HARDENING_SCHEMA && sourceVersion != STORY_CARD_SCHEMA)
         {
             throw new SQLException("Unsupported database migration source: " + sourceVersion);
         }
@@ -92,11 +94,15 @@ public final class DatabaseMigrator
             {
                 migrateFromVersionOne(connection);
             }
-            else
+            else if (sourceVersion != STORY_CARD_SCHEMA)
             {
                 normalizeSchemaThreeFoundation(connection);
             }
-            migrateFromVersionThree(connection);
+            if (sourceVersion != STORY_CARD_SCHEMA)
+            {
+                migrateFromVersionThree(connection);
+            }
+            migrateFromVersionFour(connection);
             String sourceLabel = sourceVersion == VERSION_0_1_0
                     ? AppVersion.FIRST_MIGRATION_SOURCE
                     : AppVersion.CURRENT + "-schema-" + sourceVersion;
@@ -143,6 +149,13 @@ public final class DatabaseMigrator
         createIndexesAndMetadata(connection);
     }
 
+    private static void migrateFromVersionFour(Connection connection) throws SQLException
+    {
+        rebuildAppSettings(connection);
+        addModelSettingColumns(connection, readLegacyContextLimit(connection));
+        createIndexesAndMetadata(connection);
+    }
+
     private static boolean needsSchemaThreeSettingsNormalization(Connection connection) throws SQLException
     {
         if (!tableExists(connection, "app_settings") || !tableExists(connection, "model_settings"))
@@ -172,8 +185,13 @@ public final class DatabaseMigrator
             return true;
         }
         Set<String> storyCardColumns = columns(connection, "story_cards");
+        Set<String> appColumns = columns(connection, "app_settings");
+        Set<String> modelColumns = columns(connection, "model_settings");
         return !storyCardColumns.contains("type")
                 || !storyCardColumns.contains("notes")
+                || appColumns.contains("an_placement")
+                || !modelColumns.contains("story_card_wrapping_style")
+                || !modelColumns.contains("conversation_layout")
                 || tableExists(connection, "app_auto_cards")
                 || tableExists(connection, "story_auto_cards")
                 || tableExists(connection, "model_auto_cards");
@@ -266,7 +284,11 @@ public final class DatabaseMigrator
                     repeat_last_n_enabled INTEGER NOT NULL DEFAULT 0 CHECK (repeat_last_n_enabled IN (0,1)),
                     repeat_last_n INTEGER NOT NULL DEFAULT 64,
                     repetition_penalty_enabled INTEGER NOT NULL DEFAULT 0 CHECK (repetition_penalty_enabled IN (0,1)),
-                    repetition_penalty REAL NOT NULL
+                    repetition_penalty REAL NOT NULL,
+                    story_card_wrapping_style TEXT NOT NULL DEFAULT 'NONE'
+                        CHECK (story_card_wrapping_style IN ('NONE','BRACES','BRACKETS')),
+                    conversation_layout TEXT NOT NULL DEFAULT 'ROLE_AWARE'
+                        CHECK (conversation_layout IN ('ROLE_AWARE','FLATTENED','FLATTENED_WITH_PREFILL'))
                 )
                 """);
     }
@@ -332,7 +354,7 @@ public final class DatabaseMigrator
                     INSERT INTO app_settings (
                         id, ollama_url, comfyui_url, selected_model,
                         response_length_enabled, response_length,
-                        min_story_percent, story_card_lookback, an_placement,
+                        min_story_percent, story_card_lookback,
                         comfy_workflow, comfy_width, comfy_height, comfy_batch_size,
                         ollama_keep_alive_minutes
                     )
@@ -340,7 +362,7 @@ public final class DatabaseMigrator
                            'hf.co/LatitudeGames/Muse-12B-GGUF:BF16',
                            1, response_length,
                            MAX(10, MIN(100, ROUND(min_story_window * 100.0 / MAX(1, context_limit)))),
-                           story_card_lookback, an_placement,
+                           story_card_lookback,
                            'ChromaHD', 720, 720, 4, 5
                     FROM generation_settings
                     WHERE id = 1
@@ -414,21 +436,21 @@ public final class DatabaseMigrator
     {
         boolean existed = tableExists(connection, "app_settings");
         Set<String> oldColumns = existed ? columns(connection, "app_settings") : Set.of();
-        execute(connection, "DROP TABLE IF EXISTS app_settings_v3");
-        execute(connection, appSettingsTableSql("app_settings_v3"));
+        execute(connection, "DROP TABLE IF EXISTS app_settings_v5");
+        execute(connection, appSettingsTableSql("app_settings_v5"));
         if (existed)
         {
             execute(connection, """
-                    INSERT INTO app_settings_v3 (
+                    INSERT INTO app_settings_v5 (
                         id, ollama_url, comfyui_url, selected_model,
                         response_length_enabled, response_length,
-                        min_story_percent, story_card_lookback, an_placement,
+                        min_story_percent, story_card_lookback,
                         comfy_workflow, comfy_width, comfy_height, comfy_batch_size,
                         ollama_keep_alive_minutes
                     )
                     SELECT %s, %s, %s, %s, %s, %s,
                            MAX(10, MIN(100, %s)),
-                           %s, %s, %s, %s, %s, %s, %s
+                           %s, %s, %s, %s, %s, %s
                     FROM app_settings
                     WHERE %s = 1
                     """.formatted(
@@ -444,7 +466,6 @@ public final class DatabaseMigrator
                                     + ") * 100.0 / MAX(1, "
                                     + value(oldColumns, "context_limit", "8192") + "))",
                     value(oldColumns, "story_card_lookback", "5"),
-                    value(oldColumns, "an_placement", "2"),
                     value(oldColumns, "comfy_workflow", "'ChromaHD'"),
                     value(oldColumns, "comfy_width", "720"),
                     value(oldColumns, "comfy_height", "720"),
@@ -453,7 +474,7 @@ public final class DatabaseMigrator
                     value(oldColumns, "id", "1")));
             execute(connection, "DROP TABLE app_settings");
         }
-        execute(connection, "ALTER TABLE app_settings_v3 RENAME TO app_settings");
+        execute(connection, "ALTER TABLE app_settings_v5 RENAME TO app_settings");
     }
 
     private static void rebuildStoryCardsForSchemaFour(Connection connection) throws SQLException
@@ -527,7 +548,6 @@ public final class DatabaseMigrator
                     min_story_percent INTEGER NOT NULL DEFAULT 60
                         CHECK (min_story_percent BETWEEN 10 AND 100),
                     story_card_lookback INTEGER NOT NULL,
-                    an_placement INTEGER NOT NULL,
                     comfy_workflow TEXT NOT NULL DEFAULT 'ChromaHD',
                     comfy_width INTEGER NOT NULL DEFAULT 720,
                     comfy_height INTEGER NOT NULL DEFAULT 720,
@@ -576,6 +596,12 @@ public final class DatabaseMigrator
                 "INTEGER NOT NULL DEFAULT 64");
         addColumnIfMissing(connection, "model_settings", "repetition_penalty_enabled",
                 "INTEGER NOT NULL DEFAULT 1 CHECK (repetition_penalty_enabled IN (0,1))");
+        addColumnIfMissing(connection, "model_settings", "story_card_wrapping_style",
+                "TEXT NOT NULL DEFAULT 'NONE' "
+                        + "CHECK (story_card_wrapping_style IN ('NONE','BRACES','BRACKETS'))");
+        addColumnIfMissing(connection, "model_settings", "conversation_layout",
+                "TEXT NOT NULL DEFAULT 'ROLE_AWARE' "
+                        + "CHECK (conversation_layout IN ('ROLE_AWARE','FLATTENED','FLATTENED_WITH_PREFILL'))");
     }
 
     private static int readLegacyContextLimit(Connection connection) throws SQLException

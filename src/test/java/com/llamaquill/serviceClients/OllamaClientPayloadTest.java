@@ -140,7 +140,6 @@ class OllamaClientPayloadTest
                 enabled, 0.0,
                 4096,
                 7,
-                3,
                 keepAliveMinutes);
     }
 }

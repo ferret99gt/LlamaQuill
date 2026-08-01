@@ -124,7 +124,7 @@ class GenerationCoordinatorConcurrencyTest
                             .toList());
             assertEquals(List.of(Role.ASSISTANT, Role.ASSISTANT, Role.ASSISTANT, Role.ASSISTANT),
                     blocks.listForStory(story.id()).stream().map(Block::role).toList());
-            assertEquals(" his eyes narrowed.", result.block().text());
+            assertEquals("his eyes narrowed.", result.block().text());
             assertEquals(result.block().text(), displayed.toString());
         }
     }
@@ -161,7 +161,64 @@ class GenerationCoordinatorConcurrencyTest
     }
 
     @Test
-    void firstTurnJoinsGeneratedTextToItsAssistantStorySeed() throws Exception
+    void twoAssistantBlocksAfterARealUserRemainOneUninterruptedPrefill() throws Exception
+    {
+        Path root = temporaryDirectory.resolve("two-block-real-user-prefill");
+        try (Database database = Database.open(AppPaths.forDirectories(root.resolve("data"), root.resolve("legacy"))))
+        {
+            StoryRepository stories = new StoryRepository(database);
+            BlockRepository blocks = new BlockRepository(database);
+            StoryCardRepository cards = new StoryCardRepository(database);
+            ScriptedOllamaClient ollama = new ScriptedOllamaClient("Third response.");
+            GenerationCoordinator coordinator = new GenerationCoordinator(database, blocks, stories, cards,
+                    new PromptCompiler(), ollama);
+            String now = Timestamps.now();
+            Story story = new Story("story-a", "story-a", "System", "", "", now, now);
+            stories.insert(story);
+            blocks.insert(new Block("turn", story.id(), Role.USER, "Move left.", now, 1));
+            blocks.insert(new Block("first", story.id(), Role.ASSISTANT, "First response.", now, 2));
+            blocks.insert(new Block("second", story.id(), Role.ASSISTANT, " Second response.", now, 3));
+
+            coordinator.continueStory(story, GenerationSettings.defaults());
+
+            List<ChatMessage> request = ollama.requests().getFirst();
+            assertFalse(request.stream().anyMatch(message ->
+                    GenerationCoordinator.CONTINUE_PROMPT.equals(message.content())));
+            assertEquals(new ChatMessage("assistant", "First response. Second response."), request.getLast());
+        }
+    }
+
+    @Test
+    void thirdAssistantBlockAfterARealUserCreatesTheTwoBlockEphemeralPrefill() throws Exception
+    {
+        Path root = temporaryDirectory.resolve("three-block-real-user-prefill");
+        try (Database database = Database.open(AppPaths.forDirectories(root.resolve("data"), root.resolve("legacy"))))
+        {
+            StoryRepository stories = new StoryRepository(database);
+            BlockRepository blocks = new BlockRepository(database);
+            StoryCardRepository cards = new StoryCardRepository(database);
+            ScriptedOllamaClient ollama = new ScriptedOllamaClient("Fourth response.");
+            GenerationCoordinator coordinator = new GenerationCoordinator(database, blocks, stories, cards,
+                    new PromptCompiler(), ollama);
+            String now = Timestamps.now();
+            Story story = new Story("story-a", "story-a", "System", "", "", now, now);
+            stories.insert(story);
+            blocks.insert(new Block("turn", story.id(), Role.USER, "Move left.", now, 1));
+            blocks.insert(new Block("first", story.id(), Role.ASSISTANT, "First response.", now, 2));
+            blocks.insert(new Block("second", story.id(), Role.ASSISTANT, " Second response.", now, 3));
+            blocks.insert(new Block("third", story.id(), Role.ASSISTANT, " Third response.", now, 4));
+
+            coordinator.continueStory(story, GenerationSettings.defaults());
+
+            List<ChatMessage> request = ollama.requests().getFirst();
+            assertEquals(new ChatMessage("user", GenerationCoordinator.CONTINUE_PROMPT),
+                    request.get(request.size() - 2));
+            assertEquals(new ChatMessage("assistant", " Second response. Third response."), request.getLast());
+        }
+    }
+
+    @Test
+    void firstTurnPreservesTheModelBoundaryAfterItsAssistantStorySeed() throws Exception
     {
         Path root = temporaryDirectory.resolve("first-turn-assistant-join");
         try (Database database = Database.open(AppPaths.forDirectories(root.resolve("data"), root.resolve("legacy"))))
@@ -189,8 +246,8 @@ class GenerationCoordinatorConcurrencyTest
                     });
 
             assertTrue(result.generated());
-            assertEquals(" sun filled the room.", displayed.toString());
-            assertEquals(List.of("The heat of the", " sun filled the room."),
+            assertEquals("sun filled the room.", displayed.toString());
+            assertEquals(List.of("The heat of the", "sun filled the room."),
                     blocks.listForStory(story.id()).stream().map(Block::text).toList());
             assertFalse(ollama.requests().getFirst().stream().anyMatch(message ->
                     GenerationCoordinator.CONTINUE_PROMPT.equals(message.content())));

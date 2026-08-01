@@ -1,6 +1,8 @@
 package com.llamaquill.db;
 
 import com.llamaquill.model.ModelSettings;
+import com.llamaquill.model.ConversationLayout;
+import com.llamaquill.model.StoryCardWrappingStyle;
 
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -35,7 +37,8 @@ public class ModelSettingsRepository
                            presence_penalty_enabled, presence_penalty,
                            frequency_penalty_enabled, frequency_penalty,
                            repeat_last_n_enabled, repeat_last_n,
-                           repetition_penalty_enabled, repetition_penalty
+                           repetition_penalty_enabled, repetition_penalty,
+                           story_card_wrapping_style, conversation_layout
                     FROM model_settings
                     WHERE model_name = ?
                     """))
@@ -68,7 +71,8 @@ public class ModelSettingsRepository
                            presence_penalty_enabled, presence_penalty,
                            frequency_penalty_enabled, frequency_penalty,
                            repeat_last_n_enabled, repeat_last_n,
-                           repetition_penalty_enabled, repetition_penalty
+                           repetition_penalty_enabled, repetition_penalty,
+                           story_card_wrapping_style, conversation_layout
                     FROM model_settings
                     WHERE active = 1
                     ORDER BY model_name
@@ -100,7 +104,8 @@ public class ModelSettingsRepository
                            presence_penalty_enabled, presence_penalty,
                            frequency_penalty_enabled, frequency_penalty,
                            repeat_last_n_enabled, repeat_last_n,
-                           repetition_penalty_enabled, repetition_penalty
+                           repetition_penalty_enabled, repetition_penalty,
+                           story_card_wrapping_style, conversation_layout
                     FROM model_settings
                     ORDER BY model_name
                     """);
@@ -131,8 +136,9 @@ public class ModelSettingsRepository
                         presence_penalty_enabled, presence_penalty,
                         frequency_penalty_enabled, frequency_penalty,
                         repeat_last_n_enabled, repeat_last_n,
-                        repetition_penalty_enabled, repetition_penalty
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        repetition_penalty_enabled, repetition_penalty,
+                        story_card_wrapping_style, conversation_layout
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(model_name) DO UPDATE SET
                         active = excluded.active,
                         context_limit = excluded.context_limit,
@@ -154,7 +160,9 @@ public class ModelSettingsRepository
                         repeat_last_n_enabled = excluded.repeat_last_n_enabled,
                         repeat_last_n = excluded.repeat_last_n,
                         repetition_penalty_enabled = excluded.repetition_penalty_enabled,
-                        repetition_penalty = excluded.repetition_penalty
+                        repetition_penalty = excluded.repetition_penalty,
+                        story_card_wrapping_style = excluded.story_card_wrapping_style,
+                        conversation_layout = excluded.conversation_layout
                     """))
             {
                 stmt.setString(1, settings.modelName());
@@ -179,6 +187,8 @@ public class ModelSettingsRepository
                 stmt.setInt(20, settings.repeatLastN());
                 stmt.setInt(21, settings.repetitionPenaltyEnabled() ? 1 : 0);
                 stmt.setDouble(22, settings.repetitionPenalty());
+                stmt.setString(23, settings.storyCardWrappingStyle().name());
+                stmt.setString(24, settings.conversationLayout().name());
                 stmt.executeUpdate();
             }
         });
@@ -212,7 +222,8 @@ public class ModelSettingsRepository
                                 current.presencePenaltyEnabled(), current.presencePenalty(),
                                 current.frequencyPenaltyEnabled(), current.frequencyPenalty(),
                                 current.repeatLastNEnabled(), current.repeatLastN(),
-                                current.repetitionPenaltyEnabled(), current.repetitionPenalty()));
+                                current.repetitionPenaltyEnabled(), current.repetitionPenalty(),
+                                current.storyCardWrappingStyle(), current.conversationLayout()));
                     }
                 }
                 else
@@ -226,7 +237,8 @@ public class ModelSettingsRepository
                             defaults.presencePenaltyEnabled(), defaults.presencePenalty(),
                             defaults.frequencyPenaltyEnabled(), defaults.frequencyPenalty(),
                             defaults.repeatLastNEnabled(), defaults.repeatLastN(),
-                            defaults.repetitionPenaltyEnabled(), defaults.repetitionPenalty()));
+                            defaults.repetitionPenaltyEnabled(), defaults.repetitionPenalty(),
+                            defaults.storyCardWrappingStyle(), defaults.conversationLayout()));
                 }
             }
 
@@ -249,7 +261,8 @@ public class ModelSettingsRepository
                                     current.presencePenaltyEnabled(), current.presencePenalty(),
                                     current.frequencyPenaltyEnabled(), current.frequencyPenalty(),
                                     current.repeatLastNEnabled(), current.repeatLastN(),
-                                    current.repetitionPenaltyEnabled(), current.repetitionPenalty()));
+                                    current.repetitionPenaltyEnabled(), current.repetitionPenalty(),
+                                    current.storyCardWrappingStyle(), current.conversationLayout()));
                         }
                     }
                 }
@@ -281,6 +294,8 @@ public class ModelSettingsRepository
                 rs.getInt("repeat_last_n_enabled") == 1,
                 rs.getInt("repeat_last_n"),
                 rs.getInt("repetition_penalty_enabled") == 1,
-                rs.getDouble("repetition_penalty"));
+                rs.getDouble("repetition_penalty"),
+                StoryCardWrappingStyle.fromDatabase(rs.getString("story_card_wrapping_style")),
+                ConversationLayout.fromDatabase(rs.getString("conversation_layout")));
     }
 }

@@ -9,11 +9,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.llamaquill.AppVersion;
 import com.llamaquill.model.AppSettings;
 import com.llamaquill.model.Block;
+import com.llamaquill.model.ConversationLayout;
 import com.llamaquill.model.ModelSettings;
 import com.llamaquill.model.Role;
 import com.llamaquill.model.Story;
 import com.llamaquill.model.StoryCard;
 import com.llamaquill.model.StoryCardCommandPreset;
+import com.llamaquill.model.StoryCardWrappingStyle;
 import com.llamaquill.util.Timestamps;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -48,7 +50,10 @@ class DatabaseMigrationTest
                     "SELECT app_version FROM schema_migrations WHERE schema_version = "
                             + AppVersion.DATABASE_SCHEMA));
             assertFalse(columns(database, "app_settings").contains("use_ollama_templates"));
+            assertFalse(columns(database, "app_settings").contains("an_placement"));
             assertTrue(columns(database, "story_cards").containsAll(List.of("type", "notes")));
+            assertTrue(columns(database, "model_settings").containsAll(
+                    List.of("story_card_wrapping_style", "conversation_layout")));
             assertTrue(tableExists(database, "story_card_command_presets"));
             assertFalse(tableExists(database, "app_auto_cards"));
             assertFalse(tableExists(database, "story_auto_cards"));
@@ -68,7 +73,6 @@ class DatabaseMigrationTest
                     240,
                     55,
                     12,
-                    4,
                     "SettingsWorkflow",
                     1024,
                     768,
@@ -92,7 +96,9 @@ class DatabaseMigrationTest
                     false, 0.0,
                     true, 0.0,
                     true, -1,
-                    false, 1.05);
+                    false, 1.05,
+                    StoryCardWrappingStyle.BRACKETS,
+                    ConversationLayout.FLATTENED_WITH_PREFILL);
             modelSettings.save(expectedModelSettings);
             assertEquals(expectedModelSettings, modelSettings.load("settings-model").orElseThrow());
 
@@ -108,6 +114,42 @@ class DatabaseMigrationTest
                 assertTrue(result.next());
                 assertEquals(1, result.getInt(1));
             }
+        }
+    }
+
+    @Test
+    void migratesSchemaFourPromptOptionsAndDropsAuthorNotePlacement() throws Exception
+    {
+        AppPaths paths = paths("schema-four-prompt-options");
+        AppSettings expectedAppSettings = new AppSettings(
+                "http://schema-four:11434", "http://comfy:8000", "schema-four-model",
+                false, 222, 61, 9, "ChromaHD", 720, 720, 4, 11);
+        try (Database database = Database.open(paths))
+        {
+            new AppSettingsRepository(database).save(expectedAppSettings);
+            new ModelSettingsRepository(database).save(ModelSettings.defaults("schema-four-model"));
+        }
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + paths.databaseFile());
+             Statement statement = connection.createStatement())
+        {
+            statement.execute("ALTER TABLE app_settings ADD COLUMN an_placement INTEGER NOT NULL DEFAULT 3");
+            statement.execute("ALTER TABLE model_settings DROP COLUMN story_card_wrapping_style");
+            statement.execute("ALTER TABLE model_settings DROP COLUMN conversation_layout");
+            statement.execute("PRAGMA user_version = 4");
+        }
+
+        try (Database database = Database.open(paths))
+        {
+            Database.StartupReport report = database.startupReport();
+            assertEquals(4, report.migration().sourceSchema());
+            assertEquals(AppVersion.DATABASE_SCHEMA, report.migration().targetSchema());
+            assertTrue(Files.isRegularFile(report.migration().backup().orElseThrow()));
+            assertFalse(columns(database, "app_settings").contains("an_placement"));
+            assertEquals(expectedAppSettings, new AppSettingsRepository(database).load().orElseThrow());
+            ModelSettings migrated = new ModelSettingsRepository(database)
+                    .load("schema-four-model").orElseThrow();
+            assertEquals(StoryCardWrappingStyle.NONE, migrated.storyCardWrappingStyle());
+            assertEquals(ConversationLayout.ROLE_AWARE, migrated.conversationLayout());
         }
     }
 

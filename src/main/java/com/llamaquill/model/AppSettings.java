@@ -5,7 +5,7 @@ import com.llamaquill.serviceClients.OllamaClient;
 import com.llamaquill.serviceClients.OllamaEndpoint;
 
 public record AppSettings(String ollamaUrl, String comfyUiUrl, String selectedModel,
-        boolean responseLengthEnabled, int responseLength, int minStoryPercent, int storyCardLookback, int anPlacement,
+        boolean responseLengthEnabled, int responseLength, int minStoryPercent, int storyCardLookback,
         String comfyWorkflow, int comfyWidth, int comfyHeight, int comfyBatchSize,
         int ollamaKeepAliveMinutes)
 {
@@ -29,7 +29,6 @@ public record AppSettings(String ollamaUrl, String comfyUiUrl, String selectedMo
         responseLength = Math.max(1, Math.min(32768, responseLength));
         minStoryPercent = Math.max(MIN_STORY_PERCENT, Math.min(MAX_STORY_PERCENT, minStoryPercent));
         storyCardLookback = Math.max(0, Math.min(100, storyCardLookback));
-        anPlacement = Math.max(1, Math.min(100, anPlacement));
         comfyWorkflow = comfyWorkflow == null || comfyWorkflow.isBlank()
                 ? DEFAULT_COMFY_WORKFLOW
                 : comfyWorkflow.trim();
@@ -42,12 +41,12 @@ public record AppSettings(String ollamaUrl, String comfyUiUrl, String selectedMo
 
     public AppSettings(String ollamaUrl, String comfyUiUrl, String selectedModel,
             boolean responseLengthEnabled, int responseLength, int minStoryPercent,
-            int storyCardLookback, int anPlacement, String comfyWorkflow,
+            int storyCardLookback, String comfyWorkflow,
             int comfyWidth, int comfyHeight, int comfyBatchSize)
     {
         this(ollamaUrl, comfyUiUrl, selectedModel,
                 responseLengthEnabled, responseLength, minStoryPercent,
-                storyCardLookback, anPlacement, comfyWorkflow,
+                storyCardLookback, comfyWorkflow,
                 comfyWidth, comfyHeight, comfyBatchSize,
                 DEFAULT_OLLAMA_KEEP_ALIVE_MINUTES);
     }
@@ -57,7 +56,7 @@ public record AppSettings(String ollamaUrl, String comfyUiUrl, String selectedMo
         GenerationSettings defaults = GenerationSettings.defaults();
         return new AppSettings(OllamaClient.DEFAULT_HOST, ComfyUiClient.DEFAULT_HOST, OllamaClient.DEFAULT_MODEL,
                 false, defaults.responseLength(), 60,
-                defaults.storyCardLookback(), defaults.anPlacement(), DEFAULT_COMFY_WORKFLOW,
+                defaults.storyCardLookback(), DEFAULT_COMFY_WORKFLOW,
                 DEFAULT_COMFY_WIDTH, DEFAULT_COMFY_HEIGHT, DEFAULT_COMFY_BATCH_SIZE,
                 DEFAULT_OLLAMA_KEEP_ALIVE_MINUTES);
     }
@@ -76,7 +75,6 @@ public record AppSettings(String ollamaUrl, String comfyUiUrl, String selectedMo
         private int responseLength;
         private int minStoryPercent;
         private int storyCardLookback;
-        private int anPlacement;
         private String comfyWorkflow;
         private int comfyWidth;
         private int comfyHeight;
@@ -92,7 +90,6 @@ public record AppSettings(String ollamaUrl, String comfyUiUrl, String selectedMo
             responseLength = settings.responseLength();
             minStoryPercent = settings.minStoryPercent();
             storyCardLookback = settings.storyCardLookback();
-            anPlacement = settings.anPlacement();
             comfyWorkflow = settings.comfyWorkflow();
             comfyWidth = settings.comfyWidth();
             comfyHeight = settings.comfyHeight();
@@ -142,12 +139,6 @@ public record AppSettings(String ollamaUrl, String comfyUiUrl, String selectedMo
             return this;
         }
 
-        public Builder anPlacement(int value)
-        {
-            anPlacement = value;
-            return this;
-        }
-
         public Builder comfyWorkflow(String value)
         {
             comfyWorkflow = value;
@@ -182,7 +173,7 @@ public record AppSettings(String ollamaUrl, String comfyUiUrl, String selectedMo
         {
             return new AppSettings(ollamaUrl, comfyUiUrl, selectedModel,
                     responseLengthEnabled, responseLength, minStoryPercent,
-                    storyCardLookback, anPlacement, comfyWorkflow,
+                    storyCardLookback, comfyWorkflow,
                     comfyWidth, comfyHeight, comfyBatchSize, ollamaKeepAliveMinutes);
         }
     }

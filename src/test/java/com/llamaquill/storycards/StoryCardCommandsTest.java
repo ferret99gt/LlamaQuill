@@ -45,14 +45,8 @@ class StoryCardCommandsTest
     }
 
     @Test
-    void formatsPlainTextAndBuildsDatedRevisionNotes()
+    void buildsDatedRevisionNotes()
     {
-        assertEquals("entry", StoryCardCommands.applyFormatting(
-                " entry ", StoryCardCommands.EntryFormatting.NONE));
-        assertEquals("{entry}", StoryCardCommands.applyFormatting(
-                " entry ", StoryCardCommands.EntryFormatting.BRACES));
-        assertEquals("[entry]", StoryCardCommands.applyFormatting(
-                " entry ", StoryCardCommands.EntryFormatting.BRACKETS));
         assertEquals("Player notes\n\n---\n\n[Entry replaced 2026-07-27 20:15:30]\nOld entry",
                 StoryCardCommands.appendGenerationHistory(
                         "Player notes", "Old entry", LocalDateTime.of(2026, 7, 27, 20, 15, 30)));

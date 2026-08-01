@@ -1,7 +1,7 @@
 package com.llamaquill.storycards;
 
 public record StoryCardGenerationRequest(String existingCardId, String title, String triggers,
-        String command, StoryCardCommands.EntryFormatting formatting, String additionalContext)
+        String command, String additionalContext)
 {
     public StoryCardGenerationRequest
     {
@@ -9,7 +9,6 @@ public record StoryCardGenerationRequest(String existingCardId, String title, St
         title = title == null ? "" : title.trim();
         triggers = triggers == null ? "" : triggers.trim();
         command = command == null ? "" : command;
-        formatting = formatting == null ? StoryCardCommands.EntryFormatting.NONE : formatting;
         additionalContext = additionalContext == null ? "" : additionalContext.trim();
     }
 }

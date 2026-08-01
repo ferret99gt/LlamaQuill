@@ -2,6 +2,7 @@ package com.llamaquill.settings;
 
 import com.llamaquill.model.AppSettings;
 import com.llamaquill.model.ModelSettings;
+import com.llamaquill.model.StoryCardWrappingStyle;
 import com.llamaquill.serviceClients.OllamaModelDetails;
 import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
@@ -36,6 +37,7 @@ public final class SettingsPaneController
     private final TextField comfyUiUrlField;
     private final ComboBox<String> comfyWorkflowSelect;
     private final ComboBox<String> modelSelect;
+    private final ComboBox<StoryCardWrappingStyle> storyCardWrappingStyleSelect;
     private final Button refreshModelsButton;
     private final Label modelDetailsLabel;
     private final Label contextLimitValueLabel;
@@ -125,6 +127,21 @@ public final class SettingsPaneController
         modelDetailsLabel = new Label("Model metadata has not been loaded.");
         modelDetailsLabel.setWrapText(true);
 
+        storyCardWrappingStyleSelect = new ComboBox<>();
+        storyCardWrappingStyleSelect.getItems().setAll(StoryCardWrappingStyle.values());
+        storyCardWrappingStyleSelect.setValue(modelSettings.storyCardWrappingStyle());
+        storyCardWrappingStyleSelect.setMaxWidth(Double.MAX_VALUE);
+        storyCardWrappingStyleSelect.setTooltip(new Tooltip(
+                "Wraps each Story Card only when compiling prompts for the selected model. Stored card text is unchanged."));
+        storyCardWrappingStyleSelect.setOnAction(event ->
+        {
+            if (!updating && storyCardWrappingStyleSelect.getValue() != null)
+            {
+                actions.settingChanged(new Change(
+                        Setting.STORY_CARD_WRAPPING_STYLE, storyCardWrappingStyleSelect.getValue()));
+            }
+        });
+
         contextLimitSlider = buildIntSlider(ModelSettings.MIN_CONTEXT_LIMIT,
                 Math.max(131072, modelSettings.contextLimit()), modelSettings.contextLimit(), 512);
         contextLimitValueLabel = valueLabel(modelSettings.contextLimit(), "tokens");
@@ -164,7 +181,6 @@ public final class SettingsPaneController
                 "Repetition Penalty", modelSettings.repetitionPenaltyEnabled());
         Slider minStoryPercentSlider = buildIntSlider(10, 100, appSettings.minStoryPercent(), 1);
         Spinner<Integer> storyCardLookbackSpinner = buildSpinner(0, 100, appSettings.storyCardLookback());
-        Spinner<Integer> anPlacementSpinner = buildSpinner(1, 100, appSettings.anPlacement());
 
         Label databaseLocationLabel = new Label(databasePath.toString());
         databaseLocationLabel.setWrapText(true);
@@ -209,7 +225,7 @@ public final class SettingsPaneController
                 sliderRow("Context to Use for Story", minStoryPercentSlider,
                         valueLabel(appSettings.minStoryPercent(), "%"), Setting.MIN_STORY_PERCENT),
                 spinnerRow("Story Card Look Back", storyCardLookbackSpinner, Setting.STORY_CARD_LOOKBACK),
-                spinnerRow("Author's Note Insertion Point", anPlacementSpinner, Setting.AN_PLACEMENT),
+                comboRow("Story Card Wrapping Style", storyCardWrappingStyleSelect),
                 underlinedLabel("Image Generation"),
                 textFieldRow("ComfyUI URL", comfyUiUrlField),
                 comboRow("ComfyUI Workflow", comfyWorkflowSelect),
@@ -315,6 +331,7 @@ public final class SettingsPaneController
             frequencyPenaltyEnabledBox.setSelected(settings.frequencyPenaltyEnabled());
             repeatLastNEnabledBox.setSelected(settings.repeatLastNEnabled());
             repetitionPenaltyEnabledBox.setSelected(settings.repetitionPenaltyEnabled());
+            storyCardWrappingStyleSelect.setValue(settings.storyCardWrappingStyle());
         }
         finally
         {
@@ -392,7 +409,7 @@ public final class SettingsPaneController
         return new VBox(6, new Label(labelText), field);
     }
 
-    private static VBox comboRow(String labelText, ComboBox<String> comboBox)
+    private static VBox comboRow(String labelText, ComboBox<?> comboBox)
     {
         return new VBox(6, new Label(labelText), comboBox);
     }
@@ -503,6 +520,7 @@ public final class SettingsPaneController
         OLLAMA_URL,
         OLLAMA_KEEP_ALIVE_MINUTES,
         CONTEXT_LIMIT,
+        STORY_CARD_WRAPPING_STYLE,
         RESPONSE_LENGTH,
         RESPONSE_LENGTH_ENABLED,
         TEMPERATURE,
@@ -525,7 +543,6 @@ public final class SettingsPaneController
         REPETITION_PENALTY_ENABLED,
         MIN_STORY_PERCENT,
         STORY_CARD_LOOKBACK,
-        AN_PLACEMENT,
         COMFY_UI_URL,
         COMFY_WORKFLOW,
         COMFY_WIDTH,

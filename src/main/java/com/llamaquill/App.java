@@ -10,6 +10,7 @@ import com.llamaquill.db.ModelSettingsRepository;
 import com.llamaquill.db.StoryCardCommandPresetRepository;
 import com.llamaquill.generation.AuxiliaryGenerationService;
 import com.llamaquill.generation.GenerationCoordinator;
+import com.llamaquill.generation.LastContextDialog;
 import com.llamaquill.generation.PromptDialog;
 import com.llamaquill.generation.StoryPromptCoordinator;
 import com.llamaquill.image.ImageGenerationCoordinator;
@@ -22,11 +23,13 @@ import com.llamaquill.model.Role;
 import com.llamaquill.model.Story;
 import com.llamaquill.model.StoryCard;
 import com.llamaquill.model.StoryImage;
+import com.llamaquill.model.StoryCardWrappingStyle;
 import com.llamaquill.imports.AIDungeonImports;
 import com.llamaquill.imports.ImportDialogs;
 import com.llamaquill.prompt.PromptCompiler;
 import com.llamaquill.serviceClients.ComfyUiClient;
 import com.llamaquill.serviceClients.OllamaChatResult;
+import com.llamaquill.serviceClients.OllamaChatRequestSnapshot;
 import com.llamaquill.serviceClients.OllamaClient;
 import com.llamaquill.serviceClients.OllamaEndpoint;
 import com.llamaquill.serviceClients.OllamaException;
@@ -156,6 +159,8 @@ public class App extends Application
     private Button retryHistoryButton;
     private Button seeButton;
     private Button promptButton;
+    private Button contextButton;
+    private volatile OllamaChatRequestSnapshot lastOllamaRequest;
 
     private Button collapseRightButton;
     private VBox rightSidebar;
@@ -255,6 +260,7 @@ public class App extends Application
             aiDungeonImports = new AIDungeonImports(database, storyRepository, blockRepository, cardRepository,
                     imageRepository, DEFAULT_SYSTEM_PROMPT);
             ollamaClient = new OllamaClient();
+            ollamaClient.setChatRequestObserver(this::captureLastOllamaRequest);
             comfyUiClient = new ComfyUiClient();
             generationCoordinator = new GenerationCoordinator(database, blockRepository, storyRepository, cardRepository,
                     promptCompiler, ollamaClient);
@@ -309,6 +315,12 @@ public class App extends Application
         promptButton = new Button("Prompt");
         promptButton.setOnAction(event -> showPromptDialog());
 
+        contextButton = new Button("View Last Context");
+        contextButton.setDisable(true);
+        contextButton.setTooltip(new Tooltip(
+                "Shows the exact role-aware message list most recently submitted to Ollama."));
+        contextButton.setOnAction(event -> LastContextDialog.show(primaryStage, lastOllamaRequest));
+
         storyPaneController = new StoryPaneController(
                 primaryStage,
                 this::submitTurn,
@@ -339,7 +351,8 @@ public class App extends Application
         root.getStyleClass().add("app-root");
         root.setLeft(storyLibraryController.root());
         root.setCenter(storyPaneController.buildCenterPane(
-                takeTurnButton, continueButton, seeButton, retryButton, retryHistoryButton, deleteButton, promptButton));
+                takeTurnButton, continueButton, seeButton, retryButton, retryHistoryButton,
+                deleteButton, promptButton, contextButton));
         root.setRight(buildRightSidebar());
         root.setBottom(statusBar);
 
@@ -405,6 +418,25 @@ public class App extends Application
         if (storyPaneController != null)
         {
             storyPaneController.showTurnInput(show);
+        }
+    }
+
+    private void captureLastOllamaRequest(OllamaChatRequestSnapshot snapshot)
+    {
+        lastOllamaRequest = snapshot;
+        try
+        {
+            Platform.runLater(() ->
+            {
+                if (contextButton != null)
+                {
+                    contextButton.setDisable(snapshot == null);
+                }
+            });
+        }
+        catch (IllegalStateException ignored)
+        {
+            // JavaFX is shutting down; the snapshot remains intentionally in memory only.
         }
     }
 
@@ -507,6 +539,8 @@ public class App extends Application
             case OLLAMA_URL -> updateOllamaUrl(change.stringValue());
             case OLLAMA_KEEP_ALIVE_MINUTES -> updateOllamaKeepAliveMinutes(change.intValue());
             case CONTEXT_LIMIT -> updateContextLimit(change.intValue());
+            case STORY_CARD_WRAPPING_STYLE -> updateStoryCardWrappingStyle(
+                    (StoryCardWrappingStyle) change.value());
             case RESPONSE_LENGTH -> updateResponseLength(change.intValue());
             case RESPONSE_LENGTH_ENABLED -> updateResponseLengthEnabled(change.booleanValue());
             case TEMPERATURE -> updateTemperature(roundTo(change.doubleValue(), 0.1));
@@ -529,7 +563,6 @@ public class App extends Application
             case REPETITION_PENALTY_ENABLED -> updateRepetitionPenaltyEnabled(change.booleanValue());
             case MIN_STORY_PERCENT -> updateMinStoryPercent(change.intValue());
             case STORY_CARD_LOOKBACK -> updateStoryCardLookback(change.intValue());
-            case AN_PLACEMENT -> updateAnPlacement(change.intValue());
             case COMFY_UI_URL -> updateComfyUiUrl(change.stringValue());
             case COMFY_WORKFLOW -> updateComfyWorkflow(change.stringValue());
             case COMFY_WIDTH -> updateComfyWidth(change.intValue());
@@ -832,8 +865,9 @@ public class App extends Application
                 activeModelSettings.frequencyPenaltyEnabled(), activeModelSettings.frequencyPenalty(),
                 activeModelSettings.repeatLastNEnabled(), activeModelSettings.repeatLastN(),
                 activeModelSettings.repetitionPenaltyEnabled(), activeModelSettings.repetitionPenalty(),
-                minStoryWindow, appSettings.storyCardLookback(), appSettings.anPlacement(),
-                appSettings.ollamaKeepAliveMinutes());
+                minStoryWindow, appSettings.storyCardLookback(),
+                appSettings.ollamaKeepAliveMinutes(),
+                activeModelSettings.storyCardWrappingStyle(), activeModelSettings.conversationLayout());
     }
 
     private void refreshModelSelect()
@@ -2335,6 +2369,13 @@ public class App extends Application
         refreshGenerationSettings();
     }
 
+    private void updateStoryCardWrappingStyle(StoryCardWrappingStyle value)
+    {
+        activeModelSettings = SettingsCoordinator.withStoryCardWrappingStyle(activeModelSettings, value);
+        persistModelSettings();
+        refreshGenerationSettings();
+    }
+
     private void updateResponseLength(int value)
     {
         appSettings = SettingsCoordinator.withResponseLength(appSettings, value);
@@ -2492,13 +2533,6 @@ public class App extends Application
     private void updateStoryCardLookback(int value)
     {
         appSettings = SettingsCoordinator.withStoryCardLookback(appSettings, value);
-        persistAppSettings();
-        refreshGenerationSettings();
-    }
-
-    private void updateAnPlacement(int value)
-    {
-        appSettings = SettingsCoordinator.withAnPlacement(appSettings, value);
         persistAppSettings();
         refreshGenerationSettings();
     }

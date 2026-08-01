@@ -145,6 +145,32 @@ class OllamaClientContractTest
     }
 
     @Test
+    void capturesTheNormalizedOutboundMessageListBeforeTransportFailure()
+    {
+        StubOllamaClient client = new StubOllamaClient();
+        client.stringStatus = 503;
+        client.stringBody = "{\"error\":\"offline\"}";
+        AtomicReference<OllamaChatRequestSnapshot> captured = new AtomicReference<>();
+        client.setChatRequestObserver(captured::set);
+
+        assertThrows(IOException.class, () -> client.chatNonStreaming(
+                List.of(
+                        new ChatMessage("system", "Write prose."),
+                        new ChatMessage("assistant", "First"),
+                        new ChatMessage("assistant", " continuation.")),
+                GenerationSettings.defaults()));
+
+        OllamaChatRequestSnapshot snapshot = captured.get();
+        assertEquals("http://localhost:11434/api/chat", snapshot.endpoint());
+        assertEquals(GenerationSettings.DEFAULT_MODEL, snapshot.model());
+        assertFalse(snapshot.streaming());
+        assertEquals(List.of(
+                new ChatMessage("system", "Write prose."),
+                new ChatMessage("assistant", "First continuation.")),
+                snapshot.messages());
+    }
+
+    @Test
     void nonStreamingChatRejectsErrorsAndIncompleteResponses()
     {
         StubOllamaClient failed = new StubOllamaClient();

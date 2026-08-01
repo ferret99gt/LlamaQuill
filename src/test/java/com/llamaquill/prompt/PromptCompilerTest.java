@@ -6,10 +6,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.llamaquill.model.Block;
 import com.llamaquill.model.ChatMessage;
+import com.llamaquill.model.ConversationLayout;
 import com.llamaquill.model.GenerationSettings;
 import com.llamaquill.model.Role;
 import com.llamaquill.model.Story;
 import com.llamaquill.model.StoryCard;
+import com.llamaquill.model.StoryCardWrappingStyle;
 import com.llamaquill.prompt.PromptContextReport.Component;
 import com.llamaquill.prompt.PromptContextReport.Entry;
 import com.llamaquill.prompt.PromptContextReport.Status;
@@ -42,6 +44,55 @@ class PromptCompilerTest
                 new ChatMessage("user", "> Continue."),
                 new ChatMessage("assistant", "A new response.")),
                 messages);
+    }
+
+    @Test
+    void mergesPlotAndLoreIntoOneLeadUserTurnWithNewestTriggersLast()
+    {
+        StoryCard recentPinned = card("recent-pinned", "RecentName", "Recent pinned lore.", true);
+        StoryCard olderTriggered = card("older-triggered", "OldName", "Older triggered lore.", false);
+        StoryCard pinnedOnly = card("pinned-only", "AbsentName", "Pinned background lore.", true);
+
+        PromptCompilation compilation = new PromptCompiler().compile(
+                story("Narrate.", "Plot facts verbatim.", ""),
+                List.of(
+                        block("1", Role.ASSISTANT, "OldName arrived."),
+                        block("2", Role.ASSISTANT, " RecentName arrived.")),
+                List.of(recentPinned, olderTriggered, pinnedOnly),
+                settings(2048, false, 1, 100));
+
+        assertEquals(List.of(
+                new ChatMessage("system", "Narrate."),
+                new ChatMessage("user", """
+                        Plot facts verbatim.
+
+                        World Lore:
+                        Pinned background lore.
+                        Older triggered lore.
+                        Recent pinned lore."""),
+                new ChatMessage("assistant", "OldName arrived. RecentName arrived.")),
+                compilation.messages());
+        assertEquals(Component.PINNED_STORY_CARD, cardEntry(compilation, "pinned-only").component());
+        assertEquals(Component.TRIGGERED_STORY_CARD, cardEntry(compilation, "recent-pinned").component());
+        assertEquals(List.of("RecentName"), cardEntry(compilation, "recent-pinned").matchedTriggers());
+    }
+
+    @Test
+    void appliesTheSelectedModelWrappingToEachLoreEntryOnlyAtCompilation()
+    {
+        StoryCard first = card("first", "", "First entry.", true);
+        StoryCard legacyWrapped = card("second", "", "[Second entry.]", true);
+
+        PromptCompilation compilation = new PromptCompiler().compile(
+                story("", "Plot.", ""),
+                List.of(block("1", Role.ASSISTANT, "Story.")),
+                List.of(first, legacyWrapped),
+                settings(2048, false, 1, 100, StoryCardWrappingStyle.BRACES));
+
+        assertEquals("Plot.\n\nWorld Lore:\n{First entry.}\n{Second entry.}",
+                compilation.messages().getFirst().content());
+        assertEquals("First entry.", first.content());
+        assertEquals("[Second entry.]", legacyWrapped.content());
     }
 
     @Test
@@ -105,7 +156,7 @@ class PromptCompilerTest
                 story("", "", ""),
                 List.of(block("1", Role.ASSISTANT, "dragon castle quest")),
                 List.of(pinned, triggered),
-                settings(350, false, 1, 20));
+                settings(390, false, 1, 20));
 
         assertWithinBudget(compilation);
         assertEquals(Status.DROPPED, cardEntry(compilation, "pinned").status());
@@ -115,22 +166,22 @@ class PromptCompilerTest
     }
 
     @Test
-    void dropsTheLeastRelevantTriggeredCardFirst()
+    void dropsTheLeastRecentlyTriggeredCardFirst()
     {
         PromptCompiler compiler = exactCompiler();
-        StoryCard moreRelevant = card("two-matches", "dragon, castle", "A".repeat(40), false);
-        StoryCard lessRelevant = card("one-match", "dragon", "B".repeat(40), false);
+        StoryCard newer = card("newer", "castle", "A".repeat(40), false);
+        StoryCard older = card("older", "dragon", "B".repeat(40), false);
 
         PromptCompilation compilation = compiler.compile(
                 story("", "", ""),
                 List.of(block("1", Role.ASSISTANT, "dragon castle quest")),
-                List.of(lessRelevant, moreRelevant),
-                settings(350, false, 1, 20));
+                List.of(newer, older),
+                settings(390, false, 1, 20));
 
         assertWithinBudget(compilation);
-        assertEquals(Status.INCLUDED, cardEntry(compilation, "two-matches").status());
-        assertEquals(List.of("dragon", "castle"), cardEntry(compilation, "two-matches").matchedTriggers());
-        assertEquals(Status.DROPPED, cardEntry(compilation, "one-match").status());
+        assertEquals(Status.INCLUDED, cardEntry(compilation, "newer").status());
+        assertEquals(List.of("castle"), cardEntry(compilation, "newer").matchedTriggers());
+        assertEquals(Status.DROPPED, cardEntry(compilation, "older").status());
     }
 
     @Test
@@ -143,7 +194,7 @@ class PromptCompilerTest
                 story("", "Plot facts remain important.".repeat(2), "Use a tense, immediate voice."),
                 List.of(block("1", Role.ASSISTANT, "dragon castle quest")),
                 List.of(pinned),
-                settings(410, false, 1, 20));
+                settings(420, false, 1, 20));
 
         assertWithinBudget(compilation);
         assertEquals(Status.DROPPED, cardEntry(compilation, "pinned").status());
@@ -301,6 +352,71 @@ class PromptCompilerTest
                 compilation.contextReport().entries(Component.AUXILIARY_TASK).getFirst().status());
     }
 
+    @Test
+    void authorNoteEndsTheAssistantMergeBeforeARealUserBoundary()
+    {
+        PromptCompilation compilation = new PromptCompiler().compile(
+                story("Narrate.", "", "Keep the danger immediate."),
+                List.of(
+                        block("1", Role.ASSISTANT, "Earlier response."),
+                        block("2", Role.USER, "Move left."),
+                        block("3", Role.ASSISTANT, "First response."),
+                        block("4", Role.ASSISTANT, " Second response.")),
+                List.of(),
+                settings(2048, false, 1, 100));
+
+        assertEquals(List.of(
+                new ChatMessage("system", "Narrate."),
+                new ChatMessage("assistant",
+                        "Earlier response.\n\nAuthor's Note: Keep the danger immediate."),
+                new ChatMessage("user", "> Move left."),
+                new ChatMessage("assistant", "First response. Second response.")),
+                compilation.messages());
+    }
+
+    @Test
+    void authorNoteEndsTheAssistantMergeBeforeAnEphemeralBoundary()
+    {
+        PromptCompilation compilation = new PromptCompiler().compile(
+                story("Narrate.", "", "Keep the danger immediate."),
+                List.of(
+                        block("1", Role.ASSISTANT, "Earlier response."),
+                        block("2", Role.USER, "Move left."),
+                        block("3", Role.ASSISTANT, "First response."),
+                        block("4", Role.ASSISTANT, " Second response."),
+                        block("5", Role.ASSISTANT, " Third response.")),
+                List.of(),
+                settings(2048, false, 1, 100),
+                new PromptAuxiliaryInput(
+                        List.of(), "", null, "Continue from last response.", 2));
+
+        assertEquals(List.of(
+                new ChatMessage("system", "Narrate."),
+                new ChatMessage("assistant", "Earlier response."),
+                new ChatMessage("user", "> Move left."),
+                new ChatMessage("assistant",
+                        "First response.\n\nAuthor's Note: Keep the danger immediate."),
+                new ChatMessage("user", "Continue from last response."),
+                new ChatMessage("assistant", " Second response. Third response.")),
+                compilation.messages());
+    }
+
+    @Test
+    void authorNoteUsesAContextTurnWhenNoEarlierAssistantCanCarryIt()
+    {
+        PromptCompilation compilation = new PromptCompiler().compile(
+                story("Narrate.", "", "Keep the danger immediate."),
+                List.of(block("1", Role.ASSISTANT, "Opening prefill.")),
+                List.of(),
+                settings(2048, false, 1, 100));
+
+        assertEquals(List.of(
+                new ChatMessage("system", "Narrate."),
+                new ChatMessage("user", "Author's Note: Keep the danger immediate."),
+                new ChatMessage("assistant", "Opening prefill.")),
+                compilation.messages());
+    }
+
     private static PromptCompiler exactCompiler()
     {
         PromptCompiler compiler = new PromptCompiler();
@@ -355,6 +471,13 @@ class PromptCompilerTest
     private static GenerationSettings settings(int contextLimit, boolean responseLengthEnabled, int responseLength,
             int minStoryWindow)
     {
+        return settings(contextLimit, responseLengthEnabled, responseLength,
+                minStoryWindow, StoryCardWrappingStyle.NONE);
+    }
+
+    private static GenerationSettings settings(int contextLimit, boolean responseLengthEnabled, int responseLength,
+            int minStoryWindow, StoryCardWrappingStyle wrappingStyle)
+    {
         return new GenerationSettings(
                 GenerationSettings.DEFAULT_MODEL, GenerationSettings.DEFAULT_OLLAMA_HOST, contextLimit, 1.0,
                 responseLengthEnabled, responseLength,
@@ -369,6 +492,7 @@ class PromptCompilerTest
                 false, 1.05,
                 minStoryWindow,
                 7,
-                3);
+                com.llamaquill.model.AppSettings.DEFAULT_OLLAMA_KEEP_ALIVE_MINUTES,
+                wrappingStyle, ConversationLayout.ROLE_AWARE);
     }
 }

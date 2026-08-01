@@ -840,7 +840,8 @@ class StoryPaneControllerTest
                         throw new AssertionError(message, error);
                     });
             BorderPane root = controller.buildCenterPane(
-                    new Button(), new Button(), new Button(), new Button(), new Button(), new Button(), new Button());
+                    new Button(), new Button(), new Button(), new Button(), new Button(), new Button(),
+                    new Button(), new Button());
             Stage stage = new Stage();
             stage.setX(-10_000);
             stage.setY(-10_000);

@@ -2,6 +2,8 @@ package com.llamaquill.settings;
 
 import com.llamaquill.model.AppSettings;
 import com.llamaquill.model.ModelSettings;
+import com.llamaquill.model.ConversationLayout;
+import com.llamaquill.model.StoryCardWrappingStyle;
 
 public final class SettingsCoordinator
 {
@@ -35,6 +37,16 @@ public final class SettingsCoordinator
     public static ModelSettings withPromptTokenScale(ModelSettings current, double value)
     {
         return current.toBuilder().promptTokenScale(value).build();
+    }
+
+    public static ModelSettings withStoryCardWrappingStyle(ModelSettings current, StoryCardWrappingStyle value)
+    {
+        return current.toBuilder().storyCardWrappingStyle(value).build();
+    }
+
+    public static ModelSettings withConversationLayout(ModelSettings current, ConversationLayout value)
+    {
+        return current.toBuilder().conversationLayout(value).build();
     }
 
     public static ModelSettings calibratePromptTokenScale(ModelSettings current,
@@ -96,11 +108,6 @@ public final class SettingsCoordinator
     public static AppSettings withStoryCardLookback(AppSettings current, int value)
     {
         return current.toBuilder().storyCardLookback(value).build();
-    }
-
-    public static AppSettings withAnPlacement(AppSettings current, int value)
-    {
-        return current.toBuilder().anPlacement(value).build();
     }
 
     public static AppSettings withComfyWorkflow(AppSettings current, String workflow)

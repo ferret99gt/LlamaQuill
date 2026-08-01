@@ -55,12 +55,12 @@ public final class StoryCardGenerationCoordinator
                 savedCard);
         AuxiliaryGenerationService.Result generated = auxiliaryGenerationService.generate(
                 story, blocks, cards, settings, auxiliaryInput);
-        String formatted = StoryCardCommands.applyFormatting(generated.content(), request.formatting());
-        if (formatted.isBlank())
+        String entry = generated.content();
+        if (entry.isBlank())
         {
             throw new IOException("Ollama returned an empty Story Card entry.");
         }
-        return new Result(formatted, resolvedTriggers, generated.compilation(), generated.response());
+        return new Result(entry, resolvedTriggers, generated.compilation(), generated.response());
     }
 
     private StoryCard loadSavedCard(String storyId, String cardId) throws Exception
