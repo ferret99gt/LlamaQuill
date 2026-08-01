@@ -146,6 +146,15 @@ class PromptCompilerTest
     }
 
     @Test
+    void tightensTheRetryBudgetFromOllamasMeasuredContextError()
+    {
+        PromptBudget budget = PromptBudget.from(settings(50_176, false, 17, 100));
+
+        assertEquals(45_374, budget.inputLimit());
+        assertEquals(44_870, budget.correctedInputLimit(45_374, 50_472, 50_176));
+    }
+
+    @Test
     void dropsPinnedCardsBeforeTriggeredCards()
     {
         PromptCompiler compiler = exactCompiler();

@@ -3,6 +3,12 @@
 This changelog focuses on what changes for people using LlamaQuill. The Git history contains the
 implementation-level record.
 
+## Unreleased
+
+- When Ollama reports the exact prompt and context token counts for an oversized chat request,
+  LlamaQuill now recompiles against the corrected budget and retries once. This also lets the
+  existing per-model token calibration learn from the successful retry.
+
 ## 0.3.0
 
 Version 0.3.0 focuses on how story context is assembled, inspected, and adapted to different

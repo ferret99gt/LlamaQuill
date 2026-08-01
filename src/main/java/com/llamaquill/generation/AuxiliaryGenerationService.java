@@ -5,10 +5,13 @@ import com.llamaquill.model.GenerationSettings;
 import com.llamaquill.model.Story;
 import com.llamaquill.model.StoryCard;
 import com.llamaquill.prompt.PromptAuxiliaryInput;
+import com.llamaquill.prompt.PromptBudget;
 import com.llamaquill.prompt.PromptCompilation;
 import com.llamaquill.prompt.PromptCompiler;
 import com.llamaquill.serviceClients.OllamaChatResult;
 import com.llamaquill.serviceClients.OllamaClient;
+import com.llamaquill.serviceClients.OllamaContextLimitException;
+import com.llamaquill.serviceClients.OllamaException;
 
 import java.io.IOException;
 import java.util.List;
@@ -31,7 +34,29 @@ public final class AuxiliaryGenerationService
     {
         PromptCompilation compilation = promptCompiler.compile(
                 story, blocks, storyCards, settings, auxiliaryInput);
-        OllamaChatResult response = ollamaClient.chatNonStreaming(compilation.messages(), settings);
+        OllamaChatResult response;
+        try
+        {
+            response = ollamaClient.chatNonStreaming(compilation.messages(), settings);
+        }
+        catch (OllamaException error)
+        {
+            OllamaContextLimitException contextError = OllamaContextLimitException.from(error);
+            if (contextError == null)
+            {
+                throw error;
+            }
+            PromptBudget budget = compilation.contextReport().budget();
+            int correctedInputLimit = budget.correctedInputLimit(
+                    compilation.estimatedTokens(), contextError.promptTokens(), contextError.contextLimit());
+            if (correctedInputLimit >= budget.inputLimit())
+            {
+                throw error;
+            }
+            compilation = promptCompiler.compileWithinInputLimit(
+                    story, blocks, storyCards, settings, auxiliaryInput, correctedInputLimit);
+            response = ollamaClient.chatNonStreaming(compilation.messages(), settings);
+        }
         String content = response.content() == null ? "" : response.content().strip();
         return new Result(content, compilation, response);
     }

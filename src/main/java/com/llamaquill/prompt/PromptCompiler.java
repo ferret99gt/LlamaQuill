@@ -45,6 +45,14 @@ public class PromptCompiler
     public synchronized PromptCompilation compile(Story story, List<Block> blocks, List<StoryCard> storyCards,
             GenerationSettings settings, PromptAuxiliaryInput auxiliaryInput)
     {
+        return compileWithinInputLimit(
+                story, blocks, storyCards, settings, auxiliaryInput, Integer.MAX_VALUE);
+    }
+
+    public synchronized PromptCompilation compileWithinInputLimit(Story story, List<Block> blocks,
+            List<StoryCard> storyCards, GenerationSettings settings, PromptAuxiliaryInput auxiliaryInput,
+            int maximumInputTokens)
+    {
         Objects.requireNonNull(story, "story");
         Objects.requireNonNull(blocks, "blocks");
         Objects.requireNonNull(storyCards, "storyCards");
@@ -53,7 +61,7 @@ public class PromptCompiler
         operationTokenScale = settings.promptTokenScale();
         ConversationLayout conversationLayout = activeConversationLayout(settings.conversationLayout());
 
-        PromptBudget budget = PromptBudget.from(settings);
+        PromptBudget budget = PromptBudget.from(settings, maximumInputTokens);
         List<Block> originalWindow = List.copyOf(filterPromptBlocks(blocks));
         List<Block> window = new ArrayList<>(originalWindow);
         List<ChatMessage> originalTaskMessages = normalizeTrailingMessages(auxiliary.trailingMessages());
