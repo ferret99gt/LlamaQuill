@@ -5,6 +5,7 @@ import com.llamaquill.db.StoryCardRepository;
 import com.llamaquill.generation.AuxiliaryGenerationService;
 import com.llamaquill.model.Block;
 import com.llamaquill.model.ChatMessage;
+import com.llamaquill.model.ConversationLayout;
 import com.llamaquill.model.GenerationSettings;
 import com.llamaquill.model.Story;
 import com.llamaquill.model.StoryCard;
@@ -53,8 +54,9 @@ public final class StoryCardGenerationCoordinator
                 List.of(new ChatMessage("user", task)),
                 request.additionalContext(),
                 savedCard);
+        GenerationSettings storyCardSettings = settings.withConversationLayout(ConversationLayout.ROLE_AWARE);
         AuxiliaryGenerationService.Result generated = auxiliaryGenerationService.generate(
-                story, blocks, cards, settings, auxiliaryInput);
+                story, blocks, cards, storyCardSettings, auxiliaryInput);
         String entry = generated.content();
         if (entry.isBlank())
         {

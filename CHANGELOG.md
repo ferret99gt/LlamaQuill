@@ -13,6 +13,8 @@ implementation-level record.
   remain a distinct final user turn instead of blending into flattened story prose.
 - The most recently selected Story Card command preset is now saved globally and restored when
   another Story Card is opened, including built-in presets such as Basic Prose Prompt.
+- Story Card generation now always uses Role-aware Turns for its request, keeping the command in a
+  distinct final user turn even when the model's saved conversation layout is Flattened.
 
 ## 0.3.0
 

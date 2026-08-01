@@ -12,6 +12,7 @@ import com.llamaquill.db.StoryRepository;
 import com.llamaquill.generation.AuxiliaryGenerationService;
 import com.llamaquill.model.Block;
 import com.llamaquill.model.ChatMessage;
+import com.llamaquill.model.ConversationLayout;
 import com.llamaquill.model.GenerationSettings;
 import com.llamaquill.model.Role;
 import com.llamaquill.model.Story;
@@ -32,7 +33,7 @@ class StoryCardGenerationCoordinatorTest
     Path temporaryDirectory;
 
     @Test
-    void usesFullBudgetedContextSavedSelfReferenceAndPlainTextResponse() throws Exception
+    void forcesRoleAwareLayoutWhileUsingFullBudgetedContextAndSavedSelfReference() throws Exception
     {
         AppPaths paths = AppPaths.forDirectories(
                 temporaryDirectory.resolve("data"), temporaryDirectory.resolve("legacy"));
@@ -65,11 +66,15 @@ class StoryCardGenerationCoordinatorTest
                     "Rewrite {{title}} from this saved entry: {{entry}}",
                     "Mia is a rogue.");
 
+            GenerationSettings flattenedSettings = GenerationSettings.defaults()
+                    .withConversationLayout(ConversationLayout.FLATTENED);
             StoryCardGenerationCoordinator.Result result =
-                    coordinator.generate(story, request, GenerationSettings.defaults());
+                    coordinator.generate(story, request, flattenedSettings);
 
             assertEquals("Fresh Mia entry.", result.entry());
             assertEquals("Mia", result.resolvedTriggers());
+            assertEquals(ConversationLayout.FLATTENED, flattenedSettings.conversationLayout());
+            assertEquals(ConversationLayout.ROLE_AWARE, ollama.settings.conversationLayout());
             String completePrompt = ollama.messages.stream()
                     .map(ChatMessage::content)
                     .reduce("", String::concat);
@@ -84,6 +89,9 @@ class StoryCardGenerationCoordinatorTest
             assertEquals("user", ollama.messages.getLast().role());
             assertTrue(ollama.messages.getLast().content().contains("# Story Card Command"));
             assertTrue(ollama.messages.getLast().content().contains("# Additional Generation Context"));
+            assertFalse(ollama.messages.getLast().content().contains("Mia meets a guild member."));
+            assertTrue(ollama.messages.stream().anyMatch(message -> "assistant".equals(message.role())
+                    && message.content().contains("Mia meets a guild member.")));
         }
     }
 
@@ -95,11 +103,13 @@ class StoryCardGenerationCoordinatorTest
     private static final class CapturingOllamaClient extends OllamaClient
     {
         private List<ChatMessage> messages = List.of();
+        private GenerationSettings settings;
 
         @Override
         public OllamaChatResult chatNonStreaming(List<ChatMessage> messages, GenerationSettings settings)
         {
             this.messages = List.copyOf(messages);
+            this.settings = settings;
             return new OllamaChatResult(
                     settings.modelName(), " Fresh Mia entry. ",
                     100, 12, "stop", 1, 1, 1, 1, 0);
