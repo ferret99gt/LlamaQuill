@@ -97,10 +97,6 @@ public final class StoryCardDialogs
         ComboBox<StoryCardCommands.PresetChoice> presetChoice = new ComboBox<>();
         presetChoice.setMaxWidth(Double.MAX_VALUE);
         TextArea commandArea = textArea("", 7);
-        ComboBox<StoryCardCommands.EntryFormatting> formattingChoice = new ComboBox<>();
-        formattingChoice.getItems().setAll(StoryCardCommands.EntryFormatting.values());
-        formattingChoice.setValue(StoryCardCommands.EntryFormatting.NONE);
-        formattingChoice.setMaxWidth(Double.MAX_VALUE);
         TextArea additionalContextArea = textArea("", 5);
         additionalContextArea.setPromptText("Lore, notes, or keywords that should guide this generation.");
         CheckBox logGenerationsBox = new CheckBox("Log replaced entries in Notes");
@@ -137,7 +133,6 @@ public final class StoryCardDialogs
         VBox command = new VBox(8,
                 new Label("Story Card Command Preset"), presetRow,
                 new Label("Story Card Command"), commandArea, tokenHelp,
-                new Label("Entry Formatting"), formattingChoice,
                 new Label("Additional Generation Context"), additionalContextArea,
                 logGenerationsBox);
         command.setPadding(new Insets(10));
@@ -187,7 +182,6 @@ public final class StoryCardDialogs
                         title,
                         triggers,
                         validatedCommand,
-                        formattingChoice.getValue(),
                         additionalContextArea.getText());
             }
             catch (IllegalArgumentException e)

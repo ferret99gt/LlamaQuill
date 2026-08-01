@@ -9,7 +9,9 @@ public record ModelSettings(String modelName, boolean active, int contextLimit, 
         boolean presencePenaltyEnabled, double presencePenalty,
         boolean frequencyPenaltyEnabled, double frequencyPenalty,
         boolean repeatLastNEnabled, int repeatLastN,
-        boolean repetitionPenaltyEnabled, double repetitionPenalty)
+        boolean repetitionPenaltyEnabled, double repetitionPenalty,
+        StoryCardWrappingStyle storyCardWrappingStyle,
+        ConversationLayout conversationLayout)
 {
     public static final int MIN_CONTEXT_LIMIT = 1024;
     public static final int DEFAULT_CONTEXT_LIMIT = 8192;
@@ -35,6 +37,36 @@ public record ModelSettings(String modelName, boolean active, int contextLimit, 
         frequencyPenalty = clampFinite(frequencyPenalty, 0.0, -2.0, 2.0);
         repeatLastN = clamp(repeatLastN, -1, contextLimit);
         repetitionPenalty = clampFinite(repetitionPenalty, 1.05, 0.0, 5.0);
+        storyCardWrappingStyle = storyCardWrappingStyle == null
+                ? StoryCardWrappingStyle.NONE
+                : storyCardWrappingStyle;
+        conversationLayout = conversationLayout == null
+                ? ConversationLayout.ROLE_AWARE
+                : conversationLayout;
+    }
+
+    public ModelSettings(String modelName, boolean active, int contextLimit, double promptTokenScale,
+            boolean temperatureEnabled, double temperature,
+            boolean topKEnabled, int topK,
+            boolean topPEnabled, double topP,
+            boolean minPEnabled, double minP,
+            boolean typicalPEnabled, double typicalP,
+            boolean presencePenaltyEnabled, double presencePenalty,
+            boolean frequencyPenaltyEnabled, double frequencyPenalty,
+            boolean repeatLastNEnabled, int repeatLastN,
+            boolean repetitionPenaltyEnabled, double repetitionPenalty)
+    {
+        this(modelName, active, contextLimit, promptTokenScale,
+                temperatureEnabled, temperature,
+                topKEnabled, topK,
+                topPEnabled, topP,
+                minPEnabled, minP,
+                typicalPEnabled, typicalP,
+                presencePenaltyEnabled, presencePenalty,
+                frequencyPenaltyEnabled, frequencyPenalty,
+                repeatLastNEnabled, repeatLastN,
+                repetitionPenaltyEnabled, repetitionPenalty,
+                StoryCardWrappingStyle.NONE, ConversationLayout.ROLE_AWARE);
     }
 
     public static ModelSettings defaults(String modelName)
@@ -49,7 +81,8 @@ public record ModelSettings(String modelName, boolean active, int contextLimit, 
                 false, defaults.presencePenalty(),
                 false, defaults.frequencyPenalty(),
                 false, defaults.repeatLastN(),
-                false, defaults.repetitionPenalty());
+                false, defaults.repetitionPenalty(),
+                StoryCardWrappingStyle.NONE, ConversationLayout.ROLE_AWARE);
     }
 
     public Builder toBuilder()
@@ -92,6 +125,8 @@ public record ModelSettings(String modelName, boolean active, int contextLimit, 
         private int repeatLastN;
         private boolean repetitionPenaltyEnabled;
         private double repetitionPenalty;
+        private StoryCardWrappingStyle storyCardWrappingStyle;
+        private ConversationLayout conversationLayout;
 
         private Builder(ModelSettings settings)
         {
@@ -117,6 +152,8 @@ public record ModelSettings(String modelName, boolean active, int contextLimit, 
             repeatLastN = settings.repeatLastN();
             repetitionPenaltyEnabled = settings.repetitionPenaltyEnabled();
             repetitionPenalty = settings.repetitionPenalty();
+            storyCardWrappingStyle = settings.storyCardWrappingStyle();
+            conversationLayout = settings.conversationLayout();
         }
 
         public Builder contextLimit(int value)
@@ -239,6 +276,18 @@ public record ModelSettings(String modelName, boolean active, int contextLimit, 
             return this;
         }
 
+        public Builder storyCardWrappingStyle(StoryCardWrappingStyle value)
+        {
+            storyCardWrappingStyle = value;
+            return this;
+        }
+
+        public Builder conversationLayout(ConversationLayout value)
+        {
+            conversationLayout = value;
+            return this;
+        }
+
         public ModelSettings build()
         {
             return new ModelSettings(modelName, active, contextLimit, promptTokenScale,
@@ -250,7 +299,8 @@ public record ModelSettings(String modelName, boolean active, int contextLimit, 
                     presencePenaltyEnabled, presencePenalty,
                     frequencyPenaltyEnabled, frequencyPenalty,
                     repeatLastNEnabled, repeatLastN,
-                    repetitionPenaltyEnabled, repetitionPenalty);
+                    repetitionPenaltyEnabled, repetitionPenalty,
+                    storyCardWrappingStyle, conversationLayout);
         }
     }
 }

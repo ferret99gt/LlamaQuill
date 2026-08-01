@@ -1,8 +1,9 @@
 package com.llamaquill.generation;
 
 /**
- * Applies the smallest deterministic separator needed when a newly generated
- * assistant block is displayed directly after existing assistant prose.
+ * Applies the smallest deterministic separator needed when generated text is
+ * displayed after prose that was supplied as part of a flattened user document
+ * rather than as true assistant prefill.
  */
 final class ContinuationJoiner
 {

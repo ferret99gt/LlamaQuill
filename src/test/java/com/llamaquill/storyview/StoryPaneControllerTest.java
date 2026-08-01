@@ -2,7 +2,9 @@ package com.llamaquill.storyview;
 
 import com.llamaquill.model.Block;
 import com.llamaquill.model.Role;
+import com.llamaquill.model.Story;
 import com.llamaquill.model.StoryImage;
+import com.llamaquill.stories.StoryLibraryController;
 import javafx.animation.AnimationTimer;
 import javafx.application.Platform;
 import javafx.scene.Node;
@@ -63,6 +65,63 @@ class StoryPaneControllerTest
     static void stopJavaFx()
     {
         Platform.exit();
+    }
+
+    @Test
+    void storyLibraryOpensPressedStoryWhenDetailSaveRefreshesTheListBeforeClick() throws Exception
+    {
+        AtomicReference<Stage> stageReference = new AtomicReference<>();
+        AtomicReference<Story> openedStory = new AtomicReference<>();
+        try
+        {
+            runOnFxThread(() ->
+            {
+                Story active = new Story("new", "New Story", "System", "", "", "created", "updated-1");
+                Story intended = new Story("old", "Older Story", "System", "Plot", "Note", "created", "updated");
+                StoryLibraryController controller = new StoryLibraryController(
+                        280, () -> { }, () -> { }, openedStory::set);
+                controller.setStories(List.of(active, intended), active.id());
+
+                BorderPane root = new BorderPane(controller.root());
+                Stage stage = new Stage();
+                stage.setX(-10_000);
+                stage.setY(-10_000);
+                stage.setOpacity(0);
+                stage.setScene(new Scene(root, 800, 600));
+                stage.show();
+                root.applyCss();
+                root.layout();
+                stageReference.set(stage);
+
+                ListView<?> list = findNode(root, ListView.class, ignored -> true);
+                ListCell<?> intendedCell = findNode(root, ListCell.class,
+                        cell -> intended.equals(cell.getItem()));
+                assertNotNull(list);
+                assertNotNull(intendedCell);
+
+                fireMouseEvent(intendedCell, MouseEvent.MOUSE_PRESSED);
+                list.getSelectionModel().select(1);
+
+                Story savedActive = new Story(
+                        active.id(), active.title(), "Copied instructions", "", "", active.createdAt(), "updated-2");
+                controller.setStories(List.of(savedActive, intended), savedActive.id());
+                assertSame(savedActive, list.getSelectionModel().getSelectedItem());
+
+                fireMouseEvent(intendedCell, MouseEvent.MOUSE_RELEASED);
+                fireMouseEvent(intendedCell, MouseEvent.MOUSE_CLICKED);
+
+                assertSame(intended, openedStory.get(),
+                        "The save-triggered refresh replaced the story selected by the user's mouse press.");
+            });
+        }
+        finally
+        {
+            Stage stage = stageReference.get();
+            if (stage != null)
+            {
+                runOnFxThread(stage::close);
+            }
+        }
     }
 
     @Test
@@ -568,8 +627,11 @@ class StoryPaneControllerTest
         try
         {
             runOnFxThread(() -> fixture.controller().renderBlocks(blocks, true));
-            runOnFxThread(() -> { });
-            runOnFxThread(() -> { });
+            waitForFxCondition(() ->
+            {
+                Text target = findText(fixture.root(), edited.text());
+                return target != null && isNodeInsideListViewport(fixture.root(), target);
+            }, "The requested block did not settle into the viewport before editing.");
             runOnFxThread(() ->
             {
                 Text target = findText(fixture.root(), edited.text());
@@ -578,6 +640,12 @@ class StoryPaneControllerTest
                         "The requested block was not visible before opening its editor.");
                 fireClick(target);
             });
+            waitForFxCondition(() ->
+            {
+                TextArea editor = findNode(fixture.root(), TextArea.class,
+                        node -> edited.text().equals(node.getText()) && node.isVisible() && node.isManaged());
+                return editor != null && isNodeInsideListViewport(fixture.root(), editor);
+            }, "The edited block did not settle into the viewport.");
             runOnFxThread(() ->
             {
                 TextArea editor = assertVisibleEditor(fixture.root(), edited.text());
@@ -590,8 +658,12 @@ class StoryPaneControllerTest
                 fixture.controller().queueStreamingText(token[0], streamed);
                 fixture.controller().renderQueuedStreamingFrame();
             });
-            runOnFxThread(() -> { });
-            runOnFxThread(() -> { });
+            waitForFxCondition(() ->
+            {
+                Text draft = findText(fixture.root(), streamed);
+                return draft != null && isNodeInsideListViewport(fixture.root(), draft)
+                        && isStoryAtBottom(fixture.root());
+            }, "Streaming draft did not settle at the bottom after the editor closed.");
             runOnFxThread(() ->
             {
                 Text draft = findText(fixture.root(), streamed);
@@ -606,8 +678,11 @@ class StoryPaneControllerTest
                 fixture.controller().queueStreamingText(token[0], fullGrowth);
                 fixture.controller().renderQueuedStreamingFrame();
             });
-            runOnFxThread(() -> { });
-            runOnFxThread(() -> { });
+            waitForFxCondition(() ->
+            {
+                Text grownDraft = findText(fixture.root(), streamed + fullGrowth);
+                return grownDraft != null && isNodeBottomInsideListViewport(fixture.root(), grownDraft);
+            }, "The growing streaming response did not settle at the viewport bottom.");
             runOnFxThread(() ->
             {
                 Text grownDraft = findText(fixture.root(), streamed + fullGrowth);
@@ -624,8 +699,12 @@ class StoryPaneControllerTest
                 fixture.controller().endStreaming(token[0]);
                 fixture.controller().renderBlocks(committed, true);
             });
-            runOnFxThread(() -> { });
-            runOnFxThread(() -> { });
+            waitForFxCondition(() ->
+            {
+                Text generated = findText(fixture.root(), streamed + fullGrowth);
+                return generated != null && isNodeBottomInsideListViewport(fixture.root(), generated)
+                        && isStoryAtBottom(fixture.root());
+            }, "The committed response did not settle at the viewport bottom.");
             runOnFxThread(() ->
             {
                 Text generated = findText(fixture.root(), streamed + fullGrowth);
@@ -671,8 +750,11 @@ class StoryPaneControllerTest
         try
         {
             runOnFxThread(() -> fixture.controller().renderBlocks(blocks, true));
-            runOnFxThread(() -> { });
-            runOnFxThread(() -> { });
+            waitForFxCondition(() ->
+            {
+                Text headText = findText(fixture.root(), head.text());
+                return headText != null && isNodeInsideListViewport(fixture.root(), headText);
+            }, "The newest block did not settle into the bottom viewport.");
             runOnFxThread(() ->
             {
                 Text headText = findText(fixture.root(), head.text());
@@ -681,8 +763,12 @@ class StoryPaneControllerTest
                         "The tall final assistant cell was aligned to its top instead of its bottom.");
                 fireClick(headText);
             });
-            runOnFxThread(() -> { });
-            runOnFxThread(() -> { });
+            waitForFxCondition(() ->
+            {
+                TextArea editor = findNode(fixture.root(), TextArea.class,
+                        node -> head.text().equals(node.getText()) && node.isVisible() && node.isManaged());
+                return editor != null && isNodeInsideListViewport(fixture.root(), editor);
+            }, "The newest editor did not settle into the viewport.");
             runOnFxThread(() ->
             {
                 TextArea editor = assertVisibleEditor(fixture.root(), head.text());
@@ -781,7 +867,8 @@ class StoryPaneControllerTest
                         throw new AssertionError(message, error);
                     });
             BorderPane root = controller.buildCenterPane(
-                    new Button(), new Button(), new Button(), new Button(), new Button(), new Button(), new Button());
+                    new Button(), new Button(), new Button(), new Button(), new Button(), new Button(),
+                    new Button(), new Button());
             Stage stage = new Stage();
             stage.setX(-10_000);
             stage.setY(-10_000);
@@ -834,32 +921,51 @@ class StoryPaneControllerTest
 
     private static void assertStoryAtBottom(Parent root)
     {
+        assertTrue(isStoryAtBottom(root), "Story viewport is not at the bottom.");
+    }
+
+    private static boolean isStoryAtBottom(Parent root)
+    {
         ScrollBar vertical = findNode(root, ScrollBar.class,
                 bar -> bar.getOrientation() == javafx.geometry.Orientation.VERTICAL
                         && enclosingList(bar) != null);
-        assertNotNull(vertical);
-        assertTrue(vertical.getValue() >= vertical.getMax() - 0.01,
-                "Story viewport is not at the bottom: " + vertical.getValue() + " / " + vertical.getMax());
+        return vertical != null && vertical.getValue() >= vertical.getMax() - 0.01;
     }
 
     private static void assertNodeInsideListViewport(Parent root, Node node, String message)
     {
+        assertTrue(isNodeInsideListViewport(root, node), message);
+    }
+
+    private static boolean isNodeInsideListViewport(Parent root, Node node)
+    {
         ListView<?> list = findNode(root, ListView.class, ignored -> true);
-        assertNotNull(list);
+        if (list == null)
+        {
+            return false;
+        }
         Bounds listBounds = list.localToScene(list.getBoundsInLocal());
         Bounds nodeBounds = node.localToScene(node.getBoundsInLocal());
-        assertTrue(listBounds.intersects(nodeBounds), message + " list=" + listBounds + ", node=" + nodeBounds);
+        return listBounds != null && nodeBounds != null && listBounds.intersects(nodeBounds);
     }
 
     private static void assertNodeBottomInsideListViewport(Parent root, Node node, String message)
     {
+        assertTrue(isNodeBottomInsideListViewport(root, node), message);
+    }
+
+    private static boolean isNodeBottomInsideListViewport(Parent root, Node node)
+    {
         ListView<?> list = findNode(root, ListView.class, ignored -> true);
-        assertNotNull(list);
+        if (list == null)
+        {
+            return false;
+        }
         Bounds listBounds = list.localToScene(list.getBoundsInLocal());
         Bounds nodeBounds = node.localToScene(node.getBoundsInLocal());
-        assertTrue(nodeBounds.getMaxY() >= listBounds.getMinY() - 1
-                        && nodeBounds.getMaxY() <= listBounds.getMaxY() + 1,
-                message + " list=" + listBounds + ", node=" + nodeBounds);
+        return listBounds != null && nodeBounds != null
+                && nodeBounds.getMaxY() >= listBounds.getMinY() - 1
+                && nodeBounds.getMaxY() <= listBounds.getMaxY() + 1;
     }
 
     private static byte[] squarePng()

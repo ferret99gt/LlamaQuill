@@ -146,9 +146,9 @@ class AIDungeonImportsTest
             Path input = temporaryDirectory.resolve("variant-cards.json");
             Files.writeString(input, "\uFEFF" + """
                     [
-                      {"title":"Shared","keys":"Mia","value":"First card","type":"Character","notes":"Imported note"},
-                      {"title":"Shared","keys":["Emily","friend"],"value":"Second card"},
-                      {"title":"Duplicate label","keys":["Emily","friend"],"value":"Second card"},
+                      {"title":"Shared","keys":"Mia","value":"First card","type":"character","notes":"Imported note"},
+                      {"title":"Shared","keys":["Emily","friend"],"value":"Second card","type":"Mutated Humans"},
+                      {"title":"Duplicate label","keys":["Emily","friend"],"value":"Second card","type":"Mutated Humans"},
                       {"keys":"","value":""}
                     ]
                     """, StandardCharsets.UTF_8);
@@ -166,6 +166,7 @@ class AIDungeonImportsTest
                     .orElseThrow();
             assertEquals("Character", typed.type());
             assertEquals("Imported note", typed.notes());
+            assertTrue(imported.stream().anyMatch(card -> card.type().equals("Mutated Humans")));
             StoryCard titleless = imported.stream()
                     .filter(card -> card.title().equals("Untitled"))
                     .findFirst()
@@ -203,7 +204,7 @@ class AIDungeonImportsTest
                                   {
                                     "keys": ["Mia", {"text": "friend"}],
                                     "entry": "Mia is an old friend.",
-                                    "type": "Character",
+                                    "type": "character",
                                     "notes": "Old friend from home.",
                                     "pinned": true
                                   },

@@ -7,6 +7,7 @@ public record OllamaChatResult(String model, String content,
         int promptEvalCount, int evalCount, String doneReason,
         long totalDurationNanos, long loadDurationNanos,
         long promptEvalDurationNanos, long evalDurationNanos,
+        long clientRequestDurationNanos,
         int strippedAssistantPrefixCharacters)
 {
     public OllamaChatResult
@@ -20,7 +21,19 @@ public record OllamaChatResult(String model, String content,
         loadDurationNanos = Math.max(-1L, loadDurationNanos);
         promptEvalDurationNanos = Math.max(-1L, promptEvalDurationNanos);
         evalDurationNanos = Math.max(-1L, evalDurationNanos);
+        clientRequestDurationNanos = Math.max(-1L, clientRequestDurationNanos);
         strippedAssistantPrefixCharacters = Math.max(0, strippedAssistantPrefixCharacters);
+    }
+
+    public OllamaChatResult(String model, String content,
+            int promptEvalCount, int evalCount, String doneReason,
+            long totalDurationNanos, long loadDurationNanos,
+            long promptEvalDurationNanos, long evalDurationNanos,
+            int strippedAssistantPrefixCharacters)
+    {
+        this(model, content, promptEvalCount, evalCount, doneReason,
+                totalDurationNanos, loadDurationNanos, promptEvalDurationNanos, evalDurationNanos,
+                -1L, strippedAssistantPrefixCharacters);
     }
 
     public String diagnosticSummary()
@@ -52,6 +65,10 @@ public record OllamaChatResult(String model, String content,
         {
             append(summary, "Generation", formatDuration(evalDurationNanos));
         }
+        if (clientRequestDurationNanos >= 0)
+        {
+            append(summary, "Client request", formatDuration(clientRequestDurationNanos));
+        }
         if (strippedAssistantPrefixCharacters > 0)
         {
             append(summary, "Assistant prefill removed",
@@ -60,12 +77,28 @@ public record OllamaChatResult(String model, String content,
         return summary.toString();
     }
 
+    public String promptTokensProcessedLabel()
+    {
+        return promptEvalCount < 0 ? "" : String.format(Locale.US, "%,d tokens processed", promptEvalCount);
+    }
+
+    public String generationDurationLabel()
+    {
+        return evalDurationNanos < 0 ? "" : formatDuration(evalDurationNanos) + " generation";
+    }
+
+    public String clientRequestDurationLabel()
+    {
+        return clientRequestDurationNanos < 0 ? "" : formatDuration(clientRequestDurationNanos) + " request";
+    }
+
     public OllamaChatResult withContent(String updatedContent, int strippedPrefixCharacters)
     {
         return new OllamaChatResult(model, updatedContent,
                 promptEvalCount, evalCount, doneReason,
                 totalDurationNanos, loadDurationNanos,
                 promptEvalDurationNanos, evalDurationNanos,
+                clientRequestDurationNanos,
                 strippedPrefixCharacters);
     }
 

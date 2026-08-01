@@ -74,22 +74,6 @@ public final class StoryCardCommands
                 .replace(ENTRY_TOKEN, savedEntry == null ? "" : savedEntry);
     }
 
-    public static String applyFormatting(String generated, EntryFormatting formatting)
-    {
-        String normalized = generated == null ? "" : generated.trim();
-        if (normalized.isBlank())
-        {
-            return "";
-        }
-        EntryFormatting active = formatting == null ? EntryFormatting.NONE : formatting;
-        return switch (active)
-        {
-        case NONE -> normalized;
-        case BRACES -> "{" + normalized + "}";
-        case BRACKETS -> "[" + normalized + "]";
-        };
-    }
-
     public static String appendGenerationHistory(String notes, String priorEntry, LocalDateTime localTimestamp)
     {
         String previous = priorEntry == null ? "" : priorEntry.trim();
@@ -106,26 +90,6 @@ public final class StoryCardCommands
     public static String normalizeName(String name)
     {
         return name == null ? "" : name.trim().toLowerCase(Locale.ROOT);
-    }
-
-    public enum EntryFormatting
-    {
-        NONE("None"),
-        BRACES("{...}"),
-        BRACKETS("[...]");
-
-        private final String label;
-
-        EntryFormatting(String label)
-        {
-            this.label = label;
-        }
-
-        @Override
-        public String toString()
-        {
-            return label;
-        }
     }
 
     public record PresetChoice(String id, String name, String command, boolean builtIn)

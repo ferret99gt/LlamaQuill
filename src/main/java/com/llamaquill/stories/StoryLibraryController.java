@@ -9,6 +9,7 @@ import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
@@ -27,6 +28,7 @@ public final class StoryLibraryController
     private final Button importButton = new Button("Import AI Dungeon Adventure");
     private final Button collapseButton = new Button("<<");
     private final VBox root;
+    private Story pressedStory;
 
     public StoryLibraryController(int expandedWidth, Runnable onNewStory, Runnable onImport,
             Consumer<Story> onOpenStory)
@@ -46,20 +48,30 @@ public final class StoryLibraryController
         importButton.setMaxWidth(Double.MAX_VALUE);
         importButton.setOnAction(event -> onImport.run());
 
-        storyList.setCellFactory(list -> new ListCell<>()
+        storyList.setCellFactory(list ->
         {
-            @Override
-            protected void updateItem(Story item, boolean empty)
+            ListCell<Story> cell = new ListCell<>()
             {
-                super.updateItem(item, empty);
-                setText(empty || item == null ? null : item.title());
-            }
+                @Override
+                protected void updateItem(Story item, boolean empty)
+                {
+                    super.updateItem(item, empty);
+                    setText(empty || item == null ? null : item.title());
+                }
+            };
+            cell.addEventFilter(MouseEvent.MOUSE_PRESSED, event ->
+                    pressedStory = cell.isEmpty() ? null : cell.getItem());
+            return cell;
         });
+        storyList.addEventFilter(MouseEvent.MOUSE_PRESSED, event -> pressedStory = null);
         storyList.setOnMouseClicked(event ->
         {
             if (event.getClickCount() == 1)
             {
-                Story selected = storyList.getSelectionModel().getSelectedItem();
+                Story selected = pressedStory == null
+                        ? storyList.getSelectionModel().getSelectedItem()
+                        : findStory(pressedStory.id());
+                pressedStory = null;
                 if (selected != null)
                 {
                     onOpenStory.accept(selected);
@@ -106,6 +118,18 @@ public final class StoryLibraryController
                 return;
             }
         }
+    }
+
+    private Story findStory(String storyId)
+    {
+        for (Story story : stories)
+        {
+            if (story.id().equals(storyId))
+            {
+                return story;
+            }
+        }
+        return null;
     }
 
     public void toggle()

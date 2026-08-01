@@ -63,13 +63,12 @@ class StoryCardGenerationCoordinatorTest
                     "Mia",
                     "",
                     "Rewrite {{title}} from this saved entry: {{entry}}",
-                    StoryCardCommands.EntryFormatting.BRACKETS,
                     "Mia is a rogue.");
 
             StoryCardGenerationCoordinator.Result result =
                     coordinator.generate(story, request, GenerationSettings.defaults());
 
-            assertEquals("[Fresh Mia entry.]", result.entry());
+            assertEquals("Fresh Mia entry.", result.entry());
             assertEquals("Mia", result.resolvedTriggers());
             String completePrompt = ollama.messages.stream()
                     .map(ChatMessage::content)

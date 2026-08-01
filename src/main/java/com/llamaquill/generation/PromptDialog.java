@@ -5,9 +5,11 @@ import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
 import javafx.scene.control.TextArea;
+import javafx.scene.control.Tooltip;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
@@ -26,7 +28,8 @@ public final class PromptDialog
     @FunctionalInterface
     public interface ResponseGenerator
     {
-        void generate(String systemPrompt, String userPrompt, Consumer<String> onSuccess, Consumer<Throwable> onFailure);
+        void generate(String systemPrompt, String userPrompt, boolean overrideNumPredict,
+                Consumer<String> onSuccess, Consumer<Throwable> onFailure);
     }
 
     public static void show(Stage owner, String defaultSystemPrompt, Consumer<String> showInfo,
@@ -51,6 +54,12 @@ public final class PromptDialog
         responseArea.setWrapText(true);
         responseArea.setPrefRowCount(12);
 
+        CheckBox overrideNumPredict = new CheckBox(
+                "Override Response Length (allow full model response)");
+        overrideNumPredict.setSelected(true);
+        overrideNumPredict.setTooltip(new Tooltip(
+                "Omit Response Length for this Prompt without changing the saved Response Length setting."));
+
         Button generateButton = new Button("Generate Response");
         Button cancelButton = new Button("Cancel");
 
@@ -64,6 +73,7 @@ public final class PromptDialog
                 systemArea,
                 new Label("User Prompt"),
                 userArea,
+                overrideNumPredict,
                 new Label("Response"),
                 responseArea,
                 actions);
@@ -95,7 +105,7 @@ public final class PromptDialog
             generateButton.setDisable(true);
             setStatus.accept("Generating prompt response...");
             beginBusy.run();
-            generator.generate(systemPrompt, userPrompt,
+            generator.generate(systemPrompt, userPrompt, overrideNumPredict.isSelected(),
                     response ->
                     {
                         restoreButtons.run();

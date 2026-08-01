@@ -5,7 +5,9 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.llamaquill.model.AppSettings;
+import com.llamaquill.model.ConversationLayout;
 import com.llamaquill.model.ModelSettings;
+import com.llamaquill.model.StoryCardWrappingStyle;
 import org.junit.jupiter.api.Test;
 
 class SettingsValidationTest
@@ -51,6 +53,10 @@ class SettingsValidationTest
         original = SettingsCoordinator.withTypicalP(original, 0.73);
         original = SettingsCoordinator.withRepeatLastNEnabled(original, true);
         original = SettingsCoordinator.withRepeatLastN(original, -1);
+        original = SettingsCoordinator.withStoryCardWrappingStyle(
+                original, StoryCardWrappingStyle.BRACES);
+        original = SettingsCoordinator.withConversationLayout(
+                original, ConversationLayout.FLATTENED_WITH_PREFILL);
 
         assertEquals(original, original.toBuilder().build());
         ModelSettings updated = SettingsCoordinator.withTemperature(original, 0.0);
@@ -63,7 +69,45 @@ class SettingsValidationTest
         assertEquals(0.73, updated.typicalP());
         assertTrue(updated.repeatLastNEnabled());
         assertEquals(-1, updated.repeatLastN());
+        assertEquals(StoryCardWrappingStyle.BRACES, updated.storyCardWrappingStyle());
+        assertEquals(ConversationLayout.FLATTENED_WITH_PREFILL, updated.conversationLayout());
         assertFalse(updated.topKEnabled());
+    }
+
+    @Test
+    void promptCalibrationIgnoresSubPercentMeasurementJitter()
+    {
+        ModelSettings original = SettingsCoordinator.withPromptTokenScale(
+                ModelSettings.defaults("model-name"), 1.25);
+
+        ModelSettings calibrated = SettingsCoordinator.calibratePromptTokenScale(
+                original, 44_443, 44_465);
+
+        assertTrue(calibrated == original);
+        assertEquals(1.25, calibrated.promptTokenScale());
+    }
+
+    @Test
+    void promptCalibrationAppliesMeaningfulEstimateErrorInOneStep()
+    {
+        ModelSettings original = ModelSettings.defaults("model-name");
+
+        ModelSettings calibrated = SettingsCoordinator.calibratePromptTokenScale(
+                original, 5_000, 6_000);
+
+        assertEquals(1.2, calibrated.promptTokenScale(), 0.000_001);
+    }
+
+    @Test
+    void promptCalibrationIgnoresSamplesSmallerThanHalfTheContextWindow()
+    {
+        ModelSettings original = ModelSettings.defaults("model-name");
+
+        ModelSettings calibrated = SettingsCoordinator.calibratePromptTokenScale(
+                original, 3_000, 3_600);
+
+        assertTrue(calibrated == original);
+        assertEquals(1.0, calibrated.promptTokenScale());
     }
 
     @Test
@@ -77,7 +121,6 @@ class SettingsValidationTest
                 Integer.MAX_VALUE,
                 2,
                 -10,
-                500,
                 "",
                 1,
                 99999,
@@ -88,7 +131,6 @@ class SettingsValidationTest
         assertEquals(32768, settings.responseLength());
         assertEquals(AppSettings.MIN_STORY_PERCENT, settings.minStoryPercent());
         assertEquals(0, settings.storyCardLookback());
-        assertEquals(100, settings.anPlacement());
         assertEquals(64, settings.comfyWidth());
         assertEquals(4096, settings.comfyHeight());
         assertEquals(1, settings.comfyBatchSize());

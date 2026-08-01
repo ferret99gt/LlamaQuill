@@ -6,6 +6,7 @@ import com.llamaquill.db.StoryCardRepository;
 import com.llamaquill.db.StoryRepository;
 import com.llamaquill.model.Block;
 import com.llamaquill.model.ChatMessage;
+import com.llamaquill.model.ConversationLayout;
 import com.llamaquill.model.GenerationSettings;
 import com.llamaquill.model.Role;
 import com.llamaquill.model.Story;
@@ -63,11 +64,11 @@ public final class GenerationCoordinator
         String expectedHeadId = headId(currentBlocks);
         List<StoryCard> currentCards = storyCardRepository.listForStory(story.id());
 
-        ContinuationCompilation continuation = compileContinuation(
+        PromptCompilation compilation = compileContinuation(
                 story, currentBlocks, currentCards, settings);
-        PromptCompilation compilation = continuation.compilation();
+        String adjacentAssistantText = flattenedAdjacentAssistantText(currentBlocks, settings);
         GeneratedText generated = generateContinuationWithFallback(
-                compilation, settings, activeObserver, continuation.adjacentAssistantText());
+                compilation, settings, activeObserver, adjacentAssistantText);
         if (generated.text().isBlank())
         {
             return new ContinueResult(story, null, compilation.estimatedTokens(), ResultStatus.EMPTY,
@@ -111,11 +112,11 @@ public final class GenerationCoordinator
         promptBlocks.removeLast();
         List<StoryCard> currentCards = storyCardRepository.listForStory(story.id());
 
-        ContinuationCompilation continuation = compileContinuation(
+        PromptCompilation compilation = compileContinuation(
                 story, promptBlocks, currentCards, settings);
-        PromptCompilation compilation = continuation.compilation();
+        String adjacentAssistantText = flattenedAdjacentAssistantText(promptBlocks, settings);
         GeneratedText generated = generateContinuationWithFallback(
-                compilation, settings, activeObserver, continuation.adjacentAssistantText());
+                compilation, settings, activeObserver, adjacentAssistantText);
         if (generated.text().isBlank())
         {
             return new RetryResult(null, compilation.estimatedTokens(), ResultStatus.EMPTY, generated.response());
@@ -170,7 +171,10 @@ public final class GenerationCoordinator
         currentCards = storyCardRepository.listForStory(story.id());
 
         PromptCompilation compilation = promptCompiler.compile(story, currentBlocks, currentCards, settings);
-        String adjacentAssistantText = seedRole == Role.ASSISTANT ? seedResult.seedBlock().text() : "";
+        String adjacentAssistantText = settings.conversationLayout() == ConversationLayout.FLATTENED
+                && seedRole == Role.ASSISTANT
+                        ? seedResult.seedBlock().text()
+                        : "";
         activeObserver.onAttemptStarted("");
         OllamaChatResult response = generateResponse(
                 compilation, settings, activeObserver, adjacentAssistantText);
@@ -203,18 +207,16 @@ public final class GenerationCoordinator
         return storyRepository.touch(story.id(), Timestamps.now());
     }
 
-    private ContinuationCompilation compileContinuation(Story story, List<Block> blocks,
+    private PromptCompilation compileContinuation(Story story, List<Block> blocks,
             List<StoryCard> storyCards, GenerationSettings settings)
     {
         int assistantTailBlockCount = assistantTailBlockCountAfterContinuationCue(blocks);
-        PromptAuxiliaryInput auxiliaryInput = assistantTailBlockCount > 0
-                ? new PromptAuxiliaryInput(
-                        List.of(), "", null, CONTINUE_PROMPT, assistantTailBlockCount)
-                : PromptAuxiliaryInput.none();
-        PromptCompilation compilation = promptCompiler.compile(
-                story, blocks, storyCards, settings, auxiliaryInput);
-        return new ContinuationCompilation(
-                compilation, adjacentAssistantText(blocks));
+        PromptAuxiliaryInput auxiliaryInput = new PromptAuxiliaryInput(
+                List.of(), "", null,
+                assistantTailBlockCount > 0 ? CONTINUE_PROMPT : "",
+                assistantTailBlockCount,
+                true);
+        return promptCompiler.compile(story, blocks, storyCards, settings, auxiliaryInput);
     }
 
     private static int assistantTailBlockCountAfterContinuationCue(List<Block> blocks)
@@ -232,22 +234,22 @@ public final class GenerationCoordinator
                 return 0;
             }
             promptBlockCount++;
-            if (promptBlockCount == 2)
+            if (promptBlockCount > 2)
             {
-                return promptBlockCount;
+                return 2;
             }
         }
-        return promptBlockCount;
+        return Math.min(2, promptBlockCount);
     }
 
-    private static String adjacentAssistantText(List<Block> blocks)
+    private static String flattenedAdjacentAssistantText(List<Block> blocks, GenerationSettings settings)
     {
-        if (blocks.isEmpty())
+        if (settings.conversationLayout() != ConversationLayout.FLATTENED || blocks.isEmpty())
         {
             return "";
         }
-        Block block = blocks.getLast();
-        return block != null && block.role() == Role.ASSISTANT ? block.text() : "";
+        Block head = blocks.getLast();
+        return head != null && head.role() == Role.ASSISTANT ? head.text() : "";
     }
 
     private GeneratedText generateContinuationWithFallback(PromptCompilation compilation, GenerationSettings settings,
@@ -295,8 +297,7 @@ public final class GenerationCoordinator
             GenerationObserver observer, String adjacentAssistantText)
             throws IOException, InterruptedException
     {
-        StreamingOutputNormalizer normalizer = new StreamingOutputNormalizer(
-                observer, adjacentAssistantText);
+        StreamingOutputNormalizer normalizer = new StreamingOutputNormalizer(observer, adjacentAssistantText);
         try
         {
             return ollamaClient.chat(compilation.messages(), settings, normalizer::accept);
@@ -391,10 +392,6 @@ public final class GenerationCoordinator
     {
     }
 
-    private record ContinuationCompilation(PromptCompilation compilation, String adjacentAssistantText)
-    {
-    }
-
     private static final class StreamingOutputNormalizer
     {
         private final GenerationObserver observer;
@@ -406,7 +403,6 @@ public final class GenerationCoordinator
         {
             this.observer = observer;
             this.adjacentAssistantText = adjacentAssistantText == null ? "" : adjacentAssistantText;
-            boundaryDecided = this.adjacentAssistantText.isEmpty();
         }
 
         private void accept(String chunk)
@@ -442,7 +438,6 @@ public final class GenerationCoordinator
             if (pendingCarriageReturn)
             {
                 pendingCarriageReturn = false;
-                boundaryDecided = true;
                 observer.onGeneratedText("\n");
             }
         }

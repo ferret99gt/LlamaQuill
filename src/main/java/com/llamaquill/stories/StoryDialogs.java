@@ -6,6 +6,7 @@ import javafx.geometry.Insets;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonBar;
 import javafx.scene.control.ButtonType;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
 import javafx.scene.control.TextField;
@@ -41,7 +42,7 @@ public final class StoryDialogs
     }
 
     public static void showStoryDialog(Stage owner, Story story, Consumer<String> showInfo, Consumer<String> onPlay,
-            Consumer<String> onUpdate, Supplier<Boolean> confirmDelete, Runnable onDelete)
+            Consumer<String> onUpdate, Runnable onClone, Supplier<Boolean> confirmDelete, Runnable onDelete)
     {
         Dialog<Void> dialog = new Dialog<>();
         dialog.setTitle("Story");
@@ -56,10 +57,12 @@ public final class StoryDialogs
 
         ButtonType playType = new ButtonType("Play", ButtonBar.ButtonData.OK_DONE);
         ButtonType updateType = new ButtonType("Update", ButtonBar.ButtonData.APPLY);
+        ButtonType cloneType = new ButtonType("Clone", ButtonBar.ButtonData.LEFT);
         ButtonType deleteType = new ButtonType("Delete", ButtonBar.ButtonData.LEFT);
         ButtonType cancelType = new ButtonType("Cancel", ButtonBar.ButtonData.CANCEL_CLOSE);
-        dialog.getDialogPane().getButtonTypes().addAll(playType, updateType, deleteType, cancelType);
+        dialog.getDialogPane().getButtonTypes().addAll(playType, updateType, cloneType, deleteType, cancelType);
         dialog.getDialogPane().setContent(content);
+        boolean[] cloneRequested = { false };
 
         Button playButton = (Button) dialog.getDialogPane().lookupButton(playType);
         playButton.addEventFilter(ActionEvent.ACTION, event ->
@@ -89,6 +92,14 @@ public final class StoryDialogs
             dialog.close();
         });
 
+        Button cloneButton = (Button) dialog.getDialogPane().lookupButton(cloneType);
+        cloneButton.addEventFilter(ActionEvent.ACTION, event ->
+        {
+            event.consume();
+            cloneRequested[0] = true;
+            dialog.close();
+        });
+
         Button deleteButton = (Button) dialog.getDialogPane().lookupButton(deleteType);
         deleteButton.addEventFilter(ActionEvent.ACTION, event ->
         {
@@ -101,5 +112,60 @@ public final class StoryDialogs
         });
 
         dialog.showAndWait();
+        if (cloneRequested[0])
+        {
+            onClone.run();
+        }
+    }
+
+    public static void showCloneStoryDialog(Stage owner, Story story, Consumer<String> showInfo,
+            Consumer<StoryCloneRequest> onClone)
+    {
+        StoryCloneRequest defaults = StoryCloneRequest.defaultsFor(story);
+        Dialog<StoryCloneRequest> dialog = new Dialog<>();
+        dialog.setTitle("Clone Story");
+        dialog.setHeaderText("Choose what to copy into the new story");
+        dialog.initOwner(owner);
+
+        TextField nameField = new TextField(defaults.newName());
+        nameField.setPrefWidth(360);
+        CheckBox details = new CheckBox("Story Details (AI Instructions, Plot Essentials, Author's Note)");
+        CheckBox cards = new CheckBox("Story Cards");
+        CheckBox initialBlock = new CheckBox("Initial story block");
+        CheckBox allBlocks = new CheckBox("All story blocks");
+        details.setSelected(defaults.includeStoryDetails());
+        cards.setSelected(defaults.includeStoryCards());
+        initialBlock.setSelected(defaults.includeInitialBlock());
+        allBlocks.setSelected(defaults.includeAllBlocks());
+        initialBlock.disableProperty().bind(allBlocks.selectedProperty());
+
+        Label allBlocksHint = new Label("All story blocks includes the initial story block.");
+        allBlocksHint.setWrapText(true);
+
+        VBox content = new VBox(10,
+                new Label("New Name"), nameField,
+                details, cards, initialBlock, allBlocks, allBlocksHint);
+        content.setPadding(new Insets(10));
+        dialog.getDialogPane().setContent(content);
+
+        ButtonType cloneType = new ButtonType("Clone", ButtonBar.ButtonData.OK_DONE);
+        ButtonType cancelType = new ButtonType("Cancel", ButtonBar.ButtonData.CANCEL_CLOSE);
+        dialog.getDialogPane().getButtonTypes().addAll(cloneType, cancelType);
+        dialog.setResultConverter(button -> button == cloneType
+                ? new StoryCloneRequest(nameField.getText(), details.isSelected(), cards.isSelected(),
+                        initialBlock.isSelected(), allBlocks.isSelected())
+                : null);
+
+        Button cloneButton = (Button) dialog.getDialogPane().lookupButton(cloneType);
+        cloneButton.addEventFilter(ActionEvent.ACTION, event ->
+        {
+            if (nameField.getText().trim().isEmpty())
+            {
+                event.consume();
+                showInfo.accept("Story name cannot be empty.");
+            }
+        });
+
+        dialog.showAndWait().ifPresent(onClone);
     }
 }

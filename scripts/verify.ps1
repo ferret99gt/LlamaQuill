@@ -47,8 +47,7 @@ if ($bomFiles.Count -gt 0)
 
 Invoke-Maven @('clean', 'verify')
 Invoke-Maven @('-Prelease', 'package')
-Invoke-Maven @('clean')
-Invoke-Maven @('-Prelease', 'package')
+Invoke-Maven @('-Prelease', 'clean', 'package')
 
 $launcher = Join-Path $repositoryRoot 'target\dist\LlamaQuill\LlamaQuill.exe'
 $runtimeJava = Join-Path $repositoryRoot 'target\dist\LlamaQuill\runtime\bin\java.exe'

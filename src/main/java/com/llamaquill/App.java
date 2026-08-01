@@ -10,23 +10,27 @@ import com.llamaquill.db.ModelSettingsRepository;
 import com.llamaquill.db.StoryCardCommandPresetRepository;
 import com.llamaquill.generation.AuxiliaryGenerationService;
 import com.llamaquill.generation.GenerationCoordinator;
+import com.llamaquill.generation.LastContextDialog;
 import com.llamaquill.generation.PromptDialog;
 import com.llamaquill.generation.StoryPromptCoordinator;
 import com.llamaquill.image.ImageGenerationCoordinator;
 import com.llamaquill.image.SeeDialog;
 import com.llamaquill.model.Block;
 import com.llamaquill.model.AppSettings;
+import com.llamaquill.model.ConversationLayout;
 import com.llamaquill.model.GenerationSettings;
 import com.llamaquill.model.ModelSettings;
 import com.llamaquill.model.Role;
 import com.llamaquill.model.Story;
 import com.llamaquill.model.StoryCard;
 import com.llamaquill.model.StoryImage;
+import com.llamaquill.model.StoryCardWrappingStyle;
 import com.llamaquill.imports.AIDungeonImports;
 import com.llamaquill.imports.ImportDialogs;
 import com.llamaquill.prompt.PromptCompiler;
 import com.llamaquill.serviceClients.ComfyUiClient;
 import com.llamaquill.serviceClients.OllamaChatResult;
+import com.llamaquill.serviceClients.OllamaChatRequestSnapshot;
 import com.llamaquill.serviceClients.OllamaClient;
 import com.llamaquill.serviceClients.OllamaEndpoint;
 import com.llamaquill.serviceClients.OllamaException;
@@ -39,6 +43,7 @@ import com.llamaquill.session.StoryWorkspace;
 import com.llamaquill.settings.SettingsCoordinator;
 import com.llamaquill.settings.SettingsPaneController;
 import com.llamaquill.stories.StoryBlockService;
+import com.llamaquill.stories.StoryCloneService;
 import com.llamaquill.stories.StoryDialogs;
 import com.llamaquill.stories.StoryLibraryController;
 import com.llamaquill.stories.StoryService;
@@ -128,6 +133,7 @@ public class App extends Application
     private StoryCardGenerationCoordinator storyCardGenerationCoordinator;
     private StoryCardPresetService storyCardPresetService;
     private StoryBlockService storyBlockService;
+    private StoryCloneService storyCloneService;
     private StoryService storyService;
     private StoryCardService storyCardService;
     private AIDungeonImports aiDungeonImports;
@@ -154,6 +160,8 @@ public class App extends Application
     private Button retryHistoryButton;
     private Button seeButton;
     private Button promptButton;
+    private Button contextButton;
+    private volatile OllamaChatRequestSnapshot lastOllamaRequest;
 
     private Button collapseRightButton;
     private VBox rightSidebar;
@@ -171,7 +179,6 @@ public class App extends Application
     private boolean storyDetailsDirty;
 
     private List<String> comfyWorkflowNames = new ArrayList<>();
-    private static final double TOKEN_SCALE_ALPHA = 0.2;
     private final Map<String, OllamaModelDetails> modelDetailsByName = new HashMap<>();
 
     private static final String DEFAULT_SEE_REQUEST = "Generate an image prompt for the most recent scene in the story.";
@@ -245,6 +252,8 @@ public class App extends Application
             storyService = new StoryService(storyRepository, blockRepository);
             storyCardService = new StoryCardService(cardRepository);
             ImageRepository imageRepository = new ImageRepository(database);
+            storyCloneService = new StoryCloneService(
+                    database, storyRepository, blockRepository, cardRepository, imageRepository);
             appSettingsRepository = new AppSettingsRepository(database);
             modelSettingsRepository = new ModelSettingsRepository(database);
             StoryCardCommandPresetRepository presetRepository = new StoryCardCommandPresetRepository(database);
@@ -252,6 +261,7 @@ public class App extends Application
             aiDungeonImports = new AIDungeonImports(database, storyRepository, blockRepository, cardRepository,
                     imageRepository, DEFAULT_SYSTEM_PROMPT);
             ollamaClient = new OllamaClient();
+            ollamaClient.setChatRequestObserver(this::captureLastOllamaRequest);
             comfyUiClient = new ComfyUiClient();
             generationCoordinator = new GenerationCoordinator(database, blockRepository, storyRepository, cardRepository,
                     promptCompiler, ollamaClient);
@@ -306,6 +316,12 @@ public class App extends Application
         promptButton = new Button("Prompt");
         promptButton.setOnAction(event -> showPromptDialog());
 
+        contextButton = new Button("View Last Context");
+        contextButton.setDisable(true);
+        contextButton.setTooltip(new Tooltip(
+                "Shows the exact role-aware message list most recently submitted to Ollama."));
+        contextButton.setOnAction(event -> LastContextDialog.show(primaryStage, lastOllamaRequest));
+
         storyPaneController = new StoryPaneController(
                 primaryStage,
                 this::submitTurn,
@@ -336,7 +352,8 @@ public class App extends Application
         root.getStyleClass().add("app-root");
         root.setLeft(storyLibraryController.root());
         root.setCenter(storyPaneController.buildCenterPane(
-                takeTurnButton, continueButton, seeButton, retryButton, retryHistoryButton, deleteButton, promptButton));
+                takeTurnButton, continueButton, seeButton, retryButton, retryHistoryButton,
+                deleteButton, promptButton, contextButton));
         root.setRight(buildRightSidebar());
         root.setBottom(statusBar);
 
@@ -402,6 +419,25 @@ public class App extends Application
         if (storyPaneController != null)
         {
             storyPaneController.showTurnInput(show);
+        }
+    }
+
+    private void captureLastOllamaRequest(OllamaChatRequestSnapshot snapshot)
+    {
+        lastOllamaRequest = snapshot;
+        try
+        {
+            Platform.runLater(() ->
+            {
+                if (contextButton != null)
+                {
+                    contextButton.setDisable(snapshot == null);
+                }
+            });
+        }
+        catch (IllegalStateException ignored)
+        {
+            // JavaFX is shutting down; the snapshot remains intentionally in memory only.
         }
     }
 
@@ -504,6 +540,10 @@ public class App extends Application
             case OLLAMA_URL -> updateOllamaUrl(change.stringValue());
             case OLLAMA_KEEP_ALIVE_MINUTES -> updateOllamaKeepAliveMinutes(change.intValue());
             case CONTEXT_LIMIT -> updateContextLimit(change.intValue());
+            case STORY_CARD_WRAPPING_STYLE -> updateStoryCardWrappingStyle(
+                    (StoryCardWrappingStyle) change.value());
+            case CONVERSATION_LAYOUT -> updateConversationLayout(
+                    (ConversationLayout) change.value());
             case RESPONSE_LENGTH -> updateResponseLength(change.intValue());
             case RESPONSE_LENGTH_ENABLED -> updateResponseLengthEnabled(change.booleanValue());
             case TEMPERATURE -> updateTemperature(roundTo(change.doubleValue(), 0.1));
@@ -526,7 +566,6 @@ public class App extends Application
             case REPETITION_PENALTY_ENABLED -> updateRepetitionPenaltyEnabled(change.booleanValue());
             case MIN_STORY_PERCENT -> updateMinStoryPercent(change.intValue());
             case STORY_CARD_LOOKBACK -> updateStoryCardLookback(change.intValue());
-            case AN_PLACEMENT -> updateAnPlacement(change.intValue());
             case COMFY_UI_URL -> updateComfyUiUrl(change.stringValue());
             case COMFY_WORKFLOW -> updateComfyWorkflow(change.stringValue());
             case COMFY_WIDTH -> updateComfyWidth(change.intValue());
@@ -829,8 +868,9 @@ public class App extends Application
                 activeModelSettings.frequencyPenaltyEnabled(), activeModelSettings.frequencyPenalty(),
                 activeModelSettings.repeatLastNEnabled(), activeModelSettings.repeatLastN(),
                 activeModelSettings.repetitionPenaltyEnabled(), activeModelSettings.repetitionPenalty(),
-                minStoryWindow, appSettings.storyCardLookback(), appSettings.anPlacement(),
-                appSettings.ollamaKeepAliveMinutes());
+                minStoryWindow, appSettings.storyCardLookback(),
+                appSettings.ollamaKeepAliveMinutes(),
+                activeModelSettings.storyCardWrappingStyle(), activeModelSettings.conversationLayout());
     }
 
     private void refreshModelSelect()
@@ -1213,15 +1253,12 @@ public class App extends Application
             }
 
             ModelSettings modelSettings = stored.get();
-            double oldScale = modelSettings.promptTokenScale();
-            double sampleRatio = response.promptEvalCount() / (double) estimatedPromptTokens;
-            double targetScale = oldScale * sampleRatio;
-            targetScale = Math.max(ModelSettings.MIN_PROMPT_TOKEN_SCALE,
-                    Math.min(ModelSettings.MAX_PROMPT_TOKEN_SCALE, targetScale));
-            double updated = oldScale + (targetScale - oldScale) * TOKEN_SCALE_ALPHA;
-            updated = Math.max(ModelSettings.MIN_PROMPT_TOKEN_SCALE,
-                    Math.min(ModelSettings.MAX_PROMPT_TOKEN_SCALE, updated));
-            ModelSettings calibrated = SettingsCoordinator.withPromptTokenScale(modelSettings, updated);
+            ModelSettings calibrated = SettingsCoordinator.calibratePromptTokenScale(
+                    modelSettings, estimatedPromptTokens, response.promptEvalCount());
+            if (calibrated.equals(modelSettings))
+            {
+                return;
+            }
             modelSettingsRepository.save(calibrated);
             if (activeModelSettings != null && response.model().equals(activeModelSettings.modelName()))
             {
@@ -1243,6 +1280,28 @@ public class App extends Application
             String summary = response.diagnosticSummary();
             statusLabel.setTooltip(summary.isBlank() ? null : new Tooltip(summary));
         }
+    }
+
+    private static String readyStatus(OllamaChatResult response)
+    {
+        if (response == null)
+        {
+            return "Ready";
+        }
+        List<String> details = new ArrayList<>();
+        if (!response.promptTokensProcessedLabel().isBlank())
+        {
+            details.add(response.promptTokensProcessedLabel());
+        }
+        if (!response.clientRequestDurationLabel().isBlank())
+        {
+            details.add(response.clientRequestDurationLabel());
+        }
+        if (!response.generationDurationLabel().isBlank())
+        {
+            details.add(response.generationDurationLabel());
+        }
+        return details.isEmpty() ? "Ready" : "Ready - " + String.join(" - ", details);
     }
 
     private <T> Task<T> submitTask(Callable<T> work, Consumer<T> onSuccess, Consumer<Throwable> onFailure)
@@ -1402,8 +1461,28 @@ public class App extends Application
                 this::showInfo,
                 name -> playStory(updateStoryTitleIfNeeded(story, name)),
                 name -> refreshStoryList(updateStoryTitleIfNeeded(story, name).id()),
+                () -> showCloneStoryDialog(story),
                 () -> confirmDelete(story.title()),
                 () -> deleteStory(story));
+    }
+
+    private void showCloneStoryDialog(Story source)
+    {
+        flushPendingEdits();
+        StoryDialogs.showCloneStoryDialog(primaryStage, source, this::showInfo, request ->
+        {
+            try
+            {
+                Story clone = storyCloneService.cloneStory(source.id(), request);
+                refreshStoryList(clone.id());
+                loadStory(clone, true);
+                statusLabel.setText("Story cloned");
+            }
+            catch (SQLException | IllegalArgumentException e)
+            {
+                showError("Failed to clone story", e);
+            }
+        });
     }
 
     private void showCardDialog(StoryCard card)
@@ -1479,13 +1558,15 @@ public class App extends Application
                 text -> statusLabel.setText(text),
                 () -> setStoryActionButtonsBusy(true),
                 this::restoreStoryActionButtonsState,
-                (systemPrompt, userPrompt, onSuccess, onFailure) -> submitStoryTask(
+                (systemPrompt, userPrompt, overrideNumPredict, onSuccess, onFailure) -> submitStoryTask(
                         context.session(), "Story Prompt",
                         () -> storyPromptCoordinator.generateResponse(
                                 story,
                                 systemPrompt,
                                 userPrompt,
-                                context.generationSettings()),
+                                overrideNumPredict
+                                        ? context.generationSettings().withoutNumPredict()
+                                        : context.generationSettings()),
                         result ->
                         {
                             recordOllamaResponse(
@@ -1901,7 +1982,7 @@ public class App extends Application
                             storyPaneController.endStreaming(streamingToken);
                             reloadActiveStoryIfCompatible(session, context.story(), true);
                             retryHistory.add(currentSession(), new TextRetryHistoryEntry(result.updatedBlock().text()));
-                            statusLabel.setText("Ready");
+                            statusLabel.setText(readyStatus(result.ollamaResponse()));
                             updateRetryCountLabel();
                         }
                     }
@@ -2167,7 +2248,7 @@ public class App extends Application
                         reloadActiveStoryIfCompatible(context.session(), result.updatedStory(), true);
                         if (currentStory() != null && currentStory().id().equals(context.story().id()))
                         {
-                            statusLabel.setText("Ready");
+                            statusLabel.setText(readyStatus(result.ollamaResponse()));
                         }
                     }
                     catch (SQLException e)
@@ -2224,7 +2305,9 @@ public class App extends Application
                         reloadActiveStoryIfCompatible(context.session(), result.updatedStory(), true);
                         if (currentStory() != null && currentStory().id().equals(context.story().id()))
                         {
-                            statusLabel.setText(result.generated() ? "Ready" : "Last generation was empty.");
+                            statusLabel.setText(result.generated()
+                                    ? readyStatus(result.ollamaResponse())
+                                    : "Last generation was empty.");
                         }
                     }
                     catch (SQLException e)
@@ -2285,6 +2368,20 @@ public class App extends Application
                 : ModelSettings.MAX_CONTEXT_LIMIT;
         activeModelSettings = SettingsCoordinator.withContextLimit(activeModelSettings, Math.min(value, maximum));
         updateModelControls();
+        persistModelSettings();
+        refreshGenerationSettings();
+    }
+
+    private void updateStoryCardWrappingStyle(StoryCardWrappingStyle value)
+    {
+        activeModelSettings = SettingsCoordinator.withStoryCardWrappingStyle(activeModelSettings, value);
+        persistModelSettings();
+        refreshGenerationSettings();
+    }
+
+    private void updateConversationLayout(ConversationLayout value)
+    {
+        activeModelSettings = SettingsCoordinator.withConversationLayout(activeModelSettings, value);
         persistModelSettings();
         refreshGenerationSettings();
     }
@@ -2446,13 +2543,6 @@ public class App extends Application
     private void updateStoryCardLookback(int value)
     {
         appSettings = SettingsCoordinator.withStoryCardLookback(appSettings, value);
-        persistAppSettings();
-        refreshGenerationSettings();
-    }
-
-    private void updateAnPlacement(int value)
-    {
-        appSettings = SettingsCoordinator.withAnPlacement(appSettings, value);
         persistAppSettings();
         refreshGenerationSettings();
     }

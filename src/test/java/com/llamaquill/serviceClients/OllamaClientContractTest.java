@@ -92,11 +92,15 @@ class OllamaClientContractTest
         assertEquals("test-model", result.model());
         assertEquals(42, result.promptEvalCount());
         assertEquals(7, result.evalCount());
+        assertEquals("42 tokens processed", result.promptTokensProcessedLabel());
+        assertEquals("1.25 s generation", result.generationDurationLabel());
         assertEquals("stop", result.doneReason());
         assertEquals(2_500_000_000L, result.totalDurationNanos());
         assertEquals(500_000_000L, result.loadDurationNanos());
         assertEquals(750_000_000L, result.promptEvalDurationNanos());
         assertEquals(1_250_000_000L, result.evalDurationNanos());
+        assertTrue(result.clientRequestDurationNanos() >= 0);
+        assertTrue(result.clientRequestDurationLabel().endsWith(" request"));
         assertEquals(0, result.strippedAssistantPrefixCharacters());
         assertEquals("POST", client.lastStreamRequest.method());
         assertEquals("/api/chat", client.lastStreamRequest.uri().getPath());
@@ -138,6 +142,32 @@ class OllamaClientContractTest
         assertEquals("5m", payload.getString("keep_alive"));
         assertEquals("POST", client.lastStringRequest.method());
         assertEquals("/api/chat", client.lastStringRequest.uri().getPath());
+    }
+
+    @Test
+    void capturesTheNormalizedOutboundMessageListBeforeTransportFailure()
+    {
+        StubOllamaClient client = new StubOllamaClient();
+        client.stringStatus = 503;
+        client.stringBody = "{\"error\":\"offline\"}";
+        AtomicReference<OllamaChatRequestSnapshot> captured = new AtomicReference<>();
+        client.setChatRequestObserver(captured::set);
+
+        assertThrows(IOException.class, () -> client.chatNonStreaming(
+                List.of(
+                        new ChatMessage("system", "Write prose."),
+                        new ChatMessage("assistant", "First"),
+                        new ChatMessage("assistant", " continuation.")),
+                GenerationSettings.defaults()));
+
+        OllamaChatRequestSnapshot snapshot = captured.get();
+        assertEquals("http://localhost:11434/api/chat", snapshot.endpoint());
+        assertEquals(GenerationSettings.DEFAULT_MODEL, snapshot.model());
+        assertFalse(snapshot.streaming());
+        assertEquals(List.of(
+                new ChatMessage("system", "Write prose."),
+                new ChatMessage("assistant", "First continuation.")),
+                snapshot.messages());
     }
 
     @Test

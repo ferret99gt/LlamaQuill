@@ -2,10 +2,12 @@ package com.llamaquill.prompt;
 
 import com.llamaquill.model.Block;
 import com.llamaquill.model.ChatMessage;
+import com.llamaquill.model.ConversationLayout;
 import com.llamaquill.model.GenerationSettings;
 import com.llamaquill.model.Role;
 import com.llamaquill.model.Story;
 import com.llamaquill.model.StoryCard;
+import com.llamaquill.model.StoryCardWrappingStyle;
 import com.llamaquill.prompt.PromptContextReport.Component;
 import com.llamaquill.prompt.PromptContextReport.Entry;
 import com.llamaquill.prompt.PromptContextReport.Status;
@@ -49,6 +51,7 @@ public class PromptCompiler
         Objects.requireNonNull(settings, "settings");
         PromptAuxiliaryInput auxiliary = auxiliaryInput == null ? PromptAuxiliaryInput.none() : auxiliaryInput;
         operationTokenScale = settings.promptTokenScale();
+        ConversationLayout conversationLayout = activeConversationLayout(settings.conversationLayout());
 
         PromptBudget budget = PromptBudget.from(settings);
         List<Block> originalWindow = List.copyOf(filterPromptBlocks(blocks));
@@ -85,15 +88,16 @@ public class PromptCompiler
                 authorNote = "";
             }
             CompiledState compiled = compileState(systemText, plotEssentials, authorNote, window, pinned, triggered,
-                    forcedCard, taskMessages, settings.anPlacement(),
-                    storyTailUserMessage, storyTailBlockCount);
+                    forcedCard, taskMessages, storyTailUserMessage, storyTailBlockCount,
+                    settings.storyCardWrappingStyle(), conversationLayout, auxiliary.continuation());
             if (compiled.estimatedTokens() <= budget.inputLimit())
             {
                 return finishCompilation(compiled, budget, story, originalSystem, systemText,
                         originalPlotEssentials, plotEssentials, originalAuthorNote, authorNote,
                         originalWindow, window, originalPinned, pinned, originalTriggered, triggered,
                         selectedCards.triggerMatches(), originalForcedCard, forcedCard,
-                        originalTaskMessages, taskMessages, storyTailUserMessage, storyTailBlockCount);
+                        originalTaskMessages, taskMessages, storyTailUserMessage, storyTailBlockCount,
+                        settings.storyCardWrappingStyle());
             }
 
             int excessTokens = compiled.estimatedTokens() - budget.inputLimit();
@@ -121,7 +125,9 @@ public class PromptCompiler
             }
             if (!triggered.isEmpty())
             {
-                triggered.removeLast();
+                // Triggered cards are ordered from oldest activation to newest,
+                // leaving the most recently relevant lore closest to the story.
+                triggered.removeFirst();
                 continue;
             }
             if (forcedCard != null)
@@ -175,7 +181,7 @@ public class PromptCompiler
                     originalWindow, List.of(), originalPinned, List.of(),
                     originalTriggered, List.of(), selectedCards.triggerMatches(),
                     originalForcedCard, null, originalTaskMessages, taskMessages,
-                    storyTailUserMessage, storyTailBlockCount);
+                    storyTailUserMessage, storyTailBlockCount, settings.storyCardWrappingStyle());
         }
     }
 
@@ -189,54 +195,33 @@ public class PromptCompiler
             Map<StoryCard, List<String>> triggerMatches,
             StoryCard originalForcedCard, StoryCard forcedCard,
             List<ChatMessage> originalTaskMessages, List<ChatMessage> taskMessages,
-            String storyTailUserMessage, int storyTailBlockCount)
+            String storyTailUserMessage, int storyTailBlockCount,
+            StoryCardWrappingStyle wrappingStyle)
     {
         PromptContextReport report = buildContextReport(budget, compiled.estimatedTokens(), story,
                 originalSystem, systemText, originalPlotEssentials, plotEssentials,
                 originalAuthorNote, authorNote, originalWindow, window,
                 originalPinned, pinned, originalTriggered, triggered, triggerMatches,
                 originalForcedCard, forcedCard, originalTaskMessages, taskMessages,
-                storyTailUserMessage, storyTailBlockCount);
+                storyTailUserMessage, storyTailBlockCount, wrappingStyle);
         logCompilationReport(report);
         return new PromptCompilation(compiled.messages(), compiled.estimatedTokens(), report);
     }
 
     private CompiledState compileState(String systemText, String plotEssentials, String authorNote,
             List<Block> window, List<StoryCard> pinned, List<StoryCard> triggered,
-            StoryCard forcedCard, List<ChatMessage> taskMessages, int authorNotePlacement,
-            String storyTailUserMessage, int storyTailBlockCount)
+            StoryCard forcedCard, List<ChatMessage> taskMessages,
+            String storyTailUserMessage, int storyTailBlockCount,
+            StoryCardWrappingStyle wrappingStyle, ConversationLayout conversationLayout,
+            boolean continuation)
     {
-        List<Block> windowWithNote = insertAuthorNote(window, authorNotePlacement, authorNote);
-        List<Message> messages = new ArrayList<>();
-        if (!plotEssentials.isBlank())
-        {
-            messages.add(new Message(Role.USER, plotEssentials));
-        }
-        if (forcedCard != null)
-        {
-            String text = formatStoryCard(forcedCard);
-            if (!text.isBlank())
-            {
-                messages.add(new Message(Role.USER, text));
-            }
-        }
-        for (StoryCard card : pinned)
-        {
-            String text = formatStoryCard(card);
-            if (!text.isBlank())
-            {
-                messages.add(new Message(Role.USER, text));
-            }
-        }
-        for (StoryCard card : triggered)
-        {
-            String text = formatStoryCard(card);
-            if (!text.isBlank())
-            {
-                messages.add(new Message(Role.USER, text));
-            }
-        }
-        messages.addAll(groupMessages(windowWithNote, storyTailUserMessage, storyTailBlockCount));
+        String worldContext = buildWorldContext(
+                plotEssentials, forcedCard, pinned, triggered, wrappingStyle);
+        List<Message> messages = conversationLayout == ConversationLayout.ROLE_AWARE
+                ? buildRoleAwareMessages(
+                        worldContext, window, authorNote, storyTailUserMessage, storyTailBlockCount)
+                : buildFlattenedMessages(
+                        worldContext, window, authorNote, conversationLayout, continuation);
 
         String mergedSystemText = systemText;
         for (ChatMessage taskMessage : taskMessages)
@@ -252,7 +237,7 @@ public class PromptCompiler
             if (!"system".equalsIgnoreCase(taskMessage.role())
                     && !taskMessage.role().isBlank() && !taskMessage.content().isBlank())
             {
-                promptMessages.add(taskMessage);
+                appendTaskMessage(promptMessages, taskMessage, conversationLayout);
             }
         }
         return new CompiledState(promptMessages, estimateTokens(promptMessages));
@@ -268,7 +253,8 @@ public class PromptCompiler
             Map<StoryCard, List<String>> triggerMatches,
             StoryCard originalForcedCard, StoryCard forcedCard,
             List<ChatMessage> originalTaskMessages, List<ChatMessage> taskMessages,
-            String storyTailUserMessage, int storyTailBlockCount)
+            String storyTailUserMessage, int storyTailBlockCount,
+            StoryCardWrappingStyle wrappingStyle)
     {
         List<Entry> entries = new ArrayList<>();
         addTextEntry(entries, Component.SYSTEM, story.id(), "System",
@@ -294,16 +280,17 @@ public class PromptCompiler
         {
             boolean included = triggered.contains(card);
             entries.add(cardEntry(Component.TRIGGERED_STORY_CARD, card, included,
-                    triggerMatches.getOrDefault(card, List.of())));
+                    triggerMatches.getOrDefault(card, List.of()), wrappingStyle));
         }
         for (StoryCard card : originalPinned)
         {
-            entries.add(cardEntry(Component.PINNED_STORY_CARD, card, pinned.contains(card), List.of()));
+            entries.add(cardEntry(Component.PINNED_STORY_CARD, card,
+                    pinned.contains(card), List.of(), wrappingStyle));
         }
         if (originalForcedCard != null)
         {
             entries.add(cardEntry(Component.FORCED_STORY_CARD, originalForcedCard,
-                    forcedCard != null, List.of()));
+                    forcedCard != null, List.of(), wrappingStyle));
         }
         for (int index = 0; index < originalTaskMessages.size(); index++)
         {
@@ -348,9 +335,10 @@ public class PromptCompiler
                 originalTokens, includedTokens, 1, includedText.isBlank() ? 0 : 1, List.of()));
     }
 
-    private Entry cardEntry(Component component, StoryCard card, boolean included, List<String> matchedTriggers)
+    private Entry cardEntry(Component component, StoryCard card, boolean included,
+            List<String> matchedTriggers, StoryCardWrappingStyle wrappingStyle)
     {
-        String text = formatStoryCard(card);
+        String text = formatStoryCard(card, wrappingStyle);
         int originalTokens = text.isBlank() ? 0 : estimateStandaloneMessage("user", text);
         return new Entry(component, safeText(card.id()), safeTitle(card),
                 included ? Status.INCLUDED : Status.DROPPED,
@@ -658,34 +646,6 @@ public class PromptCompiler
         return safe;
     }
 
-    private static List<Block> insertAuthorNote(List<Block> window, int anPlacement, String authorNote)
-    {
-        if (authorNote.isBlank() || window.isEmpty())
-        {
-            return window;
-        }
-
-        int offset = Math.max(1, anPlacement);
-        int index = Math.max(0, window.size() - offset);
-        List<Block> updated = new ArrayList<>(window.size());
-
-        for (int i = 0; i < window.size(); i++)
-        {
-            Block block = window.get(i);
-            if (i == index)
-            {
-                String updatedText = "Author's Note: " + authorNote + "\n\n" + safeText(block.text());
-                updated.add(new Block(block.id(), block.storyId(), block.role(), updatedText,
-                        block.createdAt(), block.position()));
-            }
-            else
-            {
-                updated.add(block);
-            }
-        }
-        return updated;
-    }
-
     private List<ChatMessage> shortenTaskMessages(List<ChatMessage> messages, int excessTokens)
     {
         List<ChatMessage> shortened = new ArrayList<>(messages);
@@ -747,7 +707,7 @@ public class PromptCompiler
         }
         List<StoryCard> pinned = new ArrayList<>();
         List<StoryCard> triggered = new ArrayList<>();
-        Map<StoryCard, Integer> relevance = new HashMap<>();
+        Map<StoryCard, TriggerMatch> matches = new HashMap<>();
         Map<StoryCard, List<String>> triggerMatches = new HashMap<>();
 
         for (StoryCard card : storyCards)
@@ -760,32 +720,34 @@ public class PromptCompiler
             {
                 continue;
             }
-            if (card.pinned())
-            {
-                pinned.add(card);
-                continue;
-            }
-            List<String> matchedTriggers = findMatchedTriggers(card.triggers(), matchText);
-            int hits = matchedTriggers.size();
-            if (hits > 0)
+            TriggerMatch match = findTriggerMatches(card.triggers(), matchText);
+            if (!match.triggers().isEmpty())
             {
                 triggered.add(card);
-                relevance.put(card, hits);
-                triggerMatches.put(card, matchedTriggers);
+                matches.put(card, match);
+                triggerMatches.put(card, match.triggers());
+            }
+            else if (card.pinned())
+            {
+                pinned.add(card);
             }
         }
 
-        triggered.sort(Comparator.comparingInt(relevance::get).reversed());
+        triggered.sort(Comparator
+                .comparingInt((StoryCard card) -> matches.get(card).latestPosition())
+                .thenComparingInt(card -> matches.get(card).occurrenceCount()));
         return new StoryCardSelection(pinned, triggered, triggerMatches);
     }
 
-    private static List<String> findMatchedTriggers(String triggers, String text)
+    private static TriggerMatch findTriggerMatches(String triggers, String text)
     {
         if (triggers == null || triggers.isBlank() || text.isBlank())
         {
-            return List.of();
+            return TriggerMatch.NONE;
         }
         List<String> matched = new ArrayList<>();
+        int latestPosition = -1;
+        int occurrenceCount = 0;
         for (String trigger : triggers.split(","))
         {
             String trimmed = trigger.trim();
@@ -794,12 +756,22 @@ public class PromptCompiler
                 continue;
             }
             Pattern pattern = Pattern.compile("\\b" + Pattern.quote(trimmed) + "\\b", Pattern.CASE_INSENSITIVE);
-            if (pattern.matcher(text).find())
+            var matcher = pattern.matcher(text);
+            boolean found = false;
+            while (matcher.find())
+            {
+                found = true;
+                latestPosition = Math.max(latestPosition, matcher.start());
+                occurrenceCount++;
+            }
+            if (found)
             {
                 matched.add(trimmed);
             }
         }
-        return matched;
+        return matched.isEmpty()
+                ? TriggerMatch.NONE
+                : new TriggerMatch(List.copyOf(matched), latestPosition, occurrenceCount);
     }
 
     private static String buildLookbackText(List<Block> window, int lookback)
@@ -821,7 +793,7 @@ public class PromptCompiler
         return sb.toString();
     }
 
-    private static String formatStoryCard(StoryCard card)
+    private static String formatStoryCard(StoryCard card, StoryCardWrappingStyle wrappingStyle)
     {
         if (card == null)
         {
@@ -830,9 +802,151 @@ public class PromptCompiler
         String content = normalizeContextText(card.content());
         if (!content.isBlank())
         {
-            return content;
+            return activeWrappingStyle(wrappingStyle).applyTo(content);
         }
-        return normalizeContextText(card.title());
+        return activeWrappingStyle(wrappingStyle).applyTo(normalizeContextText(card.title()));
+    }
+
+    private static String buildWorldContext(String plotEssentials, StoryCard forcedCard,
+            List<StoryCard> pinned, List<StoryCard> triggered,
+            StoryCardWrappingStyle wrappingStyle)
+    {
+        List<String> lore = new ArrayList<>();
+        addStoryCardText(lore, forcedCard, wrappingStyle);
+        for (StoryCard card : pinned)
+        {
+            addStoryCardText(lore, card, wrappingStyle);
+        }
+        for (StoryCard card : triggered)
+        {
+            addStoryCardText(lore, card, wrappingStyle);
+        }
+
+        String plot = safeText(plotEssentials);
+        if (lore.isEmpty())
+        {
+            return plot;
+        }
+
+        String loreText = String.join("\n", lore);
+        return plot.isBlank()
+                ? "World Lore:\n" + loreText
+                : plot + "\n\nWorld Lore:\n" + loreText;
+    }
+
+    private static void addStoryCardText(List<String> lore, StoryCard card,
+            StoryCardWrappingStyle wrappingStyle)
+    {
+        String text = formatStoryCard(card, wrappingStyle);
+        if (!text.isBlank())
+        {
+            lore.add(text);
+        }
+    }
+
+    private static StoryCardWrappingStyle activeWrappingStyle(StoryCardWrappingStyle wrappingStyle)
+    {
+        return wrappingStyle == null ? StoryCardWrappingStyle.NONE : wrappingStyle;
+    }
+
+    private static ConversationLayout activeConversationLayout(ConversationLayout conversationLayout)
+    {
+        return conversationLayout == null ? ConversationLayout.ROLE_AWARE : conversationLayout;
+    }
+
+    private static List<Message> buildRoleAwareMessages(String worldContext, List<Block> window,
+            String authorNote, String storyTailUserMessage, int storyTailBlockCount)
+    {
+        List<Message> messages = new ArrayList<>();
+        if (!worldContext.isBlank())
+        {
+            messages.add(new Message(Role.USER, worldContext));
+        }
+        messages.addAll(groupStoryMessages(
+                window, authorNote, storyTailUserMessage, storyTailBlockCount));
+        return messages;
+    }
+
+    private static List<Message> buildFlattenedMessages(String worldContext, List<Block> window,
+            String authorNote, ConversationLayout conversationLayout, boolean continuation)
+    {
+        List<String> documentSections = new ArrayList<>();
+        addDocumentSection(documentSections, worldContext);
+
+        Block finalBlock = window.isEmpty() ? null : window.getLast();
+        int historyEnd = finalBlock == null ? 0 : window.size() - 1;
+        String history = flattenStoryRange(window, 0, historyEnd);
+        if (finalBlock != null)
+        {
+            addDocumentSection(documentSections,
+                    history.isBlank() ? "Recent story:" : "Recent story:\n" + history);
+        }
+
+        addDocumentSection(documentSections, formatFlattenedAuthorNote(authorNote));
+
+        boolean useAssistantPrefill = conversationLayout == ConversationLayout.FLATTENED_WITH_PREFILL
+                && continuation
+                && finalBlock != null
+                && finalBlock.role() == Role.ASSISTANT
+                && !safeText(finalBlock.text()).isBlank();
+        if (finalBlock != null && !useAssistantPrefill)
+        {
+            addDocumentSection(documentSections, normalizeBlockText(finalBlock));
+        }
+
+        List<Message> messages = new ArrayList<>();
+        String document = String.join("\n\n", documentSections);
+        if (!document.isBlank())
+        {
+            messages.add(new Message(Role.USER, document));
+        }
+        if (useAssistantPrefill)
+        {
+            messages.add(new Message(Role.ASSISTANT, safeText(finalBlock.text())));
+        }
+        return messages;
+    }
+
+    private static String flattenStoryRange(List<Block> window, int startInclusive, int endExclusive)
+    {
+        List<Message> grouped = groupMessagesRange(window, startInclusive, endExclusive);
+        List<String> sections = new ArrayList<>(grouped.size());
+        for (Message message : grouped)
+        {
+            addDocumentSection(sections, message.content());
+        }
+        return String.join("\n\n", sections);
+    }
+
+    private static String formatFlattenedAuthorNote(String authorNote)
+    {
+        return authorNote == null || authorNote.isBlank()
+                ? ""
+                : "[Author's note:\n" + authorNote + "\n]";
+    }
+
+    private static void addDocumentSection(List<String> sections, String text)
+    {
+        if (text != null && !text.isBlank())
+        {
+            sections.add(text);
+        }
+    }
+
+    private static void appendTaskMessage(List<ChatMessage> messages, ChatMessage taskMessage,
+            ConversationLayout conversationLayout)
+    {
+        if (conversationLayout != ConversationLayout.ROLE_AWARE
+                && "user".equalsIgnoreCase(taskMessage.role())
+                && !messages.isEmpty()
+                && "user".equalsIgnoreCase(messages.getLast().role()))
+        {
+            ChatMessage previous = messages.getLast();
+            messages.set(messages.size() - 1,
+                    new ChatMessage(previous.role(), previous.content() + "\n\n" + taskMessage.content()));
+            return;
+        }
+        messages.add(taskMessage);
     }
 
     private static List<Message> groupMessages(List<Block> window)
@@ -840,20 +954,69 @@ public class PromptCompiler
         return groupMessagesRange(window, 0, window.size());
     }
 
-    private static List<Message> groupMessages(List<Block> window, String storyTailUserMessage,
-            int storyTailBlockCount)
+    private static List<Message> groupStoryMessages(List<Block> window, String authorNote,
+            String storyTailUserMessage, int storyTailBlockCount)
     {
-        if (!shouldInsertStoryTailUserMessage(window, storyTailUserMessage, storyTailBlockCount))
+        if (window.isEmpty())
         {
-            return groupMessages(window);
+            return List.of();
         }
 
-        int boundaryIndex = Math.max(0, window.size() - storyTailBlockCount);
+        boolean insertTailUserMessage = shouldInsertStoryTailUserMessage(
+                window, storyTailUserMessage, storyTailBlockCount);
+        int boundaryIndex = insertTailUserMessage
+                ? Math.max(0, window.size() - storyTailBlockCount)
+                : latestUserBoundary(window);
         List<Message> messages = new ArrayList<>();
         messages.addAll(groupMessagesRange(window, 0, boundaryIndex));
-        messages.add(new Message(Role.USER, storyTailUserMessage));
+        appendAuthorNote(messages, authorNote);
+        if (insertTailUserMessage)
+        {
+            messages.add(new Message(Role.USER, storyTailUserMessage));
+        }
         messages.addAll(groupMessagesRange(window, boundaryIndex, window.size()));
         return messages;
+    }
+
+    private static int latestUserBoundary(List<Block> window)
+    {
+        for (int index = window.size() - 1; index >= 0; index--)
+        {
+            if (window.get(index).role() == Role.USER)
+            {
+                while (index > 0 && window.get(index - 1).role() == Role.USER)
+                {
+                    index--;
+                }
+                return index;
+            }
+        }
+        return 0;
+    }
+
+    private static void appendAuthorNote(List<Message> messages, String authorNote)
+    {
+        if (authorNote == null || authorNote.isBlank())
+        {
+            return;
+        }
+
+        String formatted = "Author's Note: " + authorNote;
+        for (int index = messages.size() - 1; index >= 0; index--)
+        {
+            Message message = messages.get(index);
+            if (message.role() == Role.ASSISTANT)
+            {
+                messages.set(index, new Message(Role.ASSISTANT,
+                        message.content() + "\n\n" + formatted));
+                return;
+            }
+        }
+
+        // A brand-new or heavily trimmed story may have no earlier assistant
+        // turn to carry the note. Keep it as context immediately before the
+        // real or ephemeral user boundary instead of contaminating prefill.
+        messages.add(new Message(Role.USER, formatted));
     }
 
     private static boolean shouldInsertStoryTailUserMessage(List<Block> window,
@@ -1046,6 +1209,11 @@ public class PromptCompiler
     private record StoryCardSelection(List<StoryCard> pinned, List<StoryCard> triggered,
             Map<StoryCard, List<String>> triggerMatches)
     {
+    }
+
+    private record TriggerMatch(List<String> triggers, int latestPosition, int occurrenceCount)
+    {
+        private static final TriggerMatch NONE = new TriggerMatch(List.of(), -1, 0);
     }
 
     private record Message(Role role, String content)
