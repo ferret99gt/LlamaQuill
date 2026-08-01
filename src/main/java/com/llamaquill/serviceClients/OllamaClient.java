@@ -162,7 +162,9 @@ public class OllamaClient implements AutoCloseable
                         buildChatPayloadFromNormalized(normalizedMessages, settings, false),
                         StandardCharsets.UTF_8))
                 .build();
+        long requestStartedNanos = System.nanoTime();
         HttpResponse<String> response = sendString(request);
+        long clientRequestDurationNanos = elapsedNanos(requestStartedNanos);
         requireSuccess("/api/chat", endpoint, response.statusCode(), response.body());
 
         JSONObject root = parseObject(response.body(), "Ollama /api/chat response");
@@ -193,6 +195,7 @@ public class OllamaClient implements AutoCloseable
                 longMetadata(root, "load_duration"),
                 longMetadata(root, "prompt_eval_duration"),
                 longMetadata(root, "eval_duration"),
+                clientRequestDurationNanos,
                 0);
     }
 
@@ -208,6 +211,7 @@ public class OllamaClient implements AutoCloseable
                 .POST(HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8))
                 .build();
 
+        long requestStartedNanos = System.nanoTime();
         HttpResponse<InputStream> response = sendStream(request);
         if (response.statusCode() < 200 || response.statusCode() >= 300)
         {
@@ -260,6 +264,7 @@ public class OllamaClient implements AutoCloseable
         }
 
         content.append(prefillFilter.finish());
+        long clientRequestDurationNanos = elapsedNanos(requestStartedNanos);
         return new OllamaChatResult(
                 terminalEvent.optString("model", requestedModel),
                 content.toString(),
@@ -270,7 +275,13 @@ public class OllamaClient implements AutoCloseable
                 longMetadata(terminalEvent, "load_duration"),
                 longMetadata(terminalEvent, "prompt_eval_duration"),
                 longMetadata(terminalEvent, "eval_duration"),
+                clientRequestDurationNanos,
                 prefillFilter.removedCharacters());
+    }
+
+    private static long elapsedNanos(long startedNanos)
+    {
+        return Math.max(0L, System.nanoTime() - startedNanos);
     }
 
     String buildChatPayload(List<ChatMessage> messages, GenerationSettings settings)

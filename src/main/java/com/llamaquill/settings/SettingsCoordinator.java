@@ -5,6 +5,9 @@ import com.llamaquill.model.ModelSettings;
 
 public final class SettingsCoordinator
 {
+    static final double PROMPT_TOKEN_SCALE_HYSTERESIS = 0.01;
+    static final double MIN_PROMPT_CALIBRATION_CONTEXT_FRACTION = 0.5;
+
     private SettingsCoordinator()
     {
     }
@@ -32,6 +35,47 @@ public final class SettingsCoordinator
     public static ModelSettings withPromptTokenScale(ModelSettings current, double value)
     {
         return current.toBuilder().promptTokenScale(value).build();
+    }
+
+    public static ModelSettings calibratePromptTokenScale(ModelSettings current,
+            int estimatedPromptTokens, int actualPromptTokens)
+    {
+        if (current == null || estimatedPromptTokens <= 0 || actualPromptTokens <= 0)
+        {
+            return current;
+        }
+
+        int observedPromptTokens = Math.max(estimatedPromptTokens, actualPromptTokens);
+        int minimumSampleTokens = (int) Math.ceil(
+                current.contextLimit() * MIN_PROMPT_CALIBRATION_CONTEXT_FRACTION);
+        if (observedPromptTokens < minimumSampleTokens)
+        {
+            return current;
+        }
+
+        double sampleRatio = actualPromptTokens / (double) estimatedPromptTokens;
+        // Exact prompt prefixes are required for Ollama's context-cache reuse.
+        // Do not let harmless measurement noise move a trimming boundary on
+        // every otherwise-identical generation.
+        if (!Double.isFinite(sampleRatio)
+                || Math.abs(sampleRatio - 1.0) <= PROMPT_TOKEN_SCALE_HYSTERESIS)
+        {
+            return current;
+        }
+
+        double oldScale = current.promptTokenScale();
+        double updatedScale = clampPromptTokenScale(oldScale * sampleRatio);
+        if (Double.compare(updatedScale, oldScale) == 0)
+        {
+            return current;
+        }
+        return withPromptTokenScale(current, updatedScale);
+    }
+
+    private static double clampPromptTokenScale(double value)
+    {
+        return Math.max(ModelSettings.MIN_PROMPT_TOKEN_SCALE,
+                Math.min(ModelSettings.MAX_PROMPT_TOKEN_SCALE, value));
     }
 
     public static AppSettings withResponseLength(AppSettings current, int value)

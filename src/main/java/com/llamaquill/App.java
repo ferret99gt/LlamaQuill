@@ -173,7 +173,6 @@ public class App extends Application
     private boolean storyDetailsDirty;
 
     private List<String> comfyWorkflowNames = new ArrayList<>();
-    private static final double TOKEN_SCALE_ALPHA = 0.2;
     private final Map<String, OllamaModelDetails> modelDetailsByName = new HashMap<>();
 
     private static final String DEFAULT_SEE_REQUEST = "Generate an image prompt for the most recent scene in the story.";
@@ -1217,15 +1216,12 @@ public class App extends Application
             }
 
             ModelSettings modelSettings = stored.get();
-            double oldScale = modelSettings.promptTokenScale();
-            double sampleRatio = response.promptEvalCount() / (double) estimatedPromptTokens;
-            double targetScale = oldScale * sampleRatio;
-            targetScale = Math.max(ModelSettings.MIN_PROMPT_TOKEN_SCALE,
-                    Math.min(ModelSettings.MAX_PROMPT_TOKEN_SCALE, targetScale));
-            double updated = oldScale + (targetScale - oldScale) * TOKEN_SCALE_ALPHA;
-            updated = Math.max(ModelSettings.MIN_PROMPT_TOKEN_SCALE,
-                    Math.min(ModelSettings.MAX_PROMPT_TOKEN_SCALE, updated));
-            ModelSettings calibrated = SettingsCoordinator.withPromptTokenScale(modelSettings, updated);
+            ModelSettings calibrated = SettingsCoordinator.calibratePromptTokenScale(
+                    modelSettings, estimatedPromptTokens, response.promptEvalCount());
+            if (calibrated.equals(modelSettings))
+            {
+                return;
+            }
             modelSettingsRepository.save(calibrated);
             if (activeModelSettings != null && response.model().equals(activeModelSettings.modelName()))
             {
@@ -1247,6 +1243,28 @@ public class App extends Application
             String summary = response.diagnosticSummary();
             statusLabel.setTooltip(summary.isBlank() ? null : new Tooltip(summary));
         }
+    }
+
+    private static String readyStatus(OllamaChatResult response)
+    {
+        if (response == null)
+        {
+            return "Ready";
+        }
+        List<String> details = new ArrayList<>();
+        if (!response.promptTokensProcessedLabel().isBlank())
+        {
+            details.add(response.promptTokensProcessedLabel());
+        }
+        if (!response.clientRequestDurationLabel().isBlank())
+        {
+            details.add(response.clientRequestDurationLabel());
+        }
+        if (!response.generationDurationLabel().isBlank())
+        {
+            details.add(response.generationDurationLabel());
+        }
+        return details.isEmpty() ? "Ready" : "Ready - " + String.join(" - ", details);
     }
 
     private <T> Task<T> submitTask(Callable<T> work, Consumer<T> onSuccess, Consumer<Throwable> onFailure)
@@ -1927,7 +1945,7 @@ public class App extends Application
                             storyPaneController.endStreaming(streamingToken);
                             reloadActiveStoryIfCompatible(session, context.story(), true);
                             retryHistory.add(currentSession(), new TextRetryHistoryEntry(result.updatedBlock().text()));
-                            statusLabel.setText("Ready");
+                            statusLabel.setText(readyStatus(result.ollamaResponse()));
                             updateRetryCountLabel();
                         }
                     }
@@ -2193,7 +2211,7 @@ public class App extends Application
                         reloadActiveStoryIfCompatible(context.session(), result.updatedStory(), true);
                         if (currentStory() != null && currentStory().id().equals(context.story().id()))
                         {
-                            statusLabel.setText("Ready");
+                            statusLabel.setText(readyStatus(result.ollamaResponse()));
                         }
                     }
                     catch (SQLException e)
@@ -2250,7 +2268,9 @@ public class App extends Application
                         reloadActiveStoryIfCompatible(context.session(), result.updatedStory(), true);
                         if (currentStory() != null && currentStory().id().equals(context.story().id()))
                         {
-                            statusLabel.setText(result.generated() ? "Ready" : "Last generation was empty.");
+                            statusLabel.setText(result.generated()
+                                    ? readyStatus(result.ollamaResponse())
+                                    : "Last generation was empty.");
                         }
                     }
                     catch (SQLException e)

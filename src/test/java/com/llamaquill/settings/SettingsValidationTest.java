@@ -67,6 +67,42 @@ class SettingsValidationTest
     }
 
     @Test
+    void promptCalibrationIgnoresSubPercentMeasurementJitter()
+    {
+        ModelSettings original = SettingsCoordinator.withPromptTokenScale(
+                ModelSettings.defaults("model-name"), 1.25);
+
+        ModelSettings calibrated = SettingsCoordinator.calibratePromptTokenScale(
+                original, 44_443, 44_465);
+
+        assertTrue(calibrated == original);
+        assertEquals(1.25, calibrated.promptTokenScale());
+    }
+
+    @Test
+    void promptCalibrationAppliesMeaningfulEstimateErrorInOneStep()
+    {
+        ModelSettings original = ModelSettings.defaults("model-name");
+
+        ModelSettings calibrated = SettingsCoordinator.calibratePromptTokenScale(
+                original, 5_000, 6_000);
+
+        assertEquals(1.2, calibrated.promptTokenScale(), 0.000_001);
+    }
+
+    @Test
+    void promptCalibrationIgnoresSamplesSmallerThanHalfTheContextWindow()
+    {
+        ModelSettings original = ModelSettings.defaults("model-name");
+
+        ModelSettings calibrated = SettingsCoordinator.calibratePromptTokenScale(
+                original, 3_000, 3_600);
+
+        assertTrue(calibrated == original);
+        assertEquals(1.0, calibrated.promptTokenScale());
+    }
+
+    @Test
     void appSettingsClampGlobalRangesAndNormalizeTheOllamaEndpoint()
     {
         AppSettings settings = new AppSettings(
