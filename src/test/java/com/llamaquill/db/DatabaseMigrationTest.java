@@ -52,6 +52,7 @@ class DatabaseMigrationTest
             assertFalse(columns(database, "app_settings").contains("use_ollama_templates"));
             assertFalse(columns(database, "app_settings").contains("an_placement"));
             assertTrue(columns(database, "app_settings").contains("selected_story_card_command_preset_id"));
+            assertTrue(columns(database, "stories").contains("story_card_generation_context"));
             assertTrue(columns(database, "story_cards").containsAll(List.of("type", "notes")));
             assertTrue(columns(database, "model_settings").containsAll(
                     List.of("story_card_wrapping_style", "conversation_layout")));
@@ -218,6 +219,35 @@ class DatabaseMigrationTest
                     new AppSettingsRepository(database).load().orElseThrow()
                             .selectedStoryCardCommandPresetId());
             assertEquals(1, new StoryCardCommandPresetRepository(database).listAll().size());
+        }
+    }
+
+    @Test
+    void migratesSchemaSixWithAnEmptyStoryCardGenerationContext() throws Exception
+    {
+        AppPaths paths = paths("schema-six-story-card-generation-context");
+        try (Database database = Database.open(paths))
+        {
+            String now = Timestamps.now();
+            new StoryRepository(database).insert(
+                    new Story("story", "Story", "", "", "", now, now));
+        }
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + paths.databaseFile());
+             Statement statement = connection.createStatement())
+        {
+            statement.execute("ALTER TABLE stories DROP COLUMN story_card_generation_context");
+            statement.execute("PRAGMA user_version = 6");
+        }
+
+        try (Database database = Database.open(paths))
+        {
+            Database.StartupReport report = database.startupReport();
+            assertEquals(6, report.migration().sourceSchema());
+            assertEquals(AppVersion.DATABASE_SCHEMA, report.migration().targetSchema());
+            assertTrue(Files.isRegularFile(report.migration().backup().orElseThrow()));
+            assertTrue(columns(database, "stories").contains("story_card_generation_context"));
+            assertEquals("", new StoryRepository(database).findById("story").orElseThrow()
+                    .storyCardGenerationContext());
         }
     }
 

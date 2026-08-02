@@ -52,16 +52,22 @@ class StoryServiceTest
             assertEquals("Note", detailed.authorNote());
             assertEquals(detailed, stories.findById(detailed.id()).orElseThrow());
 
-            Block block = new Block("block", detailed.id(), Role.ASSISTANT,
+            Story contextualized = service.updateStoryCardGenerationContext(
+                    detailed, "  Keep regenerated cards consistent with the northern setting.  ");
+            assertEquals("Keep regenerated cards consistent with the northern setting.",
+                    contextualized.storyCardGenerationContext());
+            assertEquals(contextualized, stories.findById(contextualized.id()).orElseThrow());
+
+            Block block = new Block("block", contextualized.id(), Role.ASSISTANT,
                     "Loaded through the service.", Timestamps.now(), 0);
             blocks.insert(block);
-            StoryService.StoryDocument loaded = service.reload(detailed.id(), null);
-            assertEquals(detailed, loaded.story());
+            StoryService.StoryDocument loaded = service.reload(contextualized.id(), null);
+            assertEquals(contextualized, loaded.story());
             assertEquals(block, loaded.blocks().getFirst());
             assertThrows(UnsupportedOperationException.class, () -> loaded.blocks().add(block));
 
-            Story touched = service.touch(detailed);
-            assertEquals(detailed.id(), touched.id());
+            Story touched = service.touch(contextualized);
+            assertEquals(contextualized.id(), touched.id());
             service.delete(touched);
             assertTrue(stories.findById(touched.id()).isEmpty());
             assertTrue(blocks.listForStory(touched.id()).isEmpty());

@@ -70,7 +70,7 @@ public final class StoryService
             return story;
         }
         Story updated = new Story(story.id(), normalizedTitle, story.systemPrompt(), story.plotEssentials(),
-                story.authorNote(), story.createdAt(), Timestamps.now());
+                story.authorNote(), story.storyCardGenerationContext(), story.createdAt(), Timestamps.now());
         storyRepository.updateTitle(updated.id(), updated.title(), updated.updatedAt());
         return updated;
     }
@@ -89,9 +89,21 @@ public final class StoryService
             return story;
         }
         Story updated = new Story(story.id(), story.title(), normalizedSystem, normalizedPlot, normalizedNote,
-                story.createdAt(), Timestamps.now());
+                story.storyCardGenerationContext(), story.createdAt(), Timestamps.now());
         storyRepository.update(updated);
         return updated;
+    }
+
+    public Story updateStoryCardGenerationContext(Story story, String context) throws SQLException
+    {
+        Objects.requireNonNull(story, "story");
+        String normalizedContext = value(context).trim();
+        if (normalizedContext.equals(story.storyCardGenerationContext()))
+        {
+            return story;
+        }
+        return storyRepository.updateStoryCardGenerationContext(
+                story.id(), normalizedContext, Timestamps.now());
     }
 
     public Story touch(Story story) throws SQLException

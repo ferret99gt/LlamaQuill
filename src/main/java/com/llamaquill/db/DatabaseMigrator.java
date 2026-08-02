@@ -27,6 +27,7 @@ public final class DatabaseMigrator
     private static final int OLLAMA_HARDENING_SCHEMA = 3;
     private static final int STORY_CARD_SCHEMA = 4;
     private static final int PROMPT_LAYOUT_SCHEMA = 5;
+    private static final int STORY_CARD_PRESET_SELECTION_SCHEMA = 6;
     private static final int CURRENT_SCHEMA = AppVersion.DATABASE_SCHEMA;
     private static final DateTimeFormatter BACKUP_TIMESTAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS");
 
@@ -70,6 +71,7 @@ public final class DatabaseMigrator
                     migrateFromVersionThree(connection);
                     migrateFromVersionFour(connection);
                     migrateFromVersionFive(connection);
+                    migrateFromVersionSix(connection);
                     recordMigration(connection, CURRENT_SCHEMA,
                             AppVersion.CURRENT + "-schema-" + CURRENT_SCHEMA + "-provisional");
                     setUserVersion(connection, CURRENT_SCHEMA);
@@ -84,7 +86,8 @@ public final class DatabaseMigrator
         }
         if (sourceVersion != VERSION_0_1_0 && sourceVersion != INITIAL_0_2_0_SCHEMA
                 && sourceVersion != OLLAMA_HARDENING_SCHEMA && sourceVersion != STORY_CARD_SCHEMA
-                && sourceVersion != PROMPT_LAYOUT_SCHEMA)
+                && sourceVersion != PROMPT_LAYOUT_SCHEMA
+                && sourceVersion != STORY_CARD_PRESET_SELECTION_SCHEMA)
         {
             throw new SQLException("Unsupported database migration source: " + sourceVersion);
         }
@@ -109,7 +112,11 @@ public final class DatabaseMigrator
             {
                 migrateFromVersionFour(connection);
             }
-            migrateFromVersionFive(connection);
+            if (sourceVersion < STORY_CARD_PRESET_SELECTION_SCHEMA)
+            {
+                migrateFromVersionFive(connection);
+            }
+            migrateFromVersionSix(connection);
             String sourceLabel = sourceVersion == VERSION_0_1_0
                     ? AppVersion.FIRST_MIGRATION_SOURCE
                     : AppVersion.CURRENT + "-schema-" + sourceVersion;
@@ -169,6 +176,12 @@ public final class DatabaseMigrator
                 "TEXT NOT NULL DEFAULT 'builtin:condensed'");
     }
 
+    private static void migrateFromVersionSix(Connection connection) throws SQLException
+    {
+        addColumnIfMissing(connection, "stories", "story_card_generation_context",
+                "TEXT NOT NULL DEFAULT ''");
+    }
+
     private static boolean needsSchemaThreeSettingsNormalization(Connection connection) throws SQLException
     {
         if (!tableExists(connection, "app_settings") || !tableExists(connection, "model_settings"))
@@ -198,10 +211,12 @@ public final class DatabaseMigrator
             return true;
         }
         Set<String> storyCardColumns = columns(connection, "story_cards");
+        Set<String> storyColumns = columns(connection, "stories");
         Set<String> appColumns = columns(connection, "app_settings");
         Set<String> modelColumns = columns(connection, "model_settings");
         return !storyCardColumns.contains("type")
                 || !storyCardColumns.contains("notes")
+                || !storyColumns.contains("story_card_generation_context")
                 || appColumns.contains("an_placement")
                 || !appColumns.contains("selected_story_card_command_preset_id")
                 || !modelColumns.contains("story_card_wrapping_style")
@@ -230,6 +245,7 @@ public final class DatabaseMigrator
                     system_prompt TEXT NOT NULL,
                     plot_essentials TEXT NOT NULL,
                     author_note TEXT NOT NULL,
+                    story_card_generation_context TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )

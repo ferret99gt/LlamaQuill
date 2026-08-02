@@ -15,6 +15,8 @@ implementation-level record.
   another Story Card is opened, including built-in presets such as Basic Prose Prompt.
 - Story Card generation now always uses Role-aware Turns for its request, keeping the command in a
   distinct final user turn even when the model's saved conversation layout is Flattened.
+- Additional Generation Context is now saved with its story, restored in every Story Card dialog,
+  and copied when cloning Story Details.
 
 ## 0.3.0
 

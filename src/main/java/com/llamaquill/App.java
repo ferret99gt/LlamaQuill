@@ -1501,6 +1501,8 @@ public class App extends Application
                 storyCardPresetService,
                 appSettings.selectedStoryCardCommandPresetId(),
                 this::updateSelectedStoryCardCommandPreset,
+                story.storyCardGenerationContext(),
+                contextValue -> saveStoryCardGenerationContext(story, contextValue),
                 this::showInfo,
                 this::showError,
                 statusLabel::setText,
@@ -1551,6 +1553,18 @@ public class App extends Application
         }
         appSettings = updated;
         persistAppSettings();
+    }
+
+    private void saveStoryCardGenerationContext(Story dialogStory, String contextValue) throws SQLException
+    {
+        Story base = currentStory() != null && currentStory().id().equals(dialogStory.id())
+                ? currentStory()
+                : dialogStory;
+        Story updated = storyService.updateStoryCardGenerationContext(base, contextValue);
+        if (updated != base && currentStory() != null && currentStory().id().equals(updated.id()))
+        {
+            storyWorkspace.updateStory(updated);
+        }
     }
 
     private void showPromptDialog()
