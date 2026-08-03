@@ -66,8 +66,7 @@ class StoryCardGenerationCoordinatorTest
                     "Rewrite {{title}} from this saved entry: {{entry}}",
                     "Mia is a rogue.");
 
-            GenerationSettings flattenedSettings = GenerationSettings.defaults()
-                    .withConversationLayout(ConversationLayout.FLATTENED);
+            GenerationSettings flattenedSettings = settingsWithResponseLength();
             StoryCardGenerationCoordinator.Result result =
                     coordinator.generate(story, request, flattenedSettings);
 
@@ -75,6 +74,8 @@ class StoryCardGenerationCoordinatorTest
             assertEquals("Mia", result.resolvedTriggers());
             assertEquals(ConversationLayout.FLATTENED, flattenedSettings.conversationLayout());
             assertEquals(ConversationLayout.ROLE_AWARE, ollama.settings.conversationLayout());
+            assertTrue(flattenedSettings.responseLengthEnabled());
+            assertFalse(ollama.settings.responseLengthEnabled());
             String completePrompt = ollama.messages.stream()
                     .map(ChatMessage::content)
                     .reduce("", String::concat);
@@ -92,7 +93,33 @@ class StoryCardGenerationCoordinatorTest
             assertFalse(ollama.messages.getLast().content().contains("Mia meets a guild member."));
             assertTrue(ollama.messages.stream().anyMatch(message -> "assistant".equals(message.role())
                     && message.content().contains("Mia meets a guild member.")));
+
+            StoryCardGenerationRequest lengthLimitedRequest = new StoryCardGenerationRequest(
+                    mia.id(), "Mia", "", "Rewrite {{title}}.", "", false);
+            coordinator.generate(story, lengthLimitedRequest, flattenedSettings);
+            assertTrue(ollama.settings.responseLengthEnabled());
+            assertEquals(ConversationLayout.ROLE_AWARE, ollama.settings.conversationLayout());
         }
+    }
+
+    private static GenerationSettings settingsWithResponseLength()
+    {
+        return new GenerationSettings(
+                GenerationSettings.DEFAULT_MODEL, GenerationSettings.DEFAULT_OLLAMA_HOST, 8192, 1.0,
+                true, 150,
+                false, 0.8,
+                false, 200,
+                false, 0.95,
+                false, 0.025,
+                false, 1.0,
+                false, 0.25,
+                false, 0.0,
+                false, 64,
+                false, 1.05,
+                4915, 7,
+                com.llamaquill.model.AppSettings.DEFAULT_OLLAMA_KEEP_ALIVE_MINUTES,
+                com.llamaquill.model.StoryCardWrappingStyle.NONE,
+                ConversationLayout.FLATTENED);
     }
 
     private static int occurrences(String text, String target)

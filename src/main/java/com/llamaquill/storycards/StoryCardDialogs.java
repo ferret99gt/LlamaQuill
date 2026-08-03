@@ -20,6 +20,7 @@ import javafx.scene.control.TabPane;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.control.TextInputDialog;
+import javafx.scene.control.Tooltip;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
@@ -109,6 +110,10 @@ public final class StoryCardDialogs
         additionalContextArea.setPromptText("Lore, notes, or keywords that should guide this generation.");
         CheckBox logGenerationsBox = new CheckBox("Log replaced entries in Notes");
         logGenerationsBox.setSelected(true);
+        CheckBox ignoreResponseLengthBox = new CheckBox("Ignore Response Length");
+        ignoreResponseLengthBox.setSelected(true);
+        ignoreResponseLengthBox.setTooltip(new Tooltip(
+                "Omit the saved Response Length for this generation without changing the saved setting."));
 
         Button savePresetButton = new Button("Save");
         Button deletePresetButton = new Button("Delete");
@@ -138,11 +143,13 @@ public final class StoryCardDialogs
         tokenHelp.setWrapText(true);
         HBox presetRow = new HBox(8, presetChoice, savePresetButton, deletePresetButton);
         HBox.setHgrow(presetChoice, Priority.ALWAYS);
+        HBox generationOptions = new HBox(16, logGenerationsBox, ignoreResponseLengthBox);
+        generationOptions.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
         VBox command = new VBox(8,
                 new Label("Story Card Command Preset"), presetRow,
                 new Label("Story Card Command"), commandArea, tokenHelp,
                 new Label("Additional Generation Context"), additionalContextArea,
-                logGenerationsBox);
+                generationOptions);
         command.setPadding(new Insets(10));
         commandTab.setContent(scrollable(command));
 
@@ -193,7 +200,8 @@ public final class StoryCardDialogs
                         title,
                         triggers,
                         validatedCommand,
-                        additionalContextArea.getText());
+                        additionalContextArea.getText(),
+                        ignoreResponseLengthBox.isSelected());
             }
             catch (IllegalArgumentException e)
             {

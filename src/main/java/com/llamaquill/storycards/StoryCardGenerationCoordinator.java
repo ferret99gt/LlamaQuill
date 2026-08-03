@@ -55,6 +55,10 @@ public final class StoryCardGenerationCoordinator
                 request.additionalContext(),
                 savedCard);
         GenerationSettings storyCardSettings = settings.withConversationLayout(ConversationLayout.ROLE_AWARE);
+        if (request.ignoreResponseLength())
+        {
+            storyCardSettings = storyCardSettings.withoutNumPredict();
+        }
         AuxiliaryGenerationService.Result generated = auxiliaryGenerationService.generate(
                 story, blocks, cards, storyCardSettings, auxiliaryInput);
         String entry = generated.content();

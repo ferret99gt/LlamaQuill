@@ -17,6 +17,8 @@ implementation-level record.
   distinct final user turn even when the model's saved conversation layout is Flattened.
 - Additional Generation Context is now saved with its story, restored in every Story Card dialog,
   and copied when cloning Story Details.
+- Story Card generation can ignore the saved Response Length for a single request. The new option
+  is enabled by default and does not change the saved application setting.
 
 ## 0.3.0
 
