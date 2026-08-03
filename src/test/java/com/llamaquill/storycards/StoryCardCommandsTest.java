@@ -1,6 +1,7 @@
 package com.llamaquill.storycards;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -50,6 +51,22 @@ class StoryCardCommandsTest
         assertEquals("Player notes\n\n---\n\n[Entry replaced 2026-07-27 20:15:30]\nOld entry",
                 StoryCardCommands.appendGenerationHistory(
                         "Player notes", "Old entry", LocalDateTime.of(2026, 7, 27, 20, 15, 30)));
+    }
+
+    @Test
+    void extractsTheMostRecentGeneratedRevisionWithoutTreatingOrdinaryNotesAsHistory()
+    {
+        String first = StoryCardCommands.appendGenerationHistory(
+                "Player notes", "First entry", LocalDateTime.of(2026, 7, 27, 20, 15, 30));
+        String second = StoryCardCommands.appendGenerationHistory(
+                first, "Most recent entry", LocalDateTime.of(2026, 7, 28, 9, 5, 4));
+
+        StoryCardCommands.GenerationHistoryEntry history =
+                StoryCardCommands.latestGenerationHistory(second).orElseThrow();
+
+        assertEquals("2026-07-28 09:05:04", history.timestamp());
+        assertEquals("Most recent entry", history.content());
+        assertFalse(StoryCardCommands.latestGenerationHistory("Player notes only").isPresent());
     }
 
     @Test

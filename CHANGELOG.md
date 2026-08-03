@@ -19,6 +19,8 @@ implementation-level record.
   and copied when cloning Story Details.
 - Story Card generation can ignore the saved Response Length for a single request. The new option
   is enabled by default and does not change the saved application setting.
+- Story Cards can compare the current entry with the most recently replaced entry recorded in
+  Notes, using a synchronized side-by-side word diff sized for smaller displays.
 
 ## 0.3.0
 

@@ -23,7 +23,10 @@ import javafx.scene.control.TextInputDialog;
 import javafx.scene.control.Tooltip;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
+import javafx.scene.text.Text;
+import javafx.scene.text.TextFlow;
 import javafx.stage.Stage;
 
 import java.time.LocalDateTime;
@@ -102,6 +105,18 @@ public final class StoryCardDialogs
         TextArea notesArea = textArea(isNew ? "" : card.notes(), 5);
         CheckBox pinnedBox = new CheckBox("Pinned");
         pinnedBox.setSelected(!isNew && card.pinned());
+        Button comparePreviousButton = new Button("Compare Previous");
+        comparePreviousButton.setTooltip(new Tooltip(
+                "Compare the current entry with the most recently replaced entry saved in Notes."));
+        Runnable updateComparePreviousState = () -> comparePreviousButton.setDisable(
+                StoryCardCommands.latestGenerationHistory(notesArea.getText()).isEmpty());
+        notesArea.textProperty().addListener((observable, previous, current) -> updateComparePreviousState.run());
+        updateComparePreviousState.run();
+        comparePreviousButton.setOnAction(event -> StoryCardCommands
+                .latestGenerationHistory(notesArea.getText())
+                .ifPresentOrElse(
+                        history -> showEntryComparison(owner, titleField.getText(), history, entryArea.getText()),
+                        () -> showInfo.accept("No generated Story Card history was found in Notes.")));
 
         ComboBox<StoryCardCommands.PresetChoice> presetChoice = new ComboBox<>();
         presetChoice.setMaxWidth(Double.MAX_VALUE);
@@ -130,12 +145,18 @@ public final class StoryCardDialogs
         triggerRow.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
         HBox.setHgrow(triggersField, Priority.ALWAYS);
 
+        Region notesHeaderSpacer = new Region();
+        HBox.setHgrow(notesHeaderSpacer, Priority.ALWAYS);
+        HBox notesHeader = new HBox(8,
+                new Label("Notes (not sent to the model)"), notesHeaderSpacer, comparePreviousButton);
+        notesHeader.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
+
         VBox details = new VBox(8,
                 new Label("Type"), typeChoice, customTypeField,
                 new Label("Title"), titleField,
                 new Label("Entry"), entryArea, generateFromDetailsButton,
                 new Label("Triggers (comma separated)"), triggerRow,
-                new Label("Notes (not sent to the model)"), notesArea);
+                notesHeader, notesArea);
         details.setPadding(new Insets(10));
         detailsTab.setContent(scrollable(details));
 
@@ -335,6 +356,104 @@ public final class StoryCardDialogs
         }
 
         dialog.showAndWait();
+    }
+
+    private static void showEntryComparison(Stage owner, String cardTitle,
+            StoryCardCommands.GenerationHistoryEntry history, String currentEntry)
+    {
+        String previous = history.content();
+        String current = currentEntry == null ? "" : currentEntry;
+        StoryCardTextDiff.Comparison comparison = StoryCardTextDiff.compare(previous, current);
+
+        Dialog<Void> dialog = new Dialog<>();
+        dialog.initOwner(owner);
+        dialog.setTitle("Compare Story Card Entry");
+        String title = cardTitle == null || cardTitle.isBlank() ? "Story Card" : cardTitle.trim();
+        dialog.setHeaderText(title + " — previous entry from " + history.timestamp());
+        dialog.setResizable(true);
+
+        ScrollPane previousScroll = comparisonPane(comparison.previous());
+        ScrollPane currentScroll = comparisonPane(comparison.current());
+        synchronizeVerticalScrolling(previousScroll, currentScroll);
+
+        VBox previousColumn = new VBox(6,
+                new Label("Previous · " + previous.length() + " characters"), previousScroll);
+        VBox currentColumn = new VBox(6,
+                new Label("Current · " + current.length() + " characters"), currentScroll);
+        VBox.setVgrow(previousScroll, Priority.ALWAYS);
+        VBox.setVgrow(currentScroll, Priority.ALWAYS);
+        previousColumn.setMinWidth(0);
+        currentColumn.setMinWidth(0);
+        previousColumn.setPrefWidth(450);
+        currentColumn.setPrefWidth(450);
+        HBox.setHgrow(previousColumn, Priority.ALWAYS);
+        HBox.setHgrow(currentColumn, Priority.ALWAYS);
+
+        HBox columns = new HBox(12, previousColumn, currentColumn);
+        columns.setFillHeight(true);
+        VBox.setVgrow(columns, Priority.ALWAYS);
+
+        int characterDelta = current.length() - previous.length();
+        Label summary = new Label("Removed words: " + comparison.removedWords()
+                + "    Added words: " + comparison.addedWords()
+                + "    Character change: " + (characterDelta >= 0 ? "+" : "") + characterDelta);
+        summary.setWrapText(true);
+
+        VBox content = new VBox(10, summary, columns);
+        content.setPadding(new Insets(10));
+        dialog.getDialogPane().setContent(content);
+        dialog.getDialogPane().setPrefSize(960, 640);
+        dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+        dialog.showAndWait();
+    }
+
+    private static ScrollPane comparisonPane(List<StoryCardTextDiff.Span> spans)
+    {
+        TextFlow flow = new TextFlow();
+        flow.setLineSpacing(2);
+        flow.setStyle("-fx-padding: 12; -fx-background-color: #202020;");
+        for (StoryCardTextDiff.Span span : spans)
+        {
+            Text text = new Text(span.text());
+            text.setStyle("-fx-fill: #e6e1d8;");
+            if (span.kind() == StoryCardTextDiff.Kind.REMOVED)
+            {
+                text.setStyle("-fx-fill: #ff8a80; -fx-strikethrough: true;");
+            }
+            else if (span.kind() == StoryCardTextDiff.Kind.ADDED)
+            {
+                text.setStyle("-fx-fill: #8bd49c; -fx-underline: true;");
+            }
+            flow.getChildren().add(text);
+        }
+        ScrollPane scroll = new ScrollPane(flow);
+        scroll.setFitToWidth(true);
+        scroll.setPannable(false);
+        scroll.setMinWidth(0);
+        return scroll;
+    }
+
+    private static void synchronizeVerticalScrolling(ScrollPane first, ScrollPane second)
+    {
+        boolean[] synchronizing = {false};
+        first.vvalueProperty().addListener((observable, previous, current) ->
+        {
+            if (!synchronizing[0])
+            {
+                synchronizing[0] = true;
+                second.setVvalue(current.doubleValue());
+                synchronizing[0] = false;
+            }
+        });
+        second.vvalueProperty().addListener((observable, previous, current) ->
+        {
+            if (!synchronizing[0])
+            {
+                synchronizing[0] = true;
+                first.setVvalue(current.doubleValue());
+                synchronizing[0] = false;
+            }
+        });
     }
 
     private static void configureTypeControls(ComboBox<String> typeChoice, TextField customTypeField, StoryCard card)
