@@ -28,6 +28,7 @@ public final class DatabaseMigrator
     private static final int STORY_CARD_SCHEMA = 4;
     private static final int PROMPT_LAYOUT_SCHEMA = 5;
     private static final int STORY_CARD_PRESET_SELECTION_SCHEMA = 6;
+    private static final int STORY_CARD_GENERATION_CONTEXT_SCHEMA = 7;
     private static final int CURRENT_SCHEMA = AppVersion.DATABASE_SCHEMA;
     private static final DateTimeFormatter BACKUP_TIMESTAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS");
 
@@ -72,6 +73,7 @@ public final class DatabaseMigrator
                     migrateFromVersionFour(connection);
                     migrateFromVersionFive(connection);
                     migrateFromVersionSix(connection);
+                    migrateFromVersionSeven(connection);
                     recordMigration(connection, CURRENT_SCHEMA,
                             AppVersion.CURRENT + "-schema-" + CURRENT_SCHEMA + "-provisional");
                     setUserVersion(connection, CURRENT_SCHEMA);
@@ -87,7 +89,8 @@ public final class DatabaseMigrator
         if (sourceVersion != VERSION_0_1_0 && sourceVersion != INITIAL_0_2_0_SCHEMA
                 && sourceVersion != OLLAMA_HARDENING_SCHEMA && sourceVersion != STORY_CARD_SCHEMA
                 && sourceVersion != PROMPT_LAYOUT_SCHEMA
-                && sourceVersion != STORY_CARD_PRESET_SELECTION_SCHEMA)
+                && sourceVersion != STORY_CARD_PRESET_SELECTION_SCHEMA
+                && sourceVersion != STORY_CARD_GENERATION_CONTEXT_SCHEMA)
         {
             throw new SQLException("Unsupported database migration source: " + sourceVersion);
         }
@@ -117,6 +120,7 @@ public final class DatabaseMigrator
                 migrateFromVersionFive(connection);
             }
             migrateFromVersionSix(connection);
+            migrateFromVersionSeven(connection);
             String sourceLabel = sourceVersion == VERSION_0_1_0
                     ? AppVersion.FIRST_MIGRATION_SOURCE
                     : AppVersion.CURRENT + "-schema-" + sourceVersion;
@@ -182,6 +186,12 @@ public final class DatabaseMigrator
                 "TEXT NOT NULL DEFAULT ''");
     }
 
+    private static void migrateFromVersionSeven(Connection connection) throws SQLException
+    {
+        addColumnIfMissing(connection, "stories", "force_pin_all_story_cards",
+                "INTEGER NOT NULL DEFAULT 0 CHECK (force_pin_all_story_cards IN (0,1))");
+    }
+
     private static boolean needsSchemaThreeSettingsNormalization(Connection connection) throws SQLException
     {
         if (!tableExists(connection, "app_settings") || !tableExists(connection, "model_settings"))
@@ -217,6 +227,7 @@ public final class DatabaseMigrator
         return !storyCardColumns.contains("type")
                 || !storyCardColumns.contains("notes")
                 || !storyColumns.contains("story_card_generation_context")
+                || !storyColumns.contains("force_pin_all_story_cards")
                 || appColumns.contains("an_placement")
                 || !appColumns.contains("selected_story_card_command_preset_id")
                 || !modelColumns.contains("story_card_wrapping_style")
@@ -246,6 +257,8 @@ public final class DatabaseMigrator
                     plot_essentials TEXT NOT NULL,
                     author_note TEXT NOT NULL,
                     story_card_generation_context TEXT NOT NULL DEFAULT '',
+                    force_pin_all_story_cards INTEGER NOT NULL DEFAULT 0
+                        CHECK (force_pin_all_story_cards IN (0,1)),
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )

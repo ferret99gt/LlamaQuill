@@ -342,7 +342,8 @@ public class App extends Application
         storyCardLibraryController = new StoryCardLibraryController(
                 () -> showCardDialog(null),
                 this::showImportCardsDialog,
-                this::showCardDialog);
+                this::showCardDialog,
+                this::updateForcePinAllStoryCards);
 
         var statusBar = new HBox(statusLabel);
         statusBar.getStyleClass().add("status-bar");
@@ -1415,6 +1416,9 @@ public class App extends Application
         try
         {
             storyCardLibraryController.setCards(storyCardService.listForStory(storyId));
+            Story active = currentStory();
+            storyCardLibraryController.setForcePinAll(
+                    active != null && storyId.equals(active.id()) && active.forcePinAllStoryCards());
         }
         catch (SQLException e)
         {
@@ -1567,6 +1571,32 @@ public class App extends Application
         }
     }
 
+    private void updateForcePinAllStoryCards(boolean forcePinAll)
+    {
+        Story story = currentStory();
+        if (story == null)
+        {
+            return;
+        }
+        try
+        {
+            Story updated = storyService.updateForcePinAllStoryCards(story, forcePinAll);
+            if (updated != story)
+            {
+                storyWorkspace.updateStory(updated);
+                refreshStoryList(updated.id());
+            }
+            statusLabel.setText(forcePinAll
+                    ? "All Story Cards will be pinned during prompt compilation"
+                    : "Story Card compilation restored to individual pins and triggers");
+        }
+        catch (SQLException e)
+        {
+            storyCardLibraryController.setForcePinAll(story.forcePinAllStoryCards());
+            showError("Failed to update Story Card pin policy", e);
+        }
+    }
+
     private void showPromptDialog()
     {
         StoryTaskContext context = captureStoryTaskContext();
@@ -1633,11 +1663,13 @@ public class App extends Application
                 textValue -> statusLabel.setText(textValue),
                 () -> setStoryActionButtonsBusy(true),
                 this::restoreStoryActionButtonsState,
-                (request, onSuccess, onFailure) -> submitStoryTask(session, "Image Prompt",
+                (request, ignoreResponseLength, onSuccess, onFailure) -> submitStoryTask(
+                        session, "Image Prompt",
                         () -> imageGenerationCoordinator.generateImagePromptResult(
                                 story,
                                 request,
-                                context.generationSettings()),
+                                context.generationSettings(),
+                                ignoreResponseLength),
                         result ->
                         {
                             recordOllamaResponse(

@@ -78,6 +78,37 @@ class PromptCompilerTest
     }
 
     @Test
+    void storyForcePinTreatsEveryCardAsPinnedWithoutChangingCardValues()
+    {
+        StoryCard first = card("first", "AbsentFirst", "First forced entry.", false);
+        StoryCard second = card("second", "AbsentSecond", "Second forced entry.", false);
+        Story forcedStory = new Story(
+                "story", "Test", "", "", "", "", true, "now", "now");
+
+        PromptCompilation forced = new PromptCompiler().compile(
+                forcedStory,
+                List.of(block("1", Role.ASSISTANT, "Nothing activates either card.")),
+                List.of(first, second),
+                settings(2048, false, 1, 100));
+
+        assertTrue(messageText(forced).contains("First forced entry."));
+        assertTrue(messageText(forced).contains("Second forced entry."));
+        assertEquals(Component.PINNED_STORY_CARD, cardEntry(forced, "first").component());
+        assertEquals(Component.PINNED_STORY_CARD, cardEntry(forced, "second").component());
+        assertFalse(first.pinned());
+        assertFalse(second.pinned());
+
+        PromptCompilation ordinary = new PromptCompiler().compile(
+                story("", "", ""),
+                List.of(block("1", Role.ASSISTANT, "Nothing activates either card.")),
+                List.of(first, second),
+                settings(2048, false, 1, 100));
+
+        assertFalse(messageText(ordinary).contains("First forced entry."));
+        assertFalse(messageText(ordinary).contains("Second forced entry."));
+    }
+
+    @Test
     void appliesTheSelectedModelWrappingToEachLoreEntryOnlyAtCompilation()
     {
         StoryCard first = card("first", "", "First entry.", true);

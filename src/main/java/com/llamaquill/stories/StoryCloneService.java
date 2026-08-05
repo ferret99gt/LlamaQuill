@@ -53,6 +53,7 @@ public final class StoryCloneService
                     request.includeStoryDetails() ? source.plotEssentials() : "",
                     request.includeStoryDetails() ? source.authorNote() : "",
                     request.includeStoryDetails() ? source.storyCardGenerationContext() : "",
+                    request.includeStoryDetails() && source.forcePinAllStoryCards(),
                     now,
                     now);
             storyRepository.insert(clone);

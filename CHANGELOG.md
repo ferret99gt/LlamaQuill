@@ -21,6 +21,10 @@ implementation-level record.
   is enabled by default and does not change the saved application setting.
 - Story Cards can compare the current entry with the most recently replaced entry recorded in
   Notes, using a synchronized side-by-side word diff sized for smaller displays.
+- See prompt generation now always uses Role-aware Turns and can ignore the saved Response Length
+  for an individual request. The new non-persistent option is enabled by default.
+- Each story can treat every Story Card as pinned during prompt compilation from the Story Cards
+  tab, without changing any card's individual Pinned value.
 
 ## 0.3.0
 

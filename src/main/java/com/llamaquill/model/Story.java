@@ -1,7 +1,7 @@
 package com.llamaquill.model;
 
 public record Story(String id, String title, String systemPrompt, String plotEssentials, String authorNote,
-        String storyCardGenerationContext, String createdAt, String updatedAt)
+        String storyCardGenerationContext, boolean forcePinAllStoryCards, String createdAt, String updatedAt)
 {
     public Story
     {
@@ -9,8 +9,15 @@ public record Story(String id, String title, String systemPrompt, String plotEss
     }
 
     public Story(String id, String title, String systemPrompt, String plotEssentials, String authorNote,
+            String storyCardGenerationContext, String createdAt, String updatedAt)
+    {
+        this(id, title, systemPrompt, plotEssentials, authorNote,
+                storyCardGenerationContext, false, createdAt, updatedAt);
+    }
+
+    public Story(String id, String title, String systemPrompt, String plotEssentials, String authorNote,
             String createdAt, String updatedAt)
     {
-        this(id, title, systemPrompt, plotEssentials, authorNote, "", createdAt, updatedAt);
+        this(id, title, systemPrompt, plotEssentials, authorNote, "", false, createdAt, updatedAt);
     }
 }

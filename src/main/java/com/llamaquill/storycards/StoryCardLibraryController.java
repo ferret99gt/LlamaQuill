@@ -5,11 +5,13 @@ import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.geometry.Insets;
 import javafx.scene.control.Button;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.Tab;
+import javafx.scene.control.Tooltip;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
 
@@ -21,14 +23,17 @@ public final class StoryCardLibraryController
 {
     private final ObservableList<StoryCard> cards = FXCollections.observableArrayList();
     private final ListView<StoryCard> cardList = new ListView<>(cards);
+    private final CheckBox forcePinAllBox = new CheckBox("Force pin all cards");
     private final VBox content;
     private final Tab tab;
 
-    public StoryCardLibraryController(Runnable onNewCard, Runnable onImportCards, Consumer<StoryCard> onOpenCard)
+    public StoryCardLibraryController(Runnable onNewCard, Runnable onImportCards,
+            Consumer<StoryCard> onOpenCard, Consumer<Boolean> onForcePinAllChanged)
     {
         Objects.requireNonNull(onNewCard, "onNewCard");
         Objects.requireNonNull(onImportCards, "onImportCards");
         Objects.requireNonNull(onOpenCard, "onOpenCard");
+        Objects.requireNonNull(onForcePinAllChanged, "onForcePinAllChanged");
 
         Button newCardButton = new Button("Create New Card");
         newCardButton.setMaxWidth(Double.MAX_VALUE);
@@ -37,6 +42,10 @@ public final class StoryCardLibraryController
         Button importCardsButton = new Button("Import AI Dungeon Cards");
         importCardsButton.setMaxWidth(Double.MAX_VALUE);
         importCardsButton.setOnAction(event -> onImportCards.run());
+
+        forcePinAllBox.setTooltip(new Tooltip(
+                "Treat every Story Card as pinned during prompt compilation without changing individual Pinned values."));
+        forcePinAllBox.setOnAction(event -> onForcePinAllChanged.accept(forcePinAllBox.isSelected()));
 
         cardList.setCellFactory(list -> new CardCell());
         cardList.setOnMouseClicked(event ->
@@ -51,7 +60,7 @@ public final class StoryCardLibraryController
             }
         });
 
-        content = new VBox(8, newCardButton, cardList, importCardsButton);
+        content = new VBox(8, newCardButton, cardList, forcePinAllBox, importCardsButton);
         content.setPadding(new Insets(10));
         VBox.setVgrow(cardList, Priority.ALWAYS);
 
@@ -73,6 +82,12 @@ public final class StoryCardLibraryController
     public void clear()
     {
         cards.clear();
+        forcePinAllBox.setSelected(false);
+    }
+
+    public void setForcePinAll(boolean forcePinAll)
+    {
+        forcePinAllBox.setSelected(forcePinAll);
     }
 
     public void setEnabled(boolean enabled)

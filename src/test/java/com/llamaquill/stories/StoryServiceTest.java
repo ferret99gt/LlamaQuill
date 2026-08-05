@@ -14,6 +14,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -42,8 +43,13 @@ class StoryServiceTest
             assertEquals(initial.story().id(),
                     service.loadOrCreate("Ignored", "Ignored").story().id());
 
-            Story renamed = service.rename(initial.story(), "  The Archive  ");
+            Story forcePinned = service.updateForcePinAllStoryCards(initial.story(), true);
+            assertTrue(forcePinned.forcePinAllStoryCards());
+            assertTrue(stories.findById(forcePinned.id()).orElseThrow().forcePinAllStoryCards());
+
+            Story renamed = service.rename(forcePinned, "  The Archive  ");
             assertEquals("The Archive", renamed.title());
+            assertTrue(renamed.forcePinAllStoryCards());
             assertEquals("The Archive", stories.findById(renamed.id()).orElseThrow().title());
 
             Story detailed = service.updateDetails(renamed, "System", "Plot", "Note");
@@ -58,16 +64,20 @@ class StoryServiceTest
                     contextualized.storyCardGenerationContext());
             assertEquals(contextualized, stories.findById(contextualized.id()).orElseThrow());
 
-            Block block = new Block("block", contextualized.id(), Role.ASSISTANT,
+            Story individuallyPinned = service.updateForcePinAllStoryCards(contextualized, false);
+            assertFalse(individuallyPinned.forcePinAllStoryCards());
+            assertEquals(individuallyPinned, stories.findById(individuallyPinned.id()).orElseThrow());
+
+            Block block = new Block("block", individuallyPinned.id(), Role.ASSISTANT,
                     "Loaded through the service.", Timestamps.now(), 0);
             blocks.insert(block);
-            StoryService.StoryDocument loaded = service.reload(contextualized.id(), null);
-            assertEquals(contextualized, loaded.story());
+            StoryService.StoryDocument loaded = service.reload(individuallyPinned.id(), null);
+            assertEquals(individuallyPinned, loaded.story());
             assertEquals(block, loaded.blocks().getFirst());
             assertThrows(UnsupportedOperationException.class, () -> loaded.blocks().add(block));
 
-            Story touched = service.touch(contextualized);
-            assertEquals(contextualized.id(), touched.id());
+            Story touched = service.touch(individuallyPinned);
+            assertEquals(individuallyPinned.id(), touched.id());
             service.delete(touched);
             assertTrue(stories.findById(touched.id()).isEmpty());
             assertTrue(blocks.listForStory(touched.id()).isEmpty());

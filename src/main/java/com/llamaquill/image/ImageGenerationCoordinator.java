@@ -9,6 +9,7 @@ import com.llamaquill.generation.AuxiliaryGenerationService;
 import com.llamaquill.model.AppSettings;
 import com.llamaquill.model.Block;
 import com.llamaquill.model.ChatMessage;
+import com.llamaquill.model.ConversationLayout;
 import com.llamaquill.model.GenerationSettings;
 import com.llamaquill.model.Role;
 import com.llamaquill.model.Story;
@@ -69,6 +70,12 @@ public final class ImageGenerationCoordinator
     public AuxiliaryGenerationService.Result generateImagePromptResult(
             Story story, String request, GenerationSettings settings) throws Exception
     {
+        return generateImagePromptResult(story, request, settings, true);
+    }
+
+    public AuxiliaryGenerationService.Result generateImagePromptResult(
+            Story story, String request, GenerationSettings settings, boolean ignoreResponseLength) throws Exception
+    {
         Objects.requireNonNull(story, "story");
         Objects.requireNonNull(settings, "settings");
 
@@ -87,8 +94,13 @@ public final class ImageGenerationCoordinator
                         new ChatMessage("user", userPrompt)),
                 "",
                 null);
+        GenerationSettings seeSettings = settings.withConversationLayout(ConversationLayout.ROLE_AWARE);
+        if (ignoreResponseLength)
+        {
+            seeSettings = seeSettings.withoutNumPredict();
+        }
         return auxiliaryGenerationService.generate(
-                story, currentBlocks, currentCards, settings, auxiliaryInput);
+                story, currentBlocks, currentCards, seeSettings, auxiliaryInput);
     }
 
     public ComfyUiClient.GenerationResult generateImages(AppSettings appSettings, String promptText)

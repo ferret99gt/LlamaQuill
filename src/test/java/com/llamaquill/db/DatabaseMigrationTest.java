@@ -53,6 +53,7 @@ class DatabaseMigrationTest
             assertFalse(columns(database, "app_settings").contains("an_placement"));
             assertTrue(columns(database, "app_settings").contains("selected_story_card_command_preset_id"));
             assertTrue(columns(database, "stories").contains("story_card_generation_context"));
+            assertTrue(columns(database, "stories").contains("force_pin_all_story_cards"));
             assertTrue(columns(database, "story_cards").containsAll(List.of("type", "notes")));
             assertTrue(columns(database, "model_settings").containsAll(
                     List.of("story_card_wrapping_style", "conversation_layout")));
@@ -112,7 +113,10 @@ class DatabaseMigrationTest
 
             StoryRepository stories = new StoryRepository(database);
             String now = Timestamps.now();
-            stories.insert(new Story("backup-story", "Backup", "", "", "", now, now));
+            Story forcePinnedStory = new Story(
+                    "backup-story", "Backup", "", "", "", "", true, now, now);
+            stories.insert(forcePinnedStory);
+            assertEquals(forcePinnedStory, stories.findById(forcePinnedStory.id()).orElseThrow());
             Path backup = database.createBackup();
             assertTrue(Files.isRegularFile(backup));
             try (Connection backupConnection = DriverManager.getConnection("jdbc:sqlite:" + backup);
@@ -248,6 +252,35 @@ class DatabaseMigrationTest
             assertTrue(columns(database, "stories").contains("story_card_generation_context"));
             assertEquals("", new StoryRepository(database).findById("story").orElseThrow()
                     .storyCardGenerationContext());
+        }
+    }
+
+    @Test
+    void migratesSchemaSevenWithForcePinAllDisabled() throws Exception
+    {
+        AppPaths paths = paths("schema-seven-force-pin-all-story-cards");
+        try (Database database = Database.open(paths))
+        {
+            String now = Timestamps.now();
+            new StoryRepository(database).insert(
+                    new Story("story", "Story", "", "", "", now, now));
+        }
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + paths.databaseFile());
+             Statement statement = connection.createStatement())
+        {
+            statement.execute("ALTER TABLE stories DROP COLUMN force_pin_all_story_cards");
+            statement.execute("PRAGMA user_version = 7");
+        }
+
+        try (Database database = Database.open(paths))
+        {
+            Database.StartupReport report = database.startupReport();
+            assertEquals(7, report.migration().sourceSchema());
+            assertEquals(AppVersion.DATABASE_SCHEMA, report.migration().targetSchema());
+            assertTrue(Files.isRegularFile(report.migration().backup().orElseThrow()));
+            assertTrue(columns(database, "stories").contains("force_pin_all_story_cards"));
+            assertFalse(new StoryRepository(database).findById("story").orElseThrow()
+                    .forcePinAllStoryCards());
         }
     }
 

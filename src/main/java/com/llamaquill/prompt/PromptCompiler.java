@@ -73,7 +73,8 @@ public class PromptCompiler
 
         StoryCardSelection selectedCards = selectStoryCards(
                 storyCards, originalWindow, settings.storyCardLookback(), auxiliary.activationText(),
-                originalForcedCard == null ? "" : originalForcedCard.id());
+                originalForcedCard == null ? "" : originalForcedCard.id(),
+                story.forcePinAllStoryCards());
         List<StoryCard> originalPinned = List.copyOf(selectedCards.pinned());
         List<StoryCard> originalTriggered = List.copyOf(selectedCards.triggered());
         List<StoryCard> pinned = new ArrayList<>(originalPinned);
@@ -706,7 +707,7 @@ public class PromptCompiler
     }
 
     private static StoryCardSelection selectStoryCards(List<StoryCard> storyCards, List<Block> window, int lookback,
-            String activationText, String forcedCardId)
+            String activationText, String forcedCardId, boolean forcePinAll)
     {
         String matchText = buildLookbackText(window, lookback);
         if (activationText != null && !activationText.isBlank())
@@ -726,6 +727,11 @@ public class PromptCompiler
             }
             if (forcedCardId != null && !forcedCardId.isBlank() && forcedCardId.equals(card.id()))
             {
+                continue;
+            }
+            if (forcePinAll)
+            {
+                pinned.add(card);
                 continue;
             }
             TriggerMatch match = findTriggerMatches(card.triggers(), matchText);

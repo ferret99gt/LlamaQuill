@@ -70,7 +70,8 @@ public final class StoryService
             return story;
         }
         Story updated = new Story(story.id(), normalizedTitle, story.systemPrompt(), story.plotEssentials(),
-                story.authorNote(), story.storyCardGenerationContext(), story.createdAt(), Timestamps.now());
+                story.authorNote(), story.storyCardGenerationContext(), story.forcePinAllStoryCards(),
+                story.createdAt(), Timestamps.now());
         storyRepository.updateTitle(updated.id(), updated.title(), updated.updatedAt());
         return updated;
     }
@@ -89,7 +90,8 @@ public final class StoryService
             return story;
         }
         Story updated = new Story(story.id(), story.title(), normalizedSystem, normalizedPlot, normalizedNote,
-                story.storyCardGenerationContext(), story.createdAt(), Timestamps.now());
+                story.storyCardGenerationContext(), story.forcePinAllStoryCards(),
+                story.createdAt(), Timestamps.now());
         storyRepository.update(updated);
         return updated;
     }
@@ -104,6 +106,17 @@ public final class StoryService
         }
         return storyRepository.updateStoryCardGenerationContext(
                 story.id(), normalizedContext, Timestamps.now());
+    }
+
+    public Story updateForcePinAllStoryCards(Story story, boolean forcePinAll) throws SQLException
+    {
+        Objects.requireNonNull(story, "story");
+        if (forcePinAll == story.forcePinAllStoryCards())
+        {
+            return story;
+        }
+        return storyRepository.updateForcePinAllStoryCards(
+                story.id(), forcePinAll, Timestamps.now());
     }
 
     public Story touch(Story story) throws SQLException

@@ -5,6 +5,7 @@ import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.ContentDisplay;
 import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
@@ -12,6 +13,7 @@ import javafx.scene.control.ScrollPane;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.ToggleButton;
 import javafx.scene.control.ToggleGroup;
+import javafx.scene.control.Tooltip;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.HBox;
@@ -36,7 +38,8 @@ public final class SeeDialog
     @FunctionalInterface
     public interface PromptGenerator
     {
-        void generate(String request, Consumer<String> onSuccess, Consumer<Throwable> onFailure);
+        void generate(String request, boolean ignoreResponseLength,
+                Consumer<String> onSuccess, Consumer<Throwable> onFailure);
     }
 
     @FunctionalInterface
@@ -67,6 +70,11 @@ public final class SeeDialog
         requestArea.setWrapText(true);
         requestArea.setPrefRowCount(3);
         requestArea.setPromptText("Optional. Leave blank to infer from the latest scene.");
+
+        CheckBox ignoreResponseLengthBox = new CheckBox("Ignore Response Length");
+        ignoreResponseLengthBox.setSelected(true);
+        ignoreResponseLengthBox.setTooltip(new Tooltip(
+                "Omit the saved Response Length for this prompt without changing the saved setting."));
 
         TextArea promptArea = new TextArea(initialPrompt == null ? "" : initialPrompt);
         promptArea.setWrapText(true);
@@ -112,6 +120,7 @@ public final class SeeDialog
         VBox content = new VBox(10,
                 new Label("Request"),
                 requestArea,
+                ignoreResponseLengthBox,
                 new Label("Image Prompt"),
                 promptArea,
                 imageResultsBox,
@@ -238,7 +247,7 @@ public final class SeeDialog
             cancelButton.setDisable(true);
             beginBusy.run();
             setStatus.accept("Generating image prompt...");
-            promptGenerator.generate(request,
+            promptGenerator.generate(request, ignoreResponseLengthBox.isSelected(),
                     generated ->
                     {
                         restoreButtons.run();
