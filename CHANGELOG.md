@@ -25,6 +25,8 @@ implementation-level record.
   for an individual request. The new non-persistent option is enabled by default.
 - Each story can treat every Story Card as pinned during prompt compilation from the Story Cards
   tab, without changing any card's individual Pinned value.
+- Story Card Additional Generation Context now saves when the field loses focus or its dialog is
+  closed, independently of creating or updating a card.
 
 ## 0.3.0
 

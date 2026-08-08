@@ -83,14 +83,6 @@ public final class StoryCardDialogs
         dialog.initOwner(owner);
         dialog.setResizable(true);
         boolean[] generationInProgress = {false};
-        dialog.setOnCloseRequest(event ->
-        {
-            if (generationInProgress[0])
-            {
-                event.consume();
-                showInfo.accept("Please wait for Story Card generation to finish.");
-            }
-        });
 
         ComboBox<String> typeChoice = new ComboBox<>();
         typeChoice.getItems().setAll(STANDARD_TYPES);
@@ -123,6 +115,25 @@ public final class StoryCardDialogs
         TextArea commandArea = textArea("", 7);
         TextArea additionalContextArea = textArea(additionalGenerationContext, 5);
         additionalContextArea.setPromptText("Lore, notes, or keywords that should guide this generation.");
+        additionalContextArea.focusedProperty().addListener((observable, previouslyFocused, focused) ->
+        {
+            if (!focused)
+            {
+                persistGenerationContext(additionalContextArea, contextSaver, showError);
+            }
+        });
+        dialog.setOnCloseRequest(event ->
+        {
+            if (generationInProgress[0])
+            {
+                event.consume();
+                showInfo.accept("Please wait for Story Card generation to finish.");
+            }
+            else if (!persistGenerationContext(additionalContextArea, contextSaver, showError))
+            {
+                event.consume();
+            }
+        });
         CheckBox logGenerationsBox = new CheckBox("Log replaced entries in Notes");
         logGenerationsBox.setSelected(true);
         CheckBox ignoreResponseLengthBox = new CheckBox("Ignore Response Length");
@@ -230,13 +241,8 @@ public final class StoryCardDialogs
                 return;
             }
 
-            try
+            if (!persistGenerationContext(additionalContextArea, contextSaver, showError))
             {
-                contextSaver.save(request.additionalContext());
-            }
-            catch (Exception e)
-            {
-                showError.accept("Failed to save Story Card generation context", e);
                 return;
             }
 
@@ -323,9 +329,12 @@ public final class StoryCardDialogs
                     resolvedType(typeChoice, customTypeField),
                     notesArea.getText(),
                     pinnedBox.isSelected());
+            if (!persistGenerationContext(additionalContextArea, contextSaver, showError))
+            {
+                return;
+            }
             try
             {
-                contextSaver.save(additionalContextArea.getText());
                 saver.save(updated);
                 dialog.close();
             }
@@ -356,6 +365,21 @@ public final class StoryCardDialogs
         }
 
         dialog.showAndWait();
+    }
+
+    private static boolean persistGenerationContext(TextArea contextArea, GenerationContextSaver contextSaver,
+            BiConsumer<String, Throwable> showError)
+    {
+        try
+        {
+            contextSaver.save(contextArea.getText());
+            return true;
+        }
+        catch (Exception e)
+        {
+            showError.accept("Failed to save Story Card generation context", e);
+            return false;
+        }
     }
 
     private static void showEntryComparison(Stage owner, String cardTitle,
