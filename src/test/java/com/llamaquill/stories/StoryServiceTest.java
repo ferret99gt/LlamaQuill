@@ -47,15 +47,22 @@ class StoryServiceTest
             assertTrue(forcePinned.forcePinAllStoryCards());
             assertTrue(stories.findById(forcePinned.id()).orElseThrow().forcePinAllStoryCards());
 
-            Story renamed = service.rename(forcePinned, "  The Archive  ");
+            Story styled = service.updateSelectedSeePromptPreset(forcePinned, "builtin:anime");
+            assertEquals("builtin:anime", styled.selectedSeePromptPresetId());
+            assertEquals("builtin:anime",
+                    stories.findById(styled.id()).orElseThrow().selectedSeePromptPresetId());
+
+            Story renamed = service.rename(styled, "  The Archive  ");
             assertEquals("The Archive", renamed.title());
             assertTrue(renamed.forcePinAllStoryCards());
+            assertEquals("builtin:anime", renamed.selectedSeePromptPresetId());
             assertEquals("The Archive", stories.findById(renamed.id()).orElseThrow().title());
 
             Story detailed = service.updateDetails(renamed, "System", "Plot", "Note");
             assertEquals("System", detailed.systemPrompt());
             assertEquals("Plot", detailed.plotEssentials());
             assertEquals("Note", detailed.authorNote());
+            assertEquals("builtin:anime", detailed.selectedSeePromptPresetId());
             assertEquals(detailed, stories.findById(detailed.id()).orElseThrow());
 
             Story contextualized = service.updateStoryCardGenerationContext(

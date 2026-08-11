@@ -1,0 +1,128 @@
+{
+	"1": {
+		"class_type": "UNETLoader",
+		"inputs": {
+			"unet_name": "zeta-chroma-base-x0-pixel-dino-distance.safetensors",
+			"weight_dtype": "default"
+		}
+	},
+	"2": {
+		"class_type": "CLIPLoader",
+		"inputs": {
+			"clip_name": "qwen_3_4b.safetensors",
+			"type": "lumina2",
+			"device": "default"
+		}
+	},
+	"3": {
+		"class_type": "VAELoader",
+		"inputs": {
+			"vae_name": "pixel_space"
+		}
+	},
+	"4": {
+		"class_type": "ModelSamplingAuraFlow",
+		"inputs": {
+			"shift": 8.0,
+			"model": [
+				"1",
+				0
+			]
+		}
+	},
+	"5": {
+		"class_type": "CLIPTextEncode",
+		"inputs": {
+			"text": "%{prompt}",
+			"clip": [
+				"2",
+				0
+			]
+		}
+	},
+	"6": {
+		"class_type": "CLIPTextEncode",
+		"inputs": {
+			"text": "low quality, ugly, unfinished, out of focus",
+			"clip": [
+				"2",
+				0
+			]
+		}
+	},
+	"7": {
+		"class_type": "EmptyImage",
+		"inputs": {
+			"width": %{width},
+			"height": %{height},
+			"batch_size": %{batch_size},
+			"color": 0
+		}
+	},
+	"8": {
+		"class_type": "VAEEncode",
+		"inputs": {
+			"pixels": [
+				"7",
+				0
+			],
+			"vae": [
+				"3",
+				0
+			]
+		}
+	},
+	"9": {
+		"class_type": "KSamplerAdvanced",
+		"inputs": {
+			"add_noise": "enable",
+			"noise_seed": %{seed},
+			"steps": 30,
+			"cfg": 3.8,
+			"sampler_name": "er_sde",
+			"scheduler": "beta",
+			"start_at_step": 0,
+			"end_at_step": 60,
+			"return_with_leftover_noise": "disable",
+			"model": [
+				"4",
+				0
+			],
+			"positive": [
+				"5",
+				0
+			],
+			"negative": [
+				"6",
+				0
+			],
+			"latent_image": [
+				"8",
+				0
+			]
+		}
+	},
+	"10": {
+		"class_type": "VAEDecode",
+		"inputs": {
+			"samples": [
+				"9",
+				0
+			],
+			"vae": [
+				"3",
+				0
+			]
+		}
+	},
+	"11": {
+		"class_type": "SaveImage",
+		"inputs": {
+			"filename_prefix": "LlamaQuill\\StoryImage",
+			"images": [
+				"10",
+				0
+			]
+		}
+	}
+}

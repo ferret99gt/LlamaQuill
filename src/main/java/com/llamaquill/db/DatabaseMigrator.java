@@ -29,6 +29,7 @@ public final class DatabaseMigrator
     private static final int PROMPT_LAYOUT_SCHEMA = 5;
     private static final int STORY_CARD_PRESET_SELECTION_SCHEMA = 6;
     private static final int STORY_CARD_GENERATION_CONTEXT_SCHEMA = 7;
+    private static final int FORCE_PIN_ALL_STORY_CARDS_SCHEMA = 8;
     private static final int CURRENT_SCHEMA = AppVersion.DATABASE_SCHEMA;
     private static final DateTimeFormatter BACKUP_TIMESTAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS");
 
@@ -74,6 +75,7 @@ public final class DatabaseMigrator
                     migrateFromVersionFive(connection);
                     migrateFromVersionSix(connection);
                     migrateFromVersionSeven(connection);
+                    migrateFromVersionEight(connection);
                     recordMigration(connection, CURRENT_SCHEMA,
                             AppVersion.CURRENT + "-schema-" + CURRENT_SCHEMA + "-provisional");
                     setUserVersion(connection, CURRENT_SCHEMA);
@@ -90,7 +92,8 @@ public final class DatabaseMigrator
                 && sourceVersion != OLLAMA_HARDENING_SCHEMA && sourceVersion != STORY_CARD_SCHEMA
                 && sourceVersion != PROMPT_LAYOUT_SCHEMA
                 && sourceVersion != STORY_CARD_PRESET_SELECTION_SCHEMA
-                && sourceVersion != STORY_CARD_GENERATION_CONTEXT_SCHEMA)
+                && sourceVersion != STORY_CARD_GENERATION_CONTEXT_SCHEMA
+                && sourceVersion != FORCE_PIN_ALL_STORY_CARDS_SCHEMA)
         {
             throw new SQLException("Unsupported database migration source: " + sourceVersion);
         }
@@ -121,6 +124,7 @@ public final class DatabaseMigrator
             }
             migrateFromVersionSix(connection);
             migrateFromVersionSeven(connection);
+            migrateFromVersionEight(connection);
             String sourceLabel = sourceVersion == VERSION_0_1_0
                     ? AppVersion.FIRST_MIGRATION_SOURCE
                     : AppVersion.CURRENT + "-schema-" + sourceVersion;
@@ -192,6 +196,13 @@ public final class DatabaseMigrator
                 "INTEGER NOT NULL DEFAULT 0 CHECK (force_pin_all_story_cards IN (0,1))");
     }
 
+    private static void migrateFromVersionEight(Connection connection) throws SQLException
+    {
+        addColumnIfMissing(connection, "stories", "selected_see_prompt_preset_id",
+                "TEXT NOT NULL DEFAULT 'builtin:none'");
+        createSeePromptPresetsTable(connection);
+    }
+
     private static boolean needsSchemaThreeSettingsNormalization(Connection connection) throws SQLException
     {
         if (!tableExists(connection, "app_settings") || !tableExists(connection, "model_settings"))
@@ -216,7 +227,8 @@ public final class DatabaseMigrator
     {
         if (needsSchemaThreeSettingsNormalization(connection)
                 || !tableExists(connection, "story_cards")
-                || !tableExists(connection, "story_card_command_presets"))
+                || !tableExists(connection, "story_card_command_presets")
+                || !tableExists(connection, "see_prompt_presets"))
         {
             return true;
         }
@@ -228,6 +240,7 @@ public final class DatabaseMigrator
                 || !storyCardColumns.contains("notes")
                 || !storyColumns.contains("story_card_generation_context")
                 || !storyColumns.contains("force_pin_all_story_cards")
+                || !storyColumns.contains("selected_see_prompt_preset_id")
                 || appColumns.contains("an_placement")
                 || !appColumns.contains("selected_story_card_command_preset_id")
                 || !modelColumns.contains("story_card_wrapping_style")
@@ -244,6 +257,7 @@ public final class DatabaseMigrator
         createAppSettingsTable(connection);
         createModelSettingsTable(connection);
         createStoryCardCommandPresetsTable(connection);
+        createSeePromptPresetsTable(connection);
         createIndexesAndMetadata(connection);
     }
 
@@ -259,6 +273,7 @@ public final class DatabaseMigrator
                     story_card_generation_context TEXT NOT NULL DEFAULT '',
                     force_pin_all_story_cards INTEGER NOT NULL DEFAULT 0
                         CHECK (force_pin_all_story_cards IN (0,1)),
+                    selected_see_prompt_preset_id TEXT NOT NULL DEFAULT 'builtin:none',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
@@ -343,6 +358,19 @@ public final class DatabaseMigrator
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL COLLATE NOCASE UNIQUE,
                     command TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """);
+    }
+
+    private static void createSeePromptPresetsTable(Connection connection) throws SQLException
+    {
+        execute(connection, """
+                CREATE TABLE IF NOT EXISTS see_prompt_presets (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                    prompt TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )

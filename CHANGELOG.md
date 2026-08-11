@@ -23,10 +23,17 @@ implementation-level record.
   Notes, using a synchronized side-by-side word diff sized for smaller displays.
 - See prompt generation now always uses Role-aware Turns and can ignore the saved Response Length
   for an individual request. The new non-persistent option is enabled by default.
+- See now offers story-specific visual style presets. None preserves the existing prompt flow;
+  Photo, Realistic, Anime, Digital Illustration, and Painterly are protected built-ins, and custom
+  styles can be saved, updated, and deleted. The style prompt remains separate from the optional
+  custom request and is inserted before it.
 - Each story can treat every Story Card as pinned during prompt compilation from the Story Cards
   tab, without changing any card's individual Pinned value.
 - Story Card Additional Generation Context now saves when the field loses focus or its dialog is
   closed, independently of creating or updating a card.
+- Kroma v0.2 Turbo is now the recommended See workflow, using its native Krea 2 ComfyUI pipeline.
+  The dormant Chroma2 Kaleidoscope workflow remains packaged for reference but is no longer
+  selectable.
 
 ## 0.3.0
 

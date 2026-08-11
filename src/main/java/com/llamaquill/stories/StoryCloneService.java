@@ -54,6 +54,7 @@ public final class StoryCloneService
                     request.includeStoryDetails() ? source.authorNote() : "",
                     request.includeStoryDetails() ? source.storyCardGenerationContext() : "",
                     request.includeStoryDetails() && source.forcePinAllStoryCards(),
+                    request.includeStoryDetails() ? source.selectedSeePromptPresetId() : "builtin:none",
                     now,
                     now);
             storyRepository.insert(clone);

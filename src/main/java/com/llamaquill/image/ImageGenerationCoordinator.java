@@ -76,6 +76,13 @@ public final class ImageGenerationCoordinator
     public AuxiliaryGenerationService.Result generateImagePromptResult(
             Story story, String request, GenerationSettings settings, boolean ignoreResponseLength) throws Exception
     {
+        return generateImagePromptResult(story, "", request, settings, ignoreResponseLength);
+    }
+
+    public AuxiliaryGenerationService.Result generateImagePromptResult(
+            Story story, String stylePrompt, String request, GenerationSettings settings,
+            boolean ignoreResponseLength) throws Exception
+    {
         Objects.requireNonNull(story, "story");
         Objects.requireNonNull(settings, "settings");
 
@@ -83,6 +90,11 @@ public final class ImageGenerationCoordinator
         List<StoryCard> currentCards = storyCardRepository.listForStory(story.id());
         String userPrompt = """
                 Your job is to generate a prompt for an image generator that describes the most recent scene in the story. The prompt must describe each of the important subjects (gender, age, hair, eyes, build, clothing, and other visible details), what they are doing (eating, walking, talking, holding an object, using a weapon, etc), and where they are doing it (describe the room and theme, such as "an opulent castle bedroom during the morning").""";
+        String trimmedStylePrompt = stylePrompt == null ? "" : stylePrompt.trim();
+        if (!trimmedStylePrompt.isBlank())
+        {
+            userPrompt += "\n\n# Style preset\n" + trimmedStylePrompt;
+        }
         String trimmedRequest = request == null ? "" : request.trim();
         if (!trimmedRequest.isBlank())
         {

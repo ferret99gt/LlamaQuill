@@ -7,6 +7,7 @@ import com.llamaquill.db.StoryCardRepository;
 import com.llamaquill.db.StoryRepository;
 import com.llamaquill.db.AppSettingsRepository;
 import com.llamaquill.db.ModelSettingsRepository;
+import com.llamaquill.db.SeePromptPresetRepository;
 import com.llamaquill.db.StoryCardCommandPresetRepository;
 import com.llamaquill.generation.AuxiliaryGenerationService;
 import com.llamaquill.generation.GenerationCoordinator;
@@ -15,6 +16,7 @@ import com.llamaquill.generation.PromptDialog;
 import com.llamaquill.generation.StoryPromptCoordinator;
 import com.llamaquill.image.ImageGenerationCoordinator;
 import com.llamaquill.image.SeeDialog;
+import com.llamaquill.image.SeePromptPresetService;
 import com.llamaquill.model.Block;
 import com.llamaquill.model.AppSettings;
 import com.llamaquill.model.ConversationLayout;
@@ -117,7 +119,9 @@ public class App extends Application
     private static final int LEFT_SIDEBAR_WIDTH = 480;
     private static final int RIGHT_SIDEBAR_WIDTH = 480;
     private static final List<String> BUNDLED_COMFY_WORKFLOW_NAMES =
-            List.of("ChromaHD", "Chroma2Kaleidoscope");
+            List.of("ChromaHD", "Kroma");
+    private static final Set<String> INACTIVE_COMFY_WORKFLOW_NAMES =
+            Set.of("Chroma2Kaleidoscope", "Zeta-Chroma");
 
     private Database database;
     private StoryRepository storyRepository;
@@ -132,6 +136,7 @@ public class App extends Application
     private ImageGenerationCoordinator imageGenerationCoordinator;
     private StoryCardGenerationCoordinator storyCardGenerationCoordinator;
     private StoryCardPresetService storyCardPresetService;
+    private SeePromptPresetService seePromptPresetService;
     private StoryBlockService storyBlockService;
     private StoryCloneService storyCloneService;
     private StoryService storyService;
@@ -257,6 +262,7 @@ public class App extends Application
             appSettingsRepository = new AppSettingsRepository(database);
             modelSettingsRepository = new ModelSettingsRepository(database);
             StoryCardCommandPresetRepository presetRepository = new StoryCardCommandPresetRepository(database);
+            SeePromptPresetRepository seePresetRepository = new SeePromptPresetRepository(database);
             promptCompiler = new PromptCompiler();
             aiDungeonImports = new AIDungeonImports(database, storyRepository, blockRepository, cardRepository,
                     imageRepository, DEFAULT_SYSTEM_PROMPT);
@@ -271,6 +277,7 @@ public class App extends Application
             storyCardGenerationCoordinator = new StoryCardGenerationCoordinator(
                     blockRepository, cardRepository, auxiliaryGenerationService);
             storyCardPresetService = new StoryCardPresetService(presetRepository);
+            seePromptPresetService = new SeePromptPresetService(seePresetRepository);
             imageGenerationCoordinator = new ImageGenerationCoordinator(database, imageRepository, blockRepository,
                     storyRepository, cardRepository, auxiliaryGenerationService, comfyUiClient);
             storyBlockService = new StoryBlockService(
@@ -1150,14 +1157,21 @@ public class App extends Application
         {
             // Best effort discovery; defaults will still work.
         }
+        names.removeIf(name -> !isActiveComfyWorkflowName(name));
         names = new ArrayList<>(new java.util.LinkedHashSet<>(names));
         Collections.sort(names);
         return names;
     }
 
+    static boolean isActiveComfyWorkflowName(String name)
+    {
+        return name != null && !INACTIVE_COMFY_WORKFLOW_NAMES.contains(name);
+    }
+
     static List<String> bundledComfyWorkflowNames()
     {
         return BUNDLED_COMFY_WORKFLOW_NAMES.stream()
+                .filter(App::isActiveComfyWorkflowName)
                 .filter(name -> App.class.getResource("/comfyui/" + name + ".json") != null)
                 .toList();
     }
@@ -1559,6 +1573,26 @@ public class App extends Application
         persistAppSettings();
     }
 
+    private void saveSeePromptPresetSelection(Story dialogStory, String presetId)
+    {
+        Story base = currentStory() != null && currentStory().id().equals(dialogStory.id())
+                ? currentStory()
+                : dialogStory;
+        try
+        {
+            Story updated = storyService.updateSelectedSeePromptPreset(base, presetId);
+            if (updated != base && currentStory() != null && currentStory().id().equals(updated.id()))
+            {
+                storyWorkspace.updateStory(updated);
+                refreshStoryList(updated.id());
+            }
+        }
+        catch (SQLException e)
+        {
+            showError("Failed to save See style selection", e);
+        }
+    }
+
     private void saveStoryCardGenerationContext(Story dialogStory, String contextValue) throws SQLException
     {
         Story base = currentStory() != null && currentStory().id().equals(dialogStory.id())
@@ -1657,16 +1691,20 @@ public class App extends Application
                 header,
                 initialPrompt,
                 DEFAULT_SEE_REQUEST,
+                seePromptPresetService,
+                story.selectedSeePromptPresetId(),
+                presetId -> saveSeePromptPresetSelection(story, presetId),
                 insertLabel,
                 this::showInfo,
                 this::showError,
                 textValue -> statusLabel.setText(textValue),
                 () -> setStoryActionButtonsBusy(true),
                 this::restoreStoryActionButtonsState,
-                (request, ignoreResponseLength, onSuccess, onFailure) -> submitStoryTask(
+                (stylePrompt, request, ignoreResponseLength, onSuccess, onFailure) -> submitStoryTask(
                         session, "Image Prompt",
                         () -> imageGenerationCoordinator.generateImagePromptResult(
                                 story,
+                                stylePrompt,
                                 request,
                                 context.generationSettings(),
                                 ignoreResponseLength),

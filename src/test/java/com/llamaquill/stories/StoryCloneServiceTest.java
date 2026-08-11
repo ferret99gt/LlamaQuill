@@ -64,6 +64,7 @@ class StoryCloneServiceTest
             assertEquals(source.authorNote(), clone.authorNote());
             assertEquals(source.storyCardGenerationContext(), clone.storyCardGenerationContext());
             assertTrue(clone.forcePinAllStoryCards());
+            assertEquals(source.selectedSeePromptPresetId(), clone.selectedSeePromptPresetId());
             assertNotEquals(source.id(), clone.id());
 
             List<StoryCard> clonedCards = fixture.cards.listForStory(clone.id());
@@ -104,6 +105,7 @@ class StoryCloneServiceTest
             assertEquals("", clone.authorNote());
             assertEquals("", clone.storyCardGenerationContext());
             assertFalse(clone.forcePinAllStoryCards());
+            assertEquals("builtin:none", clone.selectedSeePromptPresetId());
             assertTrue(fixture.cards.listForStory(clone.id()).isEmpty());
 
             List<Block> clonedBlocks = fixture.blocks.listForStory(clone.id());
@@ -148,7 +150,7 @@ class StoryCloneServiceTest
     {
         String now = Timestamps.now();
         return new Story(id, "Source", "System", "Plot", "Author note",
-                "Keep generated cards grounded in the source story.", true, now, now);
+                "Keep generated cards grounded in the source story.", true, "builtin:painterly", now, now);
     }
 
     private static Block block(String id, String storyId, Role role, String text, int position)

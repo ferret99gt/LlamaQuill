@@ -83,15 +83,24 @@ optional.
 Open ComfyUI Desktop's built-in `Chroma Text to Image` template and let ComfyUI install the
 required models. Select `ChromaHD` in LlamaQuill.
 
-### Experimental Chroma2
+### Kroma
 
-For `Chroma2Kaleidoscope`:
+For `Kroma`, update ComfyUI to a version with native Krea 2 support, then install:
 
-- install the custom nodes and supporting models used by ComfyUI Desktop's
-  `Flux.2 [Klein] 4B` template;
-- the Flux.2 base-model download itself is not required by LlamaQuill's workflow;
-- download Chroma2 Kaleidoscope from
-  [lodestones/Chroma2-Kaleidoscope](https://huggingface.co/lodestones/Chroma2-Kaleidoscope).
+- `kroma-v0.2-turbo.safetensors` from [lodestones/Kroma](https://huggingface.co/lodestones/Kroma)
+  under `ComfyUI/models/diffusion_models/`;
+- `qwen3vl_4b_fp8_scaled.safetensors`, the Krea 2 text encoder, under
+  `ComfyUI/models/text_encoders/`;
+- `qwen_image_vae.safetensors`, the Krea 2 VAE, under `ComfyUI/models/vae/`.
+
+The bundled workflow uses Kroma's native Krea 2 pipeline with its Turbo defaults: 8 steps,
+CFG 1.0, Euler/simple sampling, and the model's built-in 1.15 shift.
+Kroma is the recommended See workflow; Chroma HD remains available as the established fallback.
+
+The **See** dialog can keep a visual style selected per story. Its protected built-ins are None,
+Photo, Realistic, Anime, Digital Illustration, and Painterly, with the same save/update/delete flow
+available for custom styles. The selected style prompt is sent after story context and before the
+separate optional custom request; choose None to keep the original unstyled prompt flow.
 
 Bundled workflow JSON files live under `src/main/resources/comfyui/` in the source tree.
 

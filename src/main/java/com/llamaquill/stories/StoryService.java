@@ -71,6 +71,7 @@ public final class StoryService
         }
         Story updated = new Story(story.id(), normalizedTitle, story.systemPrompt(), story.plotEssentials(),
                 story.authorNote(), story.storyCardGenerationContext(), story.forcePinAllStoryCards(),
+                story.selectedSeePromptPresetId(),
                 story.createdAt(), Timestamps.now());
         storyRepository.updateTitle(updated.id(), updated.title(), updated.updatedAt());
         return updated;
@@ -91,6 +92,7 @@ public final class StoryService
         }
         Story updated = new Story(story.id(), story.title(), normalizedSystem, normalizedPlot, normalizedNote,
                 story.storyCardGenerationContext(), story.forcePinAllStoryCards(),
+                story.selectedSeePromptPresetId(),
                 story.createdAt(), Timestamps.now());
         storyRepository.update(updated);
         return updated;
@@ -117,6 +119,22 @@ public final class StoryService
         }
         return storyRepository.updateForcePinAllStoryCards(
                 story.id(), forcePinAll, Timestamps.now());
+    }
+
+    public Story updateSelectedSeePromptPreset(Story story, String presetId) throws SQLException
+    {
+        Objects.requireNonNull(story, "story");
+        String normalizedPresetId = value(presetId).trim();
+        if (normalizedPresetId.isBlank())
+        {
+            normalizedPresetId = "builtin:none";
+        }
+        if (normalizedPresetId.equals(story.selectedSeePromptPresetId()))
+        {
+            return story;
+        }
+        return storyRepository.updateSelectedSeePromptPreset(
+                story.id(), normalizedPresetId, Timestamps.now());
     }
 
     public Story touch(Story story) throws SQLException

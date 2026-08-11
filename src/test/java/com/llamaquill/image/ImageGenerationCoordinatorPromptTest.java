@@ -55,20 +55,37 @@ class ImageGenerationCoordinatorPromptTest
                     new AuxiliaryGenerationService(new PromptCompiler(), ollama), new ComfyUiClient());
             GenerationSettings flattened = settingsWithResponseLength();
 
-            coordinator.generateImagePromptResult(story, "Show the falling rain.", flattened, true);
+            String stylePrompt = "Use a restrained watercolor style.";
+            coordinator.generateImagePromptResult(
+                    story, stylePrompt, "Show the falling rain.", flattened, true);
 
             assertEquals(ConversationLayout.FLATTENED, flattened.conversationLayout());
             assertTrue(flattened.responseLengthEnabled());
             assertEquals(ConversationLayout.ROLE_AWARE, ollama.settings.conversationLayout());
             assertFalse(ollama.settings.responseLengthEnabled());
             assertEquals("user", ollama.messages.getLast().role());
-            assertTrue(ollama.messages.getLast().content().contains("Show the falling rain."));
-            assertTrue(ollama.messages.stream().anyMatch(message -> "assistant".equals(message.role())
-                    && message.content().contains("Mia stands beneath the station lights.")));
+            String finalPrompt = ollama.messages.getLast().content();
+            assertTrue(finalPrompt.contains("Show the falling rain."));
+            assertTrue(finalPrompt.indexOf("# Style preset") < finalPrompt.indexOf("# User specific request"));
+            assertTrue(finalPrompt.indexOf(stylePrompt) < finalPrompt.indexOf("Show the falling rain."));
+            int sceneContextIndex = -1;
+            for (int i = 0; i < ollama.messages.size(); i++)
+            {
+                ChatMessage message = ollama.messages.get(i);
+                if ("assistant".equals(message.role())
+                        && message.content().contains("Mia stands beneath the station lights."))
+                {
+                    sceneContextIndex = i;
+                    break;
+                }
+            }
+            assertTrue(sceneContextIndex >= 0);
+            assertTrue(sceneContextIndex < ollama.messages.size() - 1);
 
             coordinator.generateImagePromptResult(story, "", flattened, false);
             assertEquals(ConversationLayout.ROLE_AWARE, ollama.settings.conversationLayout());
             assertTrue(ollama.settings.responseLengthEnabled());
+            assertFalse(ollama.messages.getLast().content().contains("# Style preset"));
         }
     }
 
