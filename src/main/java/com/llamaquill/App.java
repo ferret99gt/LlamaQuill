@@ -291,11 +291,6 @@ public class App extends Application
             ollamaClient.setModel(activeModelSettings.modelName());
             settings = buildGenerationSettings();
             executor = Executors.newSingleThreadExecutor();
-
-            StoryService.StoryDocument initialDocument =
-                    storyService.loadOrCreate("Untitled Story", DEFAULT_SYSTEM_PROMPT);
-            storyWorkspace.open(initialDocument.story(), initialDocument.blocks());
-            retryHistory.activate(currentSession());
         }
         catch (SQLException e)
         {
@@ -339,7 +334,7 @@ public class App extends Application
                 this::showError);
         takeTurnButton.setOnAction(event -> showTurnInput(true));
 
-        statusLabel = new Label("Ready");
+        statusLabel = new Label("Select a story");
 
         storyLibraryController = new StoryLibraryController(
                 LEFT_SIDEBAR_WIDTH,
@@ -365,11 +360,11 @@ public class App extends Application
         root.setRight(buildRightSidebar());
         root.setBottom(statusBar);
 
-        refreshStoryList(currentStory().id());
-        refreshCardList(currentStory().id());
-        populateStoryDetails(currentStory());
-        renderStoryBlocks(true);
-        setStoryDependentControlsEnabled(currentStory() != null);
+        refreshStoryList(null);
+        refreshCardList(null);
+        populateStoryDetails(null);
+        renderStoryBlocks(false);
+        setStoryDependentControlsEnabled(false);
 
         var scene = new Scene(root, 1280, 720);
         scene.getStylesheets().add(getClass().getResource("/styles.css").toExternalForm());

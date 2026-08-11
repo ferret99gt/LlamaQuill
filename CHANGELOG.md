@@ -5,6 +5,9 @@ implementation-level record.
 
 ## Unreleased
 
+- LlamaQuill now starts with no story selected, keeping story content and details off screen until
+  a story is explicitly opened. A new installation also waits for the user to create or import its
+  first story instead of silently creating an Untitled Story.
 - When Ollama reports the exact prompt and context token counts for an oversized chat request,
   LlamaQuill now recompiles against the corrected budget and retries once. This also lets the
   existing per-model token calibration learn from the successful retry.
