@@ -30,6 +30,11 @@ implementation-level record.
   Photo, Realistic, Anime, Digital Illustration, and Painterly are protected built-ins, and custom
   styles can be saved, updated, and deleted. The style prompt remains separate from the optional
   custom request and is inserted before it.
+- Image Width and Height have been replaced by global Image Dimension, Image Ratio, and Batch Size
+  defaults. Each See dialog starts from those defaults but can change them for its own generations
+  without overwriting Options; the calculated multiple-of-eight output size is shown before image
+  generation. Retrying an inserted image restores the Dimension, Ratio, and Batch Size used for
+  that image instead of reopening with the global defaults.
 - Each story can treat every Story Card as pinned during prompt compilation from the Story Cards
   tab, without changing any card's individual Pinned value.
 - Story Card Additional Generation Context now saves when the field loses focus or its dialog is

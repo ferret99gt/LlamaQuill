@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.llamaquill.model.AppSettings;
 import com.llamaquill.model.ConversationLayout;
+import com.llamaquill.model.ImageRatio;
 import com.llamaquill.model.ModelSettings;
 import com.llamaquill.model.StoryCardWrappingStyle;
 import org.junit.jupiter.api.Test;
@@ -123,7 +124,7 @@ class SettingsValidationTest
                 -10,
                 "",
                 1,
-                99999,
+                null,
                 0,
                 100);
 
@@ -131,17 +132,31 @@ class SettingsValidationTest
         assertEquals(32768, settings.responseLength());
         assertEquals(AppSettings.MIN_STORY_PERCENT, settings.minStoryPercent());
         assertEquals(0, settings.storyCardLookback());
-        assertEquals(64, settings.comfyWidth());
-        assertEquals(4096, settings.comfyHeight());
+        assertEquals(64, settings.comfyDimension());
+        assertEquals(ImageRatio.SQUARE, settings.comfyRatio());
         assertEquals(1, settings.comfyBatchSize());
         assertEquals(AppSettings.MAX_OLLAMA_KEEP_ALIVE_MINUTES, settings.ollamaKeepAliveMinutes());
         assertEquals(AppSettings.DEFAULT_STORY_CARD_COMMAND_PRESET_ID,
                 settings.selectedStoryCardCommandPresetId());
         assertEquals(settings, settings.toBuilder().build());
         assertEquals(AppSettings.MAX_OLLAMA_KEEP_ALIVE_MINUTES,
-                SettingsCoordinator.withComfyWidth(settings, 800).ollamaKeepAliveMinutes());
+                SettingsCoordinator.withComfyDimension(settings, 800).ollamaKeepAliveMinutes());
         assertEquals("builtin:basic-prose",
                 SettingsCoordinator.withSelectedStoryCardCommandPreset(settings, "builtin:basic-prose")
                         .selectedStoryCardCommandPresetId());
+    }
+
+    @Test
+    void imageRatiosCalculateMultipleOfEightDimensionsFromTheLongEdge()
+    {
+        assertEquals(new ImageRatio.Dimensions(720, 720), ImageRatio.SQUARE.dimensions(720));
+        assertEquals(new ImageRatio.Dimensions(720, 408), ImageRatio.LANDSCAPE_16_9.dimensions(720));
+        assertEquals(new ImageRatio.Dimensions(720, 480), ImageRatio.LANDSCAPE_3_2.dimensions(720));
+        assertEquals(new ImageRatio.Dimensions(720, 544), ImageRatio.LANDSCAPE_4_3.dimensions(720));
+        assertEquals(new ImageRatio.Dimensions(408, 720), ImageRatio.PORTRAIT_9_16.dimensions(720));
+        assertEquals(new ImageRatio.Dimensions(480, 720), ImageRatio.PORTRAIT_2_3.dimensions(720));
+        assertEquals(new ImageRatio.Dimensions(544, 720), ImageRatio.PORTRAIT_3_4.dimensions(720));
+        assertEquals(ImageRatio.LANDSCAPE_16_9, ImageRatio.nearest(1280, 720));
+        assertEquals(720, ImageRatio.normalizeDimension(721));
     }
 }

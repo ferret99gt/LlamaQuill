@@ -115,7 +115,7 @@ public final class StoryCloneService
         byte[] imageBytes = source.imageBytes() == null ? null : source.imageBytes().clone();
         imageRepository.insert(new StoryImage(
                 cloneImageId, cloneStoryId, source.prompt(), source.mimeType(), source.width(), source.height(),
-                source.workflowJson(), imageBytes, createdAt));
+                source.batchSize(), source.workflowJson(), imageBytes, createdAt));
         return cloneImageId;
     }
 

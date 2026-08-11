@@ -1,6 +1,7 @@
 package com.llamaquill.image;
 
 import com.llamaquill.model.SeePromptPreset;
+import com.llamaquill.model.ImageRatio;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
@@ -13,6 +14,8 @@ import javafx.scene.control.ContentDisplay;
 import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
+import javafx.scene.control.Spinner;
+import javafx.scene.control.SpinnerValueFactory;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextInputDialog;
 import javafx.scene.control.ToggleButton;
@@ -49,7 +52,8 @@ public final class SeeDialog
     @FunctionalInterface
     public interface ImageGenerator
     {
-        void generate(String promptText, Consumer<List<ImageGenerationCoordinator.PendingImage>> onSuccess,
+        void generate(String promptText, int width, int height, int batchSize,
+                Consumer<List<ImageGenerationCoordinator.PendingImage>> onSuccess,
                 Consumer<Throwable> onFailure);
     }
 
@@ -60,6 +64,7 @@ public final class SeeDialog
     }
 
     public static void show(Stage owner, String headerText, String initialPrompt, String defaultRequest,
+            int defaultImageDimension, ImageRatio defaultImageRatio, int defaultImageBatchSize,
             SeePromptPresetService presetService, String selectedPresetId, Consumer<String> selectPreset,
             String insertButtonText, Consumer<String> showInfo, BiConsumer<String, Throwable> showError,
             Consumer<String> setStatus, Runnable beginBusy, Runnable endBusy, PromptGenerator promptGenerator,
@@ -97,6 +102,36 @@ public final class SeeDialog
         promptArea.setWrapText(true);
         promptArea.setPrefRowCount(6);
         promptArea.setPromptText("Generated image prompt will appear here.");
+
+        Spinner<Integer> imageDimensionSpinner = buildSpinner(
+                ImageRatio.MIN_DIMENSION, ImageRatio.MAX_DIMENSION,
+                ImageRatio.normalizeDimension(defaultImageDimension), ImageRatio.DIMENSION_STEP);
+        imageDimensionSpinner.setPrefWidth(150);
+        imageDimensionSpinner.setTooltip(new Tooltip("The longer output edge in pixels."));
+        ComboBox<ImageRatio> imageRatioChoice = new ComboBox<>();
+        imageRatioChoice.getItems().setAll(ImageRatio.values());
+        imageRatioChoice.setValue(defaultImageRatio == null ? ImageRatio.SQUARE : defaultImageRatio);
+        imageRatioChoice.setPrefWidth(120);
+        Spinner<Integer> imageBatchSizeSpinner = buildSpinner(1, 32, defaultImageBatchSize, 1);
+        imageBatchSizeSpinner.setPrefWidth(110);
+        Label calculatedSizeLabel = new Label();
+        calculatedSizeLabel.setMinWidth(150);
+        Runnable updateCalculatedSize = () ->
+        {
+            ImageRatio ratio = imageRatioChoice.getValue() == null ? ImageRatio.SQUARE : imageRatioChoice.getValue();
+            ImageRatio.Dimensions dimensions = ratio.dimensions(imageDimensionSpinner.getValue());
+            calculatedSizeLabel.setText(dimensions.toString());
+        };
+        imageDimensionSpinner.valueProperty().addListener((observable, previous, current) -> updateCalculatedSize.run());
+        imageRatioChoice.valueProperty().addListener((observable, previous, current) -> updateCalculatedSize.run());
+        updateCalculatedSize.run();
+
+        VBox dimensionControl = new VBox(4, new Label("Image Dimension"), imageDimensionSpinner);
+        VBox ratioControl = new VBox(4, new Label("Image Ratio"), imageRatioChoice);
+        VBox batchControl = new VBox(4, new Label("Image Batch Size"), imageBatchSizeSpinner);
+        VBox calculatedControl = new VBox(4, new Label("Output Size"), calculatedSizeLabel);
+        HBox imageOptions = new HBox(12, dimensionControl, ratioControl, batchControl, calculatedControl);
+        imageOptions.setAlignment(Pos.BOTTOM_LEFT);
 
         ImageView selectedPreview = new ImageView();
         selectedPreview.setPreserveRatio(true);
@@ -144,6 +179,7 @@ public final class SeeDialog
                 ignoreResponseLengthBox,
                 new Label("Image Prompt"),
                 promptArea,
+                imageOptions,
                 imageResultsBox,
                 actions);
         content.setPadding(new Insets(10));
@@ -324,7 +360,13 @@ public final class SeeDialog
             cancelButton.setDisable(true);
             beginBusy.run();
             setStatus.accept("Generating images...");
-            imageGenerator.generate(promptText,
+            int dimension = ImageRatio.normalizeDimension(readSpinnerValue(imageDimensionSpinner));
+            imageDimensionSpinner.getValueFactory().setValue(dimension);
+            int batchSize = readSpinnerValue(imageBatchSizeSpinner);
+            ImageRatio ratio = imageRatioChoice.getValue() == null ? ImageRatio.SQUARE : imageRatioChoice.getValue();
+            ImageRatio.Dimensions dimensions = ratio.dimensions(dimension);
+            updateCalculatedSize.run();
+            imageGenerator.generate(promptText, dimensions.width(), dimensions.height(), batchSize,
                     pending ->
                     {
                         restoreButtons.run();
@@ -379,6 +421,35 @@ public final class SeeDialog
         }
         refreshImageSelectionUi.run();
         dialog.showAndWait();
+    }
+
+    private static Spinner<Integer> buildSpinner(int min, int max, int value, int step)
+    {
+        Spinner<Integer> spinner = new Spinner<>();
+        spinner.setValueFactory(new SpinnerValueFactory.IntegerSpinnerValueFactory(min, max, value, step));
+        spinner.setEditable(true);
+        return spinner;
+    }
+
+    private static int readSpinnerValue(Spinner<Integer> spinner)
+    {
+        SpinnerValueFactory<Integer> factory = spinner.getValueFactory();
+        Integer fallback = factory.getValue();
+        try
+        {
+            Integer value = factory.getConverter().fromString(spinner.getEditor().getText());
+            if (value == null)
+            {
+                throw new IllegalArgumentException("Spinner value cannot be blank.");
+            }
+            factory.setValue(value);
+        }
+        catch (RuntimeException ignored)
+        {
+            factory.setValue(fallback);
+            spinner.getEditor().setText(factory.getConverter().toString(fallback));
+        }
+        return factory.getValue();
     }
 
     private static void loadPresetChoices(SeePromptPresetService service,

@@ -11,6 +11,7 @@ import com.llamaquill.model.Block;
 import com.llamaquill.model.ChatMessage;
 import com.llamaquill.model.ConversationLayout;
 import com.llamaquill.model.GenerationSettings;
+import com.llamaquill.model.ImageRatio;
 import com.llamaquill.model.Role;
 import com.llamaquill.model.Story;
 import com.llamaquill.model.StoryCard;
@@ -119,9 +120,17 @@ public final class ImageGenerationCoordinator
             throws IOException, InterruptedException
     {
         Objects.requireNonNull(appSettings, "appSettings");
+        ImageRatio.Dimensions dimensions = appSettings.comfyRatio().dimensions(appSettings.comfyDimension());
+        return generateImages(appSettings, promptText,
+                dimensions.width(), dimensions.height(), appSettings.comfyBatchSize());
+    }
+
+    public ComfyUiClient.GenerationResult generateImages(AppSettings appSettings, String promptText,
+            int width, int height, int batchSize) throws IOException, InterruptedException
+    {
+        Objects.requireNonNull(appSettings, "appSettings");
         String template = loadWorkflowTemplateJson(appSettings.comfyWorkflow());
-        return comfyUiClient.generateImages(template, promptText,
-                appSettings.comfyWidth(), appSettings.comfyHeight(), appSettings.comfyBatchSize());
+        return comfyUiClient.generateImages(template, promptText, width, height, batchSize);
     }
 
     public ImageMutationResult insertOrReplaceImage(Story story, String expectedHeadId, PendingImage pending, String promptText,
@@ -131,7 +140,8 @@ public final class ImageGenerationCoordinator
         Objects.requireNonNull(story, "story");
         Objects.requireNonNull(pending, "pending");
 
-        StoryImage storyImage = createStoryImage(story.id(), promptText, pending.mimeType(), pending.workflowJson(), pending.bytes());
+        StoryImage storyImage = createStoryImage(story.id(), promptText, pending.mimeType(), pending.workflowJson(),
+                pending.bytes(), pending.batchSize());
         boolean replacingImage = replaceImageBlock != null && replaceImageBlock.role() == Role.IMAGE;
         String oldImageId = replacingImage ? replaceImageBlock.text() : null;
         ImageMutationResult result = database.transaction(connection ->
@@ -171,12 +181,12 @@ public final class ImageGenerationCoordinator
     }
 
     public ImageMutationResult replaceImageFromRetryHistory(Story story, Block headBlock, String prompt, byte[] bytes,
-            String mimeType, String workflowJson) throws SQLException
+            String mimeType, String workflowJson, int batchSize) throws SQLException
     {
         Objects.requireNonNull(story, "story");
         Objects.requireNonNull(headBlock, "headBlock");
 
-        StoryImage storyImage = createStoryImage(story.id(), prompt, mimeType, workflowJson, bytes);
+        StoryImage storyImage = createStoryImage(story.id(), prompt, mimeType, workflowJson, bytes, batchSize);
         String oldImageId = headBlock.text();
         ImageMutationResult result = database.transaction(connection ->
         {
@@ -258,7 +268,8 @@ public final class ImageGenerationCoordinator
         }
     }
 
-    private StoryImage createStoryImage(String storyId, String promptText, String mimeType, String workflowJson, byte[] bytes)
+    private StoryImage createStoryImage(String storyId, String promptText, String mimeType, String workflowJson,
+            byte[] bytes, int batchSize)
     {
         Image decoded = new Image(new ByteArrayInputStream(bytes == null ? new byte[0] : bytes));
         int width = (int) Math.round(decoded.getWidth());
@@ -270,6 +281,7 @@ public final class ImageGenerationCoordinator
                 mimeType == null || mimeType.isBlank() ? "image/png" : mimeType,
                 Math.max(0, width),
                 Math.max(0, height),
+                batchSize,
                 workflowJson == null ? "" : workflowJson,
                 bytes,
                 Timestamps.now());
@@ -280,8 +292,17 @@ public final class ImageGenerationCoordinator
         return storyRepository.touch(story.id(), Timestamps.now());
     }
 
-    public record PendingImage(byte[] bytes, String mimeType, String workflowJson)
+    public record PendingImage(byte[] bytes, String mimeType, String workflowJson, int batchSize)
     {
+        public PendingImage
+        {
+            batchSize = Math.max(1, batchSize);
+        }
+
+        public PendingImage(byte[] bytes, String mimeType, String workflowJson)
+        {
+            this(bytes, mimeType, workflowJson, 1);
+        }
     }
 
     public record ImageMutationResult(Story updatedStory, StoryImage storyImage, boolean replaced, boolean stale)

@@ -102,6 +102,11 @@ Photo, Realistic, Anime, Digital Illustration, and Painterly, with the same save
 available for custom styles. The selected style prompt is sent after story context and before the
 separate optional custom request; choose None to keep the original unstyled prompt flow.
 
+Options stores the default image long-edge Dimension, Ratio, and Batch Size. Every See dialog
+starts with those values and shows its calculated width and height, rounded to multiples of eight.
+Changing them inside See applies only to that dialog and does not replace the global defaults.
+Retrying an inserted image restores the values used to generate that image.
+
 Bundled workflow JSON files live under `src/main/resources/comfyui/` in the source tree.
 
 ## Privacy and connectivity

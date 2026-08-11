@@ -2,6 +2,7 @@ package com.llamaquill.settings;
 
 import com.llamaquill.model.AppSettings;
 import com.llamaquill.model.ConversationLayout;
+import com.llamaquill.model.ImageRatio;
 import com.llamaquill.model.ModelSettings;
 import com.llamaquill.model.StoryCardWrappingStyle;
 import com.llamaquill.serviceClients.OllamaModelDetails;
@@ -110,8 +111,20 @@ public final class SettingsPaneController
             }
         });
 
-        Spinner<Integer> comfyWidthSpinner = buildSpinner(64, 4096, appSettings.comfyWidth());
-        Spinner<Integer> comfyHeightSpinner = buildSpinner(64, 4096, appSettings.comfyHeight());
+        Spinner<Integer> comfyDimensionSpinner = buildSpinner(
+                ImageRatio.MIN_DIMENSION, ImageRatio.MAX_DIMENSION,
+                appSettings.comfyDimension(), ImageRatio.DIMENSION_STEP);
+        ComboBox<ImageRatio> comfyRatioSelect = new ComboBox<>(
+                FXCollections.observableArrayList(ImageRatio.values()));
+        comfyRatioSelect.setValue(appSettings.comfyRatio());
+        comfyRatioSelect.setMaxWidth(Double.MAX_VALUE);
+        comfyRatioSelect.setOnAction(event ->
+        {
+            if (!updating && comfyRatioSelect.getValue() != null)
+            {
+                actions.settingChanged(new Change(Setting.COMFY_RATIO, comfyRatioSelect.getValue()));
+            }
+        });
         Spinner<Integer> comfyBatchSizeSpinner = buildSpinner(1, 32, appSettings.comfyBatchSize());
 
         modelSelect = new ComboBox<>();
@@ -249,8 +262,8 @@ public final class SettingsPaneController
                 underlinedLabel("Image Generation"),
                 textFieldRow("ComfyUI URL", comfyUiUrlField),
                 comboRow("ComfyUI Workflow", comfyWorkflowSelect),
-                spinnerRow("Image Width", comfyWidthSpinner, Setting.COMFY_WIDTH),
-                spinnerRow("Image Height", comfyHeightSpinner, Setting.COMFY_HEIGHT),
+                spinnerRow("Image Dimension (long edge)", comfyDimensionSpinner, Setting.COMFY_DIMENSION),
+                comboRow("Image Ratio", comfyRatioSelect),
                 spinnerRow("Image Batch Size", comfyBatchSizeSpinner, Setting.COMFY_BATCH_SIZE),
                 underlinedLabel("Local Data"),
                 new Label("Database"),
@@ -463,8 +476,13 @@ public final class SettingsPaneController
 
     private static Spinner<Integer> buildSpinner(int min, int max, int value)
     {
+        return buildSpinner(min, max, value, 1);
+    }
+
+    private static Spinner<Integer> buildSpinner(int min, int max, int value, int step)
+    {
         Spinner<Integer> spinner = new Spinner<>();
-        spinner.setValueFactory(new SpinnerValueFactory.IntegerSpinnerValueFactory(min, max, value));
+        spinner.setValueFactory(new SpinnerValueFactory.IntegerSpinnerValueFactory(min, max, value, step));
         spinner.setEditable(true);
         spinner.setMaxWidth(Double.MAX_VALUE);
         return spinner;
@@ -567,8 +585,8 @@ public final class SettingsPaneController
         STORY_CARD_LOOKBACK,
         COMFY_UI_URL,
         COMFY_WORKFLOW,
-        COMFY_WIDTH,
-        COMFY_HEIGHT,
+        COMFY_DIMENSION,
+        COMFY_RATIO,
         COMFY_BATCH_SIZE
     }
 

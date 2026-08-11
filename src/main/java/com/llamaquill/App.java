@@ -21,6 +21,7 @@ import com.llamaquill.model.Block;
 import com.llamaquill.model.AppSettings;
 import com.llamaquill.model.ConversationLayout;
 import com.llamaquill.model.GenerationSettings;
+import com.llamaquill.model.ImageRatio;
 import com.llamaquill.model.ModelSettings;
 import com.llamaquill.model.Role;
 import com.llamaquill.model.Story;
@@ -209,13 +210,15 @@ public class App extends Application
         private final byte[] bytes;
         private final String mimeType;
         private final String workflowJson;
+        private final int batchSize;
 
-        private ImageRetryHistoryEntry(String prompt, byte[] bytes, String mimeType, String workflowJson)
+        private ImageRetryHistoryEntry(String prompt, byte[] bytes, String mimeType, String workflowJson, int batchSize)
         {
             this.prompt = prompt == null ? "" : prompt;
             this.bytes = bytes;
             this.mimeType = mimeType == null ? "image/png" : mimeType;
             this.workflowJson = workflowJson == null ? "" : workflowJson;
+            this.batchSize = Math.max(1, batchSize);
         }
     }
 
@@ -571,8 +574,8 @@ public class App extends Application
             case STORY_CARD_LOOKBACK -> updateStoryCardLookback(change.intValue());
             case COMFY_UI_URL -> updateComfyUiUrl(change.stringValue());
             case COMFY_WORKFLOW -> updateComfyWorkflow(change.stringValue());
-            case COMFY_WIDTH -> updateComfyWidth(change.intValue());
-            case COMFY_HEIGHT -> updateComfyHeight(change.intValue());
+            case COMFY_DIMENSION -> updateComfyDimension(change.intValue());
+            case COMFY_RATIO -> updateComfyRatio((ImageRatio) change.value());
             case COMFY_BATCH_SIZE -> updateComfyBatchSize(change.intValue());
         }
     }
@@ -1081,23 +1084,23 @@ public class App extends Application
         persistAppSettings();
     }
 
-    private void updateComfyWidth(int value)
+    private void updateComfyDimension(int value)
     {
-        if (value == appSettings.comfyWidth())
+        if (value == appSettings.comfyDimension())
         {
             return;
         }
-        appSettings = SettingsCoordinator.withComfyWidth(appSettings, value);
+        appSettings = SettingsCoordinator.withComfyDimension(appSettings, value);
         persistAppSettings();
     }
 
-    private void updateComfyHeight(int value)
+    private void updateComfyRatio(ImageRatio value)
     {
-        if (value == appSettings.comfyHeight())
+        if (value == null || value == appSettings.comfyRatio())
         {
             return;
         }
-        appSettings = SettingsCoordinator.withComfyHeight(appSettings, value);
+        appSettings = SettingsCoordinator.withComfyRatio(appSettings, value);
         persistAppSettings();
     }
 
@@ -1668,7 +1671,7 @@ public class App extends Application
         showSeeDialog(null, null);
     }
 
-    private void showSeeDialog(String initialPrompt, Block replaceImageBlock)
+    private void showSeeDialog(StoryImage retryImage, Block replaceImageBlock)
     {
         StoryTaskContext context = captureStoryTaskContext();
         if (context == null)
@@ -1681,11 +1684,24 @@ public class App extends Application
         Story story = context.story();
         StorySession session = context.session();
         String expectedHeadId = replaceImageBlock == null ? session.headBlockId() : replaceImageBlock.id();
+        String initialPrompt = retryImage == null ? null : retryImage.prompt();
+        int imageDimension = retryImage == null
+                ? context.appSettings().comfyDimension()
+                : Math.max(retryImage.width(), retryImage.height());
+        ImageRatio imageRatio = retryImage == null
+                ? context.appSettings().comfyRatio()
+                : ImageRatio.nearest(retryImage.width(), retryImage.height());
+        int imageBatchSize = retryImage == null
+                ? context.appSettings().comfyBatchSize()
+                : retryImage.batchSize();
         SeeDialog.show(
                 primaryStage,
                 header,
                 initialPrompt,
                 DEFAULT_SEE_REQUEST,
+                imageDimension,
+                imageRatio,
+                imageBatchSize,
                 seePromptPresetService,
                 story.selectedSeePromptPresetId(),
                 presetId -> saveSeePromptPresetSelection(story, presetId),
@@ -1710,18 +1726,19 @@ public class App extends Application
                             onSuccess.accept(result.content());
                         },
                         onFailure),
-                (promptText, onSuccess, onFailure) -> submitStoryTask(session, "Image Generation",
+                (promptText, width, height, batchSize, onSuccess, onFailure) -> submitStoryTask(
+                        session, "Image Generation",
                         () ->
                         {
                             ComfyUiClient.GenerationResult result = imageGenerationCoordinator.generateImages(
-                                    context.appSettings(), promptText);
+                                    context.appSettings(), promptText, width, height, batchSize);
                             List<ImageGenerationCoordinator.PendingImage> pending = new ArrayList<>();
                             if (result != null && result.images() != null)
                             {
                                 for (ComfyUiClient.GeneratedImage image : result.images())
                                 {
                                     pending.add(new ImageGenerationCoordinator.PendingImage(
-                                            image.bytes(), image.mimeType(), result.workflowJson()));
+                                            image.bytes(), image.mimeType(), result.workflowJson(), batchSize));
                                 }
                             }
                             return pending;
@@ -1752,7 +1769,8 @@ public class App extends Application
                         {
                             StoryImage storyImage = result.storyImage();
                             retryHistory.add(currentSession(), new ImageRetryHistoryEntry(storyImage.prompt(),
-                                    storyImage.imageBytes(), storyImage.mimeType(), storyImage.workflowJson()));
+                                    storyImage.imageBytes(), storyImage.mimeType(), storyImage.workflowJson(),
+                                    storyImage.batchSize()));
                             updateRetryCountLabel();
                         }
                     }
@@ -2011,7 +2029,7 @@ public class App extends Application
         {
             seedImageRetryHistoryIfNeeded(head);
             StoryImage image = loadStoryImage(head.text());
-            showSeeDialog(image == null ? null : image.prompt(), head);
+            showSeeDialog(image, head);
             return;
         }
         if (head.role() == Role.USER)
@@ -2189,7 +2207,8 @@ public class App extends Application
             return;
         }
         retryHistory.add(currentSession(),
-                new ImageRetryHistoryEntry(image.prompt(), image.imageBytes(), image.mimeType(), image.workflowJson()));
+                new ImageRetryHistoryEntry(image.prompt(), image.imageBytes(), image.mimeType(), image.workflowJson(),
+                        image.batchSize()));
         updateRetryCountLabel();
     }
 
@@ -2200,7 +2219,8 @@ public class App extends Application
             return;
         }
         ImageGenerationCoordinator.ImageMutationResult result = imageGenerationCoordinator.replaceImageFromRetryHistory(
-                currentStory(), headBlock, imageEntry.prompt, imageEntry.bytes, imageEntry.mimeType, imageEntry.workflowJson);
+                currentStory(), headBlock, imageEntry.prompt, imageEntry.bytes, imageEntry.mimeType,
+                imageEntry.workflowJson, imageEntry.batchSize);
         if (result.stale())
         {
             statusLabel.setText("Retry selection was stale; the story was not changed.");

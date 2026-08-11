@@ -1,6 +1,7 @@
 package com.llamaquill.db;
 
 import com.llamaquill.model.AppSettings;
+import com.llamaquill.model.ImageRatio;
 
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -25,7 +26,7 @@ public class AppSettingsRepository
             try (PreparedStatement stmt = connection.prepareStatement("""
                     SELECT ollama_url, selected_model, response_length_enabled, response_length,
                            min_story_percent, story_card_lookback, comfyui_url,
-                           comfy_workflow, comfy_width, comfy_height, comfy_batch_size,
+                           comfy_workflow, comfy_dimension, comfy_ratio, comfy_batch_size,
                            ollama_keep_alive_minutes, selected_story_card_command_preset_id
                     FROM app_settings
                     WHERE id = ?
@@ -47,8 +48,8 @@ public class AppSettingsRepository
                             rs.getInt("min_story_percent"),
                             rs.getInt("story_card_lookback"),
                             rs.getString("comfy_workflow"),
-                            rs.getInt("comfy_width"),
-                            rs.getInt("comfy_height"),
+                            rs.getInt("comfy_dimension"),
+                            ImageRatio.fromPersisted(rs.getString("comfy_ratio")),
                             rs.getInt("comfy_batch_size"),
                             rs.getInt("ollama_keep_alive_minutes"),
                             rs.getString("selected_story_card_command_preset_id")));
@@ -65,7 +66,7 @@ public class AppSettingsRepository
                     INSERT INTO app_settings (
                         id, ollama_url, selected_model, response_length_enabled, response_length,
                         min_story_percent, story_card_lookback, comfyui_url,
-                        comfy_workflow, comfy_width, comfy_height, comfy_batch_size,
+                        comfy_workflow, comfy_dimension, comfy_ratio, comfy_batch_size,
                         ollama_keep_alive_minutes, selected_story_card_command_preset_id
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
@@ -77,8 +78,8 @@ public class AppSettingsRepository
                         min_story_percent = excluded.min_story_percent,
                         story_card_lookback = excluded.story_card_lookback,
                         comfy_workflow = excluded.comfy_workflow,
-                        comfy_width = excluded.comfy_width,
-                        comfy_height = excluded.comfy_height,
+                        comfy_dimension = excluded.comfy_dimension,
+                        comfy_ratio = excluded.comfy_ratio,
                         comfy_batch_size = excluded.comfy_batch_size,
                         ollama_keep_alive_minutes = excluded.ollama_keep_alive_minutes,
                         selected_story_card_command_preset_id = excluded.selected_story_card_command_preset_id
@@ -93,8 +94,8 @@ public class AppSettingsRepository
                 stmt.setInt(7, settings.storyCardLookback());
                 stmt.setString(8, settings.comfyUiUrl());
                 stmt.setString(9, settings.comfyWorkflow());
-                stmt.setInt(10, settings.comfyWidth());
-                stmt.setInt(11, settings.comfyHeight());
+                stmt.setInt(10, settings.comfyDimension());
+                stmt.setString(11, settings.comfyRatio().persistedValue());
                 stmt.setInt(12, settings.comfyBatchSize());
                 stmt.setInt(13, settings.ollamaKeepAliveMinutes());
                 stmt.setString(14, settings.selectedStoryCardCommandPresetId());

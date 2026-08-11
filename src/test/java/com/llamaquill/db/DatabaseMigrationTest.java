@@ -10,6 +10,7 @@ import com.llamaquill.AppVersion;
 import com.llamaquill.model.AppSettings;
 import com.llamaquill.model.Block;
 import com.llamaquill.model.ConversationLayout;
+import com.llamaquill.model.ImageRatio;
 import com.llamaquill.model.ModelSettings;
 import com.llamaquill.model.Role;
 import com.llamaquill.model.SeePromptPreset;
@@ -17,6 +18,7 @@ import com.llamaquill.model.Story;
 import com.llamaquill.model.StoryCard;
 import com.llamaquill.model.StoryCardCommandPreset;
 import com.llamaquill.model.StoryCardWrappingStyle;
+import com.llamaquill.model.StoryImage;
 import com.llamaquill.util.Timestamps;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -53,6 +55,9 @@ class DatabaseMigrationTest
             assertFalse(columns(database, "app_settings").contains("use_ollama_templates"));
             assertFalse(columns(database, "app_settings").contains("an_placement"));
             assertTrue(columns(database, "app_settings").contains("selected_story_card_command_preset_id"));
+            assertTrue(columns(database, "app_settings").containsAll(List.of("comfy_dimension", "comfy_ratio")));
+            assertFalse(columns(database, "app_settings").contains("comfy_width"));
+            assertFalse(columns(database, "app_settings").contains("comfy_height"));
             assertTrue(columns(database, "stories").contains("story_card_generation_context"));
             assertTrue(columns(database, "stories").contains("force_pin_all_story_cards"));
             assertTrue(columns(database, "stories").contains("selected_see_prompt_preset_id"));
@@ -61,6 +66,7 @@ class DatabaseMigrationTest
                     List.of("story_card_wrapping_style", "conversation_layout")));
             assertTrue(tableExists(database, "story_card_command_presets"));
             assertTrue(tableExists(database, "see_prompt_presets"));
+            assertTrue(columns(database, "images").contains("batch_size"));
             assertFalse(tableExists(database, "app_auto_cards"));
             assertFalse(tableExists(database, "story_auto_cards"));
             assertFalse(tableExists(database, "model_auto_cards"));
@@ -81,7 +87,7 @@ class DatabaseMigrationTest
                     12,
                     "SettingsWorkflow",
                     1024,
-                    768,
+                    ImageRatio.LANDSCAPE_4_3,
                     2,
                     17);
             appSettings.save(expectedSettings);
@@ -143,7 +149,7 @@ class DatabaseMigrationTest
         AppPaths paths = paths("schema-four-prompt-options");
         AppSettings expectedAppSettings = new AppSettings(
                 "http://schema-four:11434", "http://comfy:8000", "schema-four-model",
-                false, 222, 61, 9, "ChromaHD", 720, 720, 4, 11);
+                false, 222, 61, 9, "ChromaHD", 720, ImageRatio.SQUARE, 4, 11);
         try (Database database = Database.open(paths))
         {
             new AppSettingsRepository(database).save(expectedAppSettings);
@@ -320,6 +326,74 @@ class DatabaseMigrationTest
             assertTrue(tableExists(database, "see_prompt_presets"));
             assertEquals("builtin:none", new StoryRepository(database).findById("story").orElseThrow()
                     .selectedSeePromptPresetId());
+        }
+    }
+
+    @Test
+    void migratesSchemaNineImageSizeToLongEdgeAndNearestRatio() throws Exception
+    {
+        AppPaths paths = paths("schema-nine-image-size");
+        try (Database database = Database.open(paths))
+        {
+            new AppSettingsRepository(database).save(AppSettings.defaults());
+        }
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + paths.databaseFile());
+             Statement statement = connection.createStatement())
+        {
+            statement.execute("ALTER TABLE app_settings ADD COLUMN comfy_width INTEGER NOT NULL DEFAULT 720");
+            statement.execute("ALTER TABLE app_settings ADD COLUMN comfy_height INTEGER NOT NULL DEFAULT 720");
+            statement.execute("UPDATE app_settings SET comfy_width = 1280, comfy_height = 720");
+            statement.execute("ALTER TABLE app_settings DROP COLUMN comfy_dimension");
+            statement.execute("ALTER TABLE app_settings DROP COLUMN comfy_ratio");
+            statement.execute("ALTER TABLE images DROP COLUMN batch_size");
+            statement.execute("PRAGMA user_version = 9");
+        }
+
+        try (Database database = Database.open(paths))
+        {
+            Database.StartupReport report = database.startupReport();
+            assertEquals(9, report.migration().sourceSchema());
+            assertEquals(AppVersion.DATABASE_SCHEMA, report.migration().targetSchema());
+            assertTrue(Files.isRegularFile(report.migration().backup().orElseThrow()));
+            assertFalse(columns(database, "app_settings").contains("comfy_width"));
+            assertFalse(columns(database, "app_settings").contains("comfy_height"));
+            assertTrue(columns(database, "images").contains("batch_size"));
+            AppSettings migrated = new AppSettingsRepository(database).load().orElseThrow();
+            assertEquals(1280, migrated.comfyDimension());
+            assertEquals(ImageRatio.LANDSCAPE_16_9, migrated.comfyRatio());
+            assertEquals(4, migrated.comfyBatchSize());
+        }
+    }
+
+    @Test
+    void normalizesAProvisionalSchemaTenDatabaseMissingImageBatchSize() throws Exception
+    {
+        AppPaths paths = paths("schema-ten-image-batch-normalization");
+        try (Database database = Database.open(paths))
+        {
+            new AppSettingsRepository(database).save(AppSettings.defaults());
+            String now = Timestamps.now();
+            new StoryRepository(database).insert(new Story("story", "Story", "", "", "", now, now));
+            new ImageRepository(database).insert(new StoryImage(
+                    "image", "story", "Prompt", "image/png", 1024, 576, 3,
+                    "{\"6\":{\"class_type\":\"EmptyLatentImage\",\"inputs\":{"
+                            + "\"width\":1024,\"height\":576,\"batch_size\":3}}}",
+                    new byte[] { 1, 2, 3 }, now));
+        }
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + paths.databaseFile());
+             Statement statement = connection.createStatement())
+        {
+            statement.execute("ALTER TABLE images DROP COLUMN batch_size");
+        }
+
+        try (Database database = Database.open(paths))
+        {
+            Database.StartupReport report = database.startupReport();
+            assertEquals(AppVersion.DATABASE_SCHEMA, report.migration().sourceSchema());
+            assertEquals(AppVersion.DATABASE_SCHEMA, report.migration().targetSchema());
+            assertTrue(Files.isRegularFile(report.migration().backup().orElseThrow()));
+            assertTrue(columns(database, "images").contains("batch_size"));
+            assertEquals(3, new ImageRepository(database).findById("image").orElseThrow().batchSize());
         }
     }
 

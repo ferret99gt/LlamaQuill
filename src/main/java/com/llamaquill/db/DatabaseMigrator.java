@@ -2,6 +2,8 @@ package com.llamaquill.db;
 
 import com.llamaquill.AppVersion;
 import com.llamaquill.util.Timestamps;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -15,7 +17,9 @@ import java.sql.Statement;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
@@ -30,6 +34,7 @@ public final class DatabaseMigrator
     private static final int STORY_CARD_PRESET_SELECTION_SCHEMA = 6;
     private static final int STORY_CARD_GENERATION_CONTEXT_SCHEMA = 7;
     private static final int FORCE_PIN_ALL_STORY_CARDS_SCHEMA = 8;
+    private static final int SEE_PROMPT_PRESET_SCHEMA = 9;
     private static final int CURRENT_SCHEMA = AppVersion.DATABASE_SCHEMA;
     private static final DateTimeFormatter BACKUP_TIMESTAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS");
 
@@ -76,6 +81,7 @@ public final class DatabaseMigrator
                     migrateFromVersionSix(connection);
                     migrateFromVersionSeven(connection);
                     migrateFromVersionEight(connection);
+                    migrateFromVersionNine(connection);
                     recordMigration(connection, CURRENT_SCHEMA,
                             AppVersion.CURRENT + "-schema-" + CURRENT_SCHEMA + "-provisional");
                     setUserVersion(connection, CURRENT_SCHEMA);
@@ -93,7 +99,8 @@ public final class DatabaseMigrator
                 && sourceVersion != PROMPT_LAYOUT_SCHEMA
                 && sourceVersion != STORY_CARD_PRESET_SELECTION_SCHEMA
                 && sourceVersion != STORY_CARD_GENERATION_CONTEXT_SCHEMA
-                && sourceVersion != FORCE_PIN_ALL_STORY_CARDS_SCHEMA)
+                && sourceVersion != FORCE_PIN_ALL_STORY_CARDS_SCHEMA
+                && sourceVersion != SEE_PROMPT_PRESET_SCHEMA)
         {
             throw new SQLException("Unsupported database migration source: " + sourceVersion);
         }
@@ -125,6 +132,7 @@ public final class DatabaseMigrator
             migrateFromVersionSix(connection);
             migrateFromVersionSeven(connection);
             migrateFromVersionEight(connection);
+            migrateFromVersionNine(connection);
             String sourceLabel = sourceVersion == VERSION_0_1_0
                     ? AppVersion.FIRST_MIGRATION_SOURCE
                     : AppVersion.CURRENT + "-schema-" + sourceVersion;
@@ -203,6 +211,111 @@ public final class DatabaseMigrator
         createSeePromptPresetsTable(connection);
     }
 
+    private static void migrateFromVersionNine(Connection connection) throws SQLException
+    {
+        rebuildAppSettings(connection);
+        addColumnIfMissing(connection, "images", "batch_size", "INTEGER NOT NULL DEFAULT 1");
+        backfillImageBatchSizes(connection);
+    }
+
+    private static void backfillImageBatchSizes(Connection connection) throws SQLException
+    {
+        List<ImageBatchBackfill> backfills = new ArrayList<>();
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT id, workflow_json
+                FROM images
+                WHERE batch_size = 1
+                """);
+             ResultSet result = statement.executeQuery())
+        {
+            while (result.next())
+            {
+                int batchSize = imageBatchSizeFromWorkflow(result.getString("workflow_json"));
+                if (batchSize > 1)
+                {
+                    backfills.add(new ImageBatchBackfill(result.getString("id"), batchSize));
+                }
+            }
+        }
+        try (PreparedStatement statement = connection.prepareStatement(
+                "UPDATE images SET batch_size = ? WHERE id = ?"))
+        {
+            for (ImageBatchBackfill backfill : backfills)
+            {
+                statement.setInt(1, backfill.batchSize());
+                statement.setString(2, backfill.imageId());
+                statement.addBatch();
+            }
+            statement.executeBatch();
+        }
+    }
+
+    private static int imageBatchSizeFromWorkflow(String workflowJson)
+    {
+        if (workflowJson == null || workflowJson.isBlank())
+        {
+            return 1;
+        }
+        try
+        {
+            JSONObject workflow = new JSONObject(workflowJson);
+            for (String nodeId : workflow.keySet())
+            {
+                JSONObject node = workflow.optJSONObject(nodeId);
+                JSONObject inputs = node == null ? null : node.optJSONObject("inputs");
+                if (inputs == null || !inputs.has("batch_size"))
+                {
+                    continue;
+                }
+                Object configured = inputs.opt("batch_size");
+                int direct = positiveInt(configured);
+                if (direct > 0)
+                {
+                    return direct;
+                }
+                if (configured instanceof JSONArray reference && reference.length() > 0)
+                {
+                    JSONObject sourceNode = workflow.optJSONObject(reference.optString(0, ""));
+                    JSONObject sourceInputs = sourceNode == null ? null : sourceNode.optJSONObject("inputs");
+                    int referenced = sourceInputs == null ? 0 : positiveInt(sourceInputs.opt("value"));
+                    if (referenced > 0)
+                    {
+                        return referenced;
+                    }
+                }
+            }
+        }
+        catch (RuntimeException ignored)
+        {
+            // Provisional images with invalid or unfamiliar workflow JSON retain the safe default of one.
+        }
+        return 1;
+    }
+
+    private static int positiveInt(Object value)
+    {
+        if (value instanceof Number number)
+        {
+            return Math.max(0, number.intValue());
+        }
+        if (value instanceof String text)
+        {
+            try
+            {
+                return Math.max(0, Integer.parseInt(text));
+            }
+            catch (NumberFormatException ignored)
+            {
+                return 0;
+            }
+        }
+        return 0;
+    }
+
+    private record ImageBatchBackfill(String imageId, int batchSize)
+    {
+    }
+
     private static boolean needsSchemaThreeSettingsNormalization(Connection connection) throws SQLException
     {
         if (!tableExists(connection, "app_settings") || !tableExists(connection, "model_settings"))
@@ -234,6 +347,7 @@ public final class DatabaseMigrator
         }
         Set<String> storyCardColumns = columns(connection, "story_cards");
         Set<String> storyColumns = columns(connection, "stories");
+        Set<String> imageColumns = columns(connection, "images");
         Set<String> appColumns = columns(connection, "app_settings");
         Set<String> modelColumns = columns(connection, "model_settings");
         return !storyCardColumns.contains("type")
@@ -241,6 +355,11 @@ public final class DatabaseMigrator
                 || !storyColumns.contains("story_card_generation_context")
                 || !storyColumns.contains("force_pin_all_story_cards")
                 || !storyColumns.contains("selected_see_prompt_preset_id")
+                || !appColumns.contains("comfy_dimension")
+                || !appColumns.contains("comfy_ratio")
+                || appColumns.contains("comfy_width")
+                || appColumns.contains("comfy_height")
+                || !imageColumns.contains("batch_size")
                 || appColumns.contains("an_placement")
                 || !appColumns.contains("selected_story_card_command_preset_id")
                 || !modelColumns.contains("story_card_wrapping_style")
@@ -304,6 +423,7 @@ public final class DatabaseMigrator
                     mime_type TEXT NOT NULL,
                     width INTEGER NOT NULL,
                     height INTEGER NOT NULL,
+                    batch_size INTEGER NOT NULL DEFAULT 1,
                     workflow_json TEXT NOT NULL,
                     image_bytes BLOB NOT NULL,
                     created_at TEXT NOT NULL,
@@ -426,7 +546,7 @@ public final class DatabaseMigrator
                         id, ollama_url, comfyui_url, selected_model,
                         response_length_enabled, response_length,
                         min_story_percent, story_card_lookback,
-                        comfy_workflow, comfy_width, comfy_height, comfy_batch_size,
+                        comfy_workflow, comfy_dimension, comfy_ratio, comfy_batch_size,
                         ollama_keep_alive_minutes
                     )
                     SELECT id, 'http://localhost:11434', 'http://localhost:8000',
@@ -434,7 +554,7 @@ public final class DatabaseMigrator
                            1, response_length,
                            MAX(10, MIN(100, ROUND(min_story_window * 100.0 / MAX(1, context_limit)))),
                            story_card_lookback,
-                           'ChromaHD', 720, 720, 4, 5
+                           'ChromaHD', 720, '1:1', 4, 5
                     FROM generation_settings
                     WHERE id = 1
                     """);
@@ -507,16 +627,16 @@ public final class DatabaseMigrator
     {
         boolean existed = tableExists(connection, "app_settings");
         Set<String> oldColumns = existed ? columns(connection, "app_settings") : Set.of();
-        execute(connection, "DROP TABLE IF EXISTS app_settings_v6");
-        execute(connection, appSettingsTableSql("app_settings_v6"));
+        execute(connection, "DROP TABLE IF EXISTS app_settings_v10");
+        execute(connection, appSettingsTableSql("app_settings_v10"));
         if (existed)
         {
             execute(connection, """
-                    INSERT INTO app_settings_v6 (
+                    INSERT INTO app_settings_v10 (
                         id, ollama_url, comfyui_url, selected_model,
                         response_length_enabled, response_length,
                         min_story_percent, story_card_lookback,
-                        comfy_workflow, comfy_width, comfy_height, comfy_batch_size,
+                        comfy_workflow, comfy_dimension, comfy_ratio, comfy_batch_size,
                         ollama_keep_alive_minutes, selected_story_card_command_preset_id
                     )
                     SELECT %s, %s, %s, %s, %s, %s,
@@ -538,15 +658,15 @@ public final class DatabaseMigrator
                                     + value(oldColumns, "context_limit", "8192") + "))",
                     value(oldColumns, "story_card_lookback", "5"),
                     value(oldColumns, "comfy_workflow", "'ChromaHD'"),
-                    value(oldColumns, "comfy_width", "720"),
-                    value(oldColumns, "comfy_height", "720"),
+                    comfyDimensionExpression(oldColumns),
+                    comfyRatioExpression(oldColumns),
                     value(oldColumns, "comfy_batch_size", "4"),
                     value(oldColumns, "ollama_keep_alive_minutes", "5"),
                     value(oldColumns, "selected_story_card_command_preset_id", "'builtin:condensed'"),
                     value(oldColumns, "id", "1")));
             execute(connection, "DROP TABLE app_settings");
         }
-        execute(connection, "ALTER TABLE app_settings_v6 RENAME TO app_settings");
+        execute(connection, "ALTER TABLE app_settings_v10 RENAME TO app_settings");
     }
 
     private static void rebuildStoryCardsForSchemaFour(Connection connection) throws SQLException
@@ -621,8 +741,9 @@ public final class DatabaseMigrator
                         CHECK (min_story_percent BETWEEN 10 AND 100),
                     story_card_lookback INTEGER NOT NULL,
                     comfy_workflow TEXT NOT NULL DEFAULT 'ChromaHD',
-                    comfy_width INTEGER NOT NULL DEFAULT 720,
-                    comfy_height INTEGER NOT NULL DEFAULT 720,
+                    comfy_dimension INTEGER NOT NULL DEFAULT 720,
+                    comfy_ratio TEXT NOT NULL DEFAULT '1:1'
+                        CHECK (comfy_ratio IN ('1:1','16:9','3:2','4:3','9:16','2:3','3:4')),
                     comfy_batch_size INTEGER NOT NULL DEFAULT 4,
                     ollama_keep_alive_minutes INTEGER NOT NULL DEFAULT 5
                         CHECK (ollama_keep_alive_minutes BETWEEN 5 AND 30),
@@ -717,6 +838,35 @@ public final class DatabaseMigrator
     private static String value(Set<String> columns, String column, String defaultSql)
     {
         return columns.contains(column) ? column : defaultSql;
+    }
+
+    private static String comfyDimensionExpression(Set<String> columns)
+    {
+        if (columns.contains("comfy_dimension"))
+        {
+            return "comfy_dimension";
+        }
+        return "MAX(" + value(columns, "comfy_width", "720")
+                + ", " + value(columns, "comfy_height", "720") + ")";
+    }
+
+    private static String comfyRatioExpression(Set<String> columns)
+    {
+        if (columns.contains("comfy_ratio"))
+        {
+            return "comfy_ratio";
+        }
+        String width = value(columns, "comfy_width", "720");
+        String height = value(columns, "comfy_height", "720");
+        String ratio = "(1.0 * " + width + " / MAX(1, " + height + "))";
+        return "CASE "
+                + "WHEN " + ratio + " <= 0.6145833333 THEN '9:16' "
+                + "WHEN " + ratio + " <= 0.7083333333 THEN '2:3' "
+                + "WHEN " + ratio + " <= 0.875 THEN '3:4' "
+                + "WHEN " + ratio + " <= 1.1666666667 THEN '1:1' "
+                + "WHEN " + ratio + " <= 1.4166666667 THEN '4:3' "
+                + "WHEN " + ratio + " <= 1.6388888889 THEN '3:2' "
+                + "ELSE '16:9' END";
     }
 
     private static Set<String> columns(Connection connection, String table) throws SQLException

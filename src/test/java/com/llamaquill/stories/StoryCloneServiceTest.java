@@ -91,7 +91,7 @@ class StoryCloneServiceTest
         {
             Story source = fixture.insertSource();
             StoryImage sourceImage = new StoryImage(
-                    "image", source.id(), "A moonlit archive", "image/png", 2, 3,
+                    "image", source.id(), "A moonlit archive", "image/png", 2, 3, 7,
                     "{\"workflow\":true}", new byte[] { 1, 2, 3 }, Timestamps.now());
             fixture.images.insert(sourceImage);
             fixture.blocks.insert(block("first", source.id(), Role.ASSISTANT, "Opening", 0));
@@ -119,6 +119,7 @@ class StoryCloneServiceTest
             assertEquals(clone.id(), clonedImage.storyId());
             assertEquals(sourceImage.prompt(), clonedImage.prompt());
             assertEquals(sourceImage.workflowJson(), clonedImage.workflowJson());
+            assertEquals(sourceImage.batchSize(), clonedImage.batchSize());
             assertArrayEquals(sourceImage.imageBytes(), clonedImage.imageBytes());
             assertTrue(fixture.images.findById(sourceImage.id()).isPresent());
         }

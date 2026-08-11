@@ -16,6 +16,7 @@ import com.llamaquill.model.Block;
 import com.llamaquill.model.ChatMessage;
 import com.llamaquill.model.ConversationLayout;
 import com.llamaquill.model.GenerationSettings;
+import com.llamaquill.model.ImageRatio;
 import com.llamaquill.model.Role;
 import com.llamaquill.model.Story;
 import com.llamaquill.model.StoryCardWrappingStyle;
@@ -89,6 +90,39 @@ class ImageGenerationCoordinatorPromptTest
         }
     }
 
+    @Test
+    void imageGenerationUsesDialogOptionsInsteadOfTheCapturedGlobalDefaults() throws Exception
+    {
+        AppPaths paths = AppPaths.forDirectories(
+                temporaryDirectory.resolve("image-options-data"),
+                temporaryDirectory.resolve("image-options-legacy"));
+        try (Database database = Database.open(paths))
+        {
+            StoryRepository stories = new StoryRepository(database);
+            BlockRepository blocks = new BlockRepository(database);
+            StoryCardRepository cards = new StoryCardRepository(database);
+            CapturingComfyUiClient comfy = new CapturingComfyUiClient();
+            ImageGenerationCoordinator coordinator = new ImageGenerationCoordinator(
+                    database, new ImageRepository(database), blocks, stories, cards,
+                    new AuxiliaryGenerationService(new PromptCompiler(), new OllamaClient()), comfy);
+            AppSettings defaults = AppSettings.defaults().toBuilder()
+                    .comfyDimension(720)
+                    .comfyRatio(ImageRatio.PORTRAIT_9_16)
+                    .comfyBatchSize(6)
+                    .build();
+
+            coordinator.generateImages(defaults, "Portrait prompt");
+            assertEquals(408, comfy.width);
+            assertEquals(720, comfy.height);
+            assertEquals(6, comfy.batchSize);
+
+            coordinator.generateImages(defaults, "Local override", 720, 480, 2);
+            assertEquals(720, comfy.width);
+            assertEquals(480, comfy.height);
+            assertEquals(2, comfy.batchSize);
+        }
+    }
+
     private static GenerationSettings settingsWithResponseLength()
     {
         return new GenerationSettings(
@@ -122,6 +156,23 @@ class ImageGenerationCoordinatorPromptTest
             return new OllamaChatResult(
                     settings.modelName(), " cinematic rain scene ",
                     100, 12, "stop", 1, 1, 1, 1, 0);
+        }
+    }
+
+    private static final class CapturingComfyUiClient extends ComfyUiClient
+    {
+        private int width;
+        private int height;
+        private int batchSize;
+
+        @Override
+        public GenerationResult generateImages(
+                String workflowTemplateJson, String promptText, int width, int height, int batchSize)
+        {
+            this.width = width;
+            this.height = height;
+            this.batchSize = batchSize;
+            return new GenerationResult("{}", List.of());
         }
     }
 }
