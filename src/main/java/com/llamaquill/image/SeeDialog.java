@@ -157,17 +157,19 @@ public final class SeeDialog
         imageResultsBox.setPadding(new Insets(8));
         imageResultsBox.setStyle("-fx-border-color: rgba(255,255,255,0.12); -fx-border-width: 1; -fx-border-radius: 4;");
 
-        Button regeneratePromptButton = new Button("Regenerate Prompt");
+        Button generatePromptButton = new Button("Generate Prompt");
         Button createImagesButton = new Button("Create Images");
         Button insertImageButton = new Button(insertButtonText);
         Button cancelButton = new Button("Cancel");
         insertImageButton.setDisable(true);
 
-        Region spacer = new Region();
-        HBox.setHgrow(spacer, Priority.ALWAYS);
-        HBox rightButtons = new HBox(8, createImagesButton, insertImageButton, cancelButton);
-        HBox actions = new HBox(8, regeneratePromptButton, spacer, rightButtons);
-        actions.setAlignment(Pos.CENTER_LEFT);
+        Region promptActionSpacer = new Region();
+        HBox.setHgrow(promptActionSpacer, Priority.ALWAYS);
+        HBox promptActions = new HBox(8, ignoreResponseLengthBox, promptActionSpacer, generatePromptButton);
+        promptActions.setAlignment(Pos.CENTER_LEFT);
+
+        HBox actions = new HBox(8, createImagesButton, insertImageButton, cancelButton);
+        actions.setAlignment(Pos.CENTER_RIGHT);
 
         VBox content = new VBox(10,
                 new Label("Style Preset"),
@@ -176,7 +178,7 @@ public final class SeeDialog
                 stylePromptArea,
                 new Label("Custom Request"),
                 requestArea,
-                ignoreResponseLengthBox,
+                promptActions,
                 new Label("Image Prompt"),
                 promptArea,
                 imageOptions,
@@ -303,7 +305,7 @@ public final class SeeDialog
 
         Runnable restoreButtons = () ->
         {
-            regeneratePromptButton.setDisable(false);
+            generatePromptButton.setDisable(false);
             createImagesButton.setDisable(false);
             insertImageButton.setDisable(selectedIndexRef[0] < 0);
             cancelButton.setDisable(false);
@@ -312,7 +314,7 @@ public final class SeeDialog
 
         cancelButton.setOnAction(event -> dialog.close());
 
-        regeneratePromptButton.setOnAction(event ->
+        generatePromptButton.setOnAction(event ->
         {
             String request = requestArea.getText().trim();
             if (request.isEmpty())
@@ -320,7 +322,7 @@ public final class SeeDialog
                 request = defaultRequest;
             }
 
-            regeneratePromptButton.setDisable(true);
+            generatePromptButton.setDisable(true);
             createImagesButton.setDisable(true);
             insertImageButton.setDisable(true);
             cancelButton.setDisable(true);
@@ -354,7 +356,7 @@ public final class SeeDialog
                 showInfo.accept("Image prompt cannot be empty.");
                 return;
             }
-            regeneratePromptButton.setDisable(true);
+            generatePromptButton.setDisable(true);
             createImagesButton.setDisable(true);
             insertImageButton.setDisable(true);
             cancelButton.setDisable(true);

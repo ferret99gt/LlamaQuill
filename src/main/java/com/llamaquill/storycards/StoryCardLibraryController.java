@@ -47,6 +47,7 @@ public final class StoryCardLibraryController
                 "Treat every Story Card as pinned during prompt compilation without changing individual Pinned values."));
         forcePinAllBox.setOnAction(event -> onForcePinAllChanged.accept(forcePinAllBox.isSelected()));
 
+        cardList.getStyleClass().add("story-card-list");
         cardList.setCellFactory(list -> new CardCell());
         cardList.setOnMouseClicked(event ->
         {
