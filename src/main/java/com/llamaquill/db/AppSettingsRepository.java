@@ -27,7 +27,8 @@ public class AppSettingsRepository
                     SELECT ollama_url, selected_model, response_length_enabled, response_length,
                            min_story_percent, story_card_lookback, comfyui_url,
                            comfy_workflow, comfy_dimension, comfy_ratio, comfy_batch_size,
-                           ollama_keep_alive_minutes, selected_story_card_command_preset_id
+                           comfy_save_images, ollama_keep_alive_minutes,
+                           selected_story_card_command_preset_id
                     FROM app_settings
                     WHERE id = ?
                     """))
@@ -51,6 +52,7 @@ public class AppSettingsRepository
                             rs.getInt("comfy_dimension"),
                             ImageRatio.fromPersisted(rs.getString("comfy_ratio")),
                             rs.getInt("comfy_batch_size"),
+                            rs.getInt("comfy_save_images") != 0,
                             rs.getInt("ollama_keep_alive_minutes"),
                             rs.getString("selected_story_card_command_preset_id")));
                 }
@@ -67,8 +69,9 @@ public class AppSettingsRepository
                         id, ollama_url, selected_model, response_length_enabled, response_length,
                         min_story_percent, story_card_lookback, comfyui_url,
                         comfy_workflow, comfy_dimension, comfy_ratio, comfy_batch_size,
-                        ollama_keep_alive_minutes, selected_story_card_command_preset_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        comfy_save_images, ollama_keep_alive_minutes,
+                        selected_story_card_command_preset_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         ollama_url = excluded.ollama_url,
                         comfyui_url = excluded.comfyui_url,
@@ -81,6 +84,7 @@ public class AppSettingsRepository
                         comfy_dimension = excluded.comfy_dimension,
                         comfy_ratio = excluded.comfy_ratio,
                         comfy_batch_size = excluded.comfy_batch_size,
+                        comfy_save_images = excluded.comfy_save_images,
                         ollama_keep_alive_minutes = excluded.ollama_keep_alive_minutes,
                         selected_story_card_command_preset_id = excluded.selected_story_card_command_preset_id
                     """))
@@ -97,8 +101,9 @@ public class AppSettingsRepository
                 stmt.setInt(10, settings.comfyDimension());
                 stmt.setString(11, settings.comfyRatio().persistedValue());
                 stmt.setInt(12, settings.comfyBatchSize());
-                stmt.setInt(13, settings.ollamaKeepAliveMinutes());
-                stmt.setString(14, settings.selectedStoryCardCommandPresetId());
+                stmt.setInt(13, settings.comfySaveImages() ? 1 : 0);
+                stmt.setInt(14, settings.ollamaKeepAliveMinutes());
+                stmt.setString(15, settings.selectedStoryCardCommandPresetId());
                 stmt.executeUpdate();
             }
         });

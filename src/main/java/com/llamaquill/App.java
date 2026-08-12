@@ -577,6 +577,7 @@ public class App extends Application
             case COMFY_DIMENSION -> updateComfyDimension(change.intValue());
             case COMFY_RATIO -> updateComfyRatio((ImageRatio) change.value());
             case COMFY_BATCH_SIZE -> updateComfyBatchSize(change.intValue());
+            case COMFY_SAVE_IMAGES -> updateComfySaveImages(change.booleanValue());
         }
     }
 
@@ -1111,6 +1112,16 @@ public class App extends Application
             return;
         }
         appSettings = SettingsCoordinator.withComfyBatchSize(appSettings, value);
+        persistAppSettings();
+    }
+
+    private void updateComfySaveImages(boolean value)
+    {
+        if (value == appSettings.comfySaveImages())
+        {
+            return;
+        }
+        appSettings = SettingsCoordinator.withComfySaveImages(appSettings, value);
         persistAppSettings();
     }
 

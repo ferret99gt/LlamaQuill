@@ -120,6 +120,11 @@ class ImageGenerationCoordinatorPromptTest
             assertEquals(720, comfy.width);
             assertEquals(480, comfy.height);
             assertEquals(2, comfy.batchSize);
+            assertEquals(ComfyUiClient.ImageOutputMode.PREVIEW, comfy.outputMode);
+
+            coordinator.generateImages(defaults.toBuilder().comfySaveImages(true).build(),
+                    "Permanent output", 720, 480, 2);
+            assertEquals(ComfyUiClient.ImageOutputMode.PERMANENT, comfy.outputMode);
         }
     }
 
@@ -164,14 +169,17 @@ class ImageGenerationCoordinatorPromptTest
         private int width;
         private int height;
         private int batchSize;
+        private ImageOutputMode outputMode;
 
         @Override
         public GenerationResult generateImages(
-                String workflowTemplateJson, String promptText, int width, int height, int batchSize)
+                String workflowTemplateJson, String promptText, int width, int height, int batchSize,
+                ImageOutputMode outputMode)
         {
             this.width = width;
             this.height = height;
             this.batchSize = batchSize;
+            this.outputMode = outputMode;
             return new GenerationResult("{}", List.of());
         }
     }

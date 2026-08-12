@@ -126,6 +126,11 @@ public final class SettingsPaneController
             }
         });
         Spinner<Integer> comfyBatchSizeSpinner = buildSpinner(1, 32, appSettings.comfyBatchSize());
+        CheckBox comfySaveImagesBox = optionCheckBox("Save Images to ComfyUI", appSettings.comfySaveImages());
+        comfySaveImagesBox.setTooltip(new Tooltip(
+                "Keep generated files in ComfyUI's output folder. When disabled, LlamaQuill retrieves temporary previews."));
+        comfySaveImagesBox.setOnAction(event -> actions.settingChanged(
+                new Change(Setting.COMFY_SAVE_IMAGES, comfySaveImagesBox.isSelected())));
 
         modelSelect = new ComboBox<>();
         modelSelect.setMaxWidth(Double.MAX_VALUE);
@@ -265,6 +270,7 @@ public final class SettingsPaneController
                 spinnerRow("Image Dimension (long edge)", comfyDimensionSpinner, Setting.COMFY_DIMENSION),
                 comboRow("Image Ratio", comfyRatioSelect),
                 spinnerRow("Image Batch Size", comfyBatchSizeSpinner, Setting.COMFY_BATCH_SIZE),
+                comfySaveImagesBox,
                 underlinedLabel("Local Data"),
                 new Label("Database"),
                 databaseLocationLabel,
@@ -587,7 +593,8 @@ public final class SettingsPaneController
         COMFY_WORKFLOW,
         COMFY_DIMENSION,
         COMFY_RATIO,
-        COMFY_BATCH_SIZE
+        COMFY_BATCH_SIZE,
+        COMFY_SAVE_IMAGES
     }
 
     public record Change(Setting setting, Object value)

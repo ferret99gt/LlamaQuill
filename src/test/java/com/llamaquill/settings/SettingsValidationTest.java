@@ -135,12 +135,14 @@ class SettingsValidationTest
         assertEquals(64, settings.comfyDimension());
         assertEquals(ImageRatio.SQUARE, settings.comfyRatio());
         assertEquals(1, settings.comfyBatchSize());
+        assertFalse(settings.comfySaveImages());
         assertEquals(AppSettings.MAX_OLLAMA_KEEP_ALIVE_MINUTES, settings.ollamaKeepAliveMinutes());
         assertEquals(AppSettings.DEFAULT_STORY_CARD_COMMAND_PRESET_ID,
                 settings.selectedStoryCardCommandPresetId());
         assertEquals(settings, settings.toBuilder().build());
         assertEquals(AppSettings.MAX_OLLAMA_KEEP_ALIVE_MINUTES,
                 SettingsCoordinator.withComfyDimension(settings, 800).ollamaKeepAliveMinutes());
+        assertTrue(SettingsCoordinator.withComfySaveImages(settings, true).comfySaveImages());
         assertEquals("builtin:basic-prose",
                 SettingsCoordinator.withSelectedStoryCardCommandPreset(settings, "builtin:basic-prose")
                         .selectedStoryCardCommandPresetId());

@@ -35,6 +35,7 @@ public final class DatabaseMigrator
     private static final int STORY_CARD_GENERATION_CONTEXT_SCHEMA = 7;
     private static final int FORCE_PIN_ALL_STORY_CARDS_SCHEMA = 8;
     private static final int SEE_PROMPT_PRESET_SCHEMA = 9;
+    private static final int IMAGE_OPTIONS_SCHEMA = 10;
     private static final int CURRENT_SCHEMA = AppVersion.DATABASE_SCHEMA;
     private static final DateTimeFormatter BACKUP_TIMESTAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS");
 
@@ -82,6 +83,7 @@ public final class DatabaseMigrator
                     migrateFromVersionSeven(connection);
                     migrateFromVersionEight(connection);
                     migrateFromVersionNine(connection);
+                    migrateFromVersionTen(connection);
                     recordMigration(connection, CURRENT_SCHEMA,
                             AppVersion.CURRENT + "-schema-" + CURRENT_SCHEMA + "-provisional");
                     setUserVersion(connection, CURRENT_SCHEMA);
@@ -100,7 +102,8 @@ public final class DatabaseMigrator
                 && sourceVersion != STORY_CARD_PRESET_SELECTION_SCHEMA
                 && sourceVersion != STORY_CARD_GENERATION_CONTEXT_SCHEMA
                 && sourceVersion != FORCE_PIN_ALL_STORY_CARDS_SCHEMA
-                && sourceVersion != SEE_PROMPT_PRESET_SCHEMA)
+                && sourceVersion != SEE_PROMPT_PRESET_SCHEMA
+                && sourceVersion != IMAGE_OPTIONS_SCHEMA)
         {
             throw new SQLException("Unsupported database migration source: " + sourceVersion);
         }
@@ -133,6 +136,7 @@ public final class DatabaseMigrator
             migrateFromVersionSeven(connection);
             migrateFromVersionEight(connection);
             migrateFromVersionNine(connection);
+            migrateFromVersionTen(connection);
             String sourceLabel = sourceVersion == VERSION_0_1_0
                     ? AppVersion.FIRST_MIGRATION_SOURCE
                     : AppVersion.CURRENT + "-schema-" + sourceVersion;
@@ -216,6 +220,12 @@ public final class DatabaseMigrator
         rebuildAppSettings(connection);
         addColumnIfMissing(connection, "images", "batch_size", "INTEGER NOT NULL DEFAULT 1");
         backfillImageBatchSizes(connection);
+    }
+
+    private static void migrateFromVersionTen(Connection connection) throws SQLException
+    {
+        addColumnIfMissing(connection, "app_settings", "comfy_save_images",
+                "INTEGER NOT NULL DEFAULT 0 CHECK (comfy_save_images IN (0,1))");
     }
 
     private static void backfillImageBatchSizes(Connection connection) throws SQLException
@@ -357,6 +367,7 @@ public final class DatabaseMigrator
                 || !storyColumns.contains("selected_see_prompt_preset_id")
                 || !appColumns.contains("comfy_dimension")
                 || !appColumns.contains("comfy_ratio")
+                || !appColumns.contains("comfy_save_images")
                 || appColumns.contains("comfy_width")
                 || appColumns.contains("comfy_height")
                 || !imageColumns.contains("batch_size")
@@ -627,21 +638,21 @@ public final class DatabaseMigrator
     {
         boolean existed = tableExists(connection, "app_settings");
         Set<String> oldColumns = existed ? columns(connection, "app_settings") : Set.of();
-        execute(connection, "DROP TABLE IF EXISTS app_settings_v10");
-        execute(connection, appSettingsTableSql("app_settings_v10"));
+        execute(connection, "DROP TABLE IF EXISTS app_settings_v11");
+        execute(connection, appSettingsTableSql("app_settings_v11"));
         if (existed)
         {
             execute(connection, """
-                    INSERT INTO app_settings_v10 (
+                    INSERT INTO app_settings_v11 (
                         id, ollama_url, comfyui_url, selected_model,
                         response_length_enabled, response_length,
                         min_story_percent, story_card_lookback,
-                        comfy_workflow, comfy_dimension, comfy_ratio, comfy_batch_size,
+                        comfy_workflow, comfy_dimension, comfy_ratio, comfy_batch_size, comfy_save_images,
                         ollama_keep_alive_minutes, selected_story_card_command_preset_id
                     )
                     SELECT %s, %s, %s, %s, %s, %s,
                            MAX(10, MIN(100, %s)),
-                           %s, %s, %s, %s, %s, %s, %s
+                           %s, %s, %s, %s, %s, %s, %s, %s
                     FROM app_settings
                     WHERE %s = 1
                     """.formatted(
@@ -661,12 +672,13 @@ public final class DatabaseMigrator
                     comfyDimensionExpression(oldColumns),
                     comfyRatioExpression(oldColumns),
                     value(oldColumns, "comfy_batch_size", "4"),
+                    value(oldColumns, "comfy_save_images", "0"),
                     value(oldColumns, "ollama_keep_alive_minutes", "5"),
                     value(oldColumns, "selected_story_card_command_preset_id", "'builtin:condensed'"),
                     value(oldColumns, "id", "1")));
             execute(connection, "DROP TABLE app_settings");
         }
-        execute(connection, "ALTER TABLE app_settings_v10 RENAME TO app_settings");
+        execute(connection, "ALTER TABLE app_settings_v11 RENAME TO app_settings");
     }
 
     private static void rebuildStoryCardsForSchemaFour(Connection connection) throws SQLException
@@ -745,6 +757,8 @@ public final class DatabaseMigrator
                     comfy_ratio TEXT NOT NULL DEFAULT '1:1'
                         CHECK (comfy_ratio IN ('1:1','16:9','3:2','4:3','9:16','2:3','3:4')),
                     comfy_batch_size INTEGER NOT NULL DEFAULT 4,
+                    comfy_save_images INTEGER NOT NULL DEFAULT 0
+                        CHECK (comfy_save_images IN (0,1)),
                     ollama_keep_alive_minutes INTEGER NOT NULL DEFAULT 5
                         CHECK (ollama_keep_alive_minutes BETWEEN 5 AND 30),
                     selected_story_card_command_preset_id TEXT NOT NULL DEFAULT 'builtin:condensed'

@@ -141,6 +141,11 @@ public final class SettingsCoordinator
         return current.toBuilder().comfyBatchSize(batchSize).build();
     }
 
+    public static AppSettings withComfySaveImages(AppSettings current, boolean saveImages)
+    {
+        return current.toBuilder().comfySaveImages(saveImages).build();
+    }
+
     public static AppSettings withOllamaKeepAliveMinutes(AppSettings current, int minutes)
     {
         return current.toBuilder().ollamaKeepAliveMinutes(minutes).build();

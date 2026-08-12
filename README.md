@@ -107,6 +107,11 @@ starts with those values and shows its calculated width and height, rounded to m
 Changing them inside See applies only to that dialog and does not replace the global defaults.
 Retrying an inserted image restores the values used to generate that image.
 
+**Save Images to ComfyUI** is a global Options setting and defaults off. When disabled, LlamaQuill
+temporarily changes the submitted workflow's Save Image output to Preview Image; ComfyUI still
+makes the files available for retrieval but keeps them in its temporary directory. Enabling the
+setting submits the bundled workflow's original Save Image node and permanent output path.
+
 Bundled workflow JSON files live under `src/main/resources/comfyui/` in the source tree.
 
 ## Privacy and connectivity

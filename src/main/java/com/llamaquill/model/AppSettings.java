@@ -7,7 +7,7 @@ import com.llamaquill.serviceClients.OllamaEndpoint;
 public record AppSettings(String ollamaUrl, String comfyUiUrl, String selectedModel,
         boolean responseLengthEnabled, int responseLength, int minStoryPercent, int storyCardLookback,
         String comfyWorkflow, int comfyDimension, ImageRatio comfyRatio, int comfyBatchSize,
-        int ollamaKeepAliveMinutes, String selectedStoryCardCommandPresetId)
+        boolean comfySaveImages, int ollamaKeepAliveMinutes, String selectedStoryCardCommandPresetId)
 {
     public static final String DEFAULT_COMFY_WORKFLOW = "ChromaHD";
     public static final int DEFAULT_COMFY_DIMENSION = 720;
@@ -52,7 +52,7 @@ public record AppSettings(String ollamaUrl, String comfyUiUrl, String selectedMo
         this(ollamaUrl, comfyUiUrl, selectedModel,
                 responseLengthEnabled, responseLength, minStoryPercent,
                 storyCardLookback, comfyWorkflow,
-                comfyDimension, comfyRatio, comfyBatchSize,
+                comfyDimension, comfyRatio, comfyBatchSize, false,
                 DEFAULT_OLLAMA_KEEP_ALIVE_MINUTES, DEFAULT_STORY_CARD_COMMAND_PRESET_ID);
     }
 
@@ -65,8 +65,21 @@ public record AppSettings(String ollamaUrl, String comfyUiUrl, String selectedMo
         this(ollamaUrl, comfyUiUrl, selectedModel,
                 responseLengthEnabled, responseLength, minStoryPercent,
                 storyCardLookback, comfyWorkflow,
-                comfyDimension, comfyRatio, comfyBatchSize,
+                comfyDimension, comfyRatio, comfyBatchSize, false,
                 ollamaKeepAliveMinutes, DEFAULT_STORY_CARD_COMMAND_PRESET_ID);
+    }
+
+    public AppSettings(String ollamaUrl, String comfyUiUrl, String selectedModel,
+            boolean responseLengthEnabled, int responseLength, int minStoryPercent,
+            int storyCardLookback, String comfyWorkflow,
+            int comfyDimension, ImageRatio comfyRatio, int comfyBatchSize,
+            int ollamaKeepAliveMinutes, String selectedStoryCardCommandPresetId)
+    {
+        this(ollamaUrl, comfyUiUrl, selectedModel,
+                responseLengthEnabled, responseLength, minStoryPercent,
+                storyCardLookback, comfyWorkflow,
+                comfyDimension, comfyRatio, comfyBatchSize, false,
+                ollamaKeepAliveMinutes, selectedStoryCardCommandPresetId);
     }
 
     public static AppSettings defaults()
@@ -75,7 +88,7 @@ public record AppSettings(String ollamaUrl, String comfyUiUrl, String selectedMo
         return new AppSettings(OllamaClient.DEFAULT_HOST, ComfyUiClient.DEFAULT_HOST, OllamaClient.DEFAULT_MODEL,
                 false, defaults.responseLength(), 60,
                 defaults.storyCardLookback(), DEFAULT_COMFY_WORKFLOW,
-                DEFAULT_COMFY_DIMENSION, DEFAULT_COMFY_RATIO, DEFAULT_COMFY_BATCH_SIZE,
+                DEFAULT_COMFY_DIMENSION, DEFAULT_COMFY_RATIO, DEFAULT_COMFY_BATCH_SIZE, false,
                 DEFAULT_OLLAMA_KEEP_ALIVE_MINUTES, DEFAULT_STORY_CARD_COMMAND_PRESET_ID);
     }
 
@@ -97,6 +110,7 @@ public record AppSettings(String ollamaUrl, String comfyUiUrl, String selectedMo
         private int comfyDimension;
         private ImageRatio comfyRatio;
         private int comfyBatchSize;
+        private boolean comfySaveImages;
         private int ollamaKeepAliveMinutes;
         private String selectedStoryCardCommandPresetId;
 
@@ -113,6 +127,7 @@ public record AppSettings(String ollamaUrl, String comfyUiUrl, String selectedMo
             comfyDimension = settings.comfyDimension();
             comfyRatio = settings.comfyRatio();
             comfyBatchSize = settings.comfyBatchSize();
+            comfySaveImages = settings.comfySaveImages();
             ollamaKeepAliveMinutes = settings.ollamaKeepAliveMinutes();
             selectedStoryCardCommandPresetId = settings.selectedStoryCardCommandPresetId();
         }
@@ -183,6 +198,12 @@ public record AppSettings(String ollamaUrl, String comfyUiUrl, String selectedMo
             return this;
         }
 
+        public Builder comfySaveImages(boolean value)
+        {
+            comfySaveImages = value;
+            return this;
+        }
+
         public Builder ollamaKeepAliveMinutes(int value)
         {
             ollamaKeepAliveMinutes = value;
@@ -200,7 +221,7 @@ public record AppSettings(String ollamaUrl, String comfyUiUrl, String selectedMo
             return new AppSettings(ollamaUrl, comfyUiUrl, selectedModel,
                     responseLengthEnabled, responseLength, minStoryPercent,
                     storyCardLookback, comfyWorkflow,
-                    comfyDimension, comfyRatio, comfyBatchSize, ollamaKeepAliveMinutes,
+                    comfyDimension, comfyRatio, comfyBatchSize, comfySaveImages, ollamaKeepAliveMinutes,
                     selectedStoryCardCommandPresetId);
         }
     }

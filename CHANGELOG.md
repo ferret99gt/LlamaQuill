@@ -35,6 +35,9 @@ implementation-level record.
   without overwriting Options; the calculated multiple-of-eight output size is shown before image
   generation. Retrying an inserted image restores the Dimension, Ratio, and Batch Size used for
   that image instead of reopening with the global defaults.
+- Options now includes a global Save Images to ComfyUI setting. It defaults off, using ComfyUI's
+  temporary Preview Image output so LlamaQuill generations do not permanently accumulate there;
+  enabling it uses each bundled workflow's original Save Image node and output path.
 - Each story can treat every Story Card as pinned during prompt compilation from the Story Cards
   tab, without changing any card's individual Pinned value.
 - Story Card Additional Generation Context now saves when the field loses focus or its dialog is

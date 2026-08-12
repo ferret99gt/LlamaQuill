@@ -130,7 +130,10 @@ public final class ImageGenerationCoordinator
     {
         Objects.requireNonNull(appSettings, "appSettings");
         String template = loadWorkflowTemplateJson(appSettings.comfyWorkflow());
-        return comfyUiClient.generateImages(template, promptText, width, height, batchSize);
+        ComfyUiClient.ImageOutputMode outputMode = appSettings.comfySaveImages()
+                ? ComfyUiClient.ImageOutputMode.PERMANENT
+                : ComfyUiClient.ImageOutputMode.PREVIEW;
+        return comfyUiClient.generateImages(template, promptText, width, height, batchSize, outputMode);
     }
 
     public ImageMutationResult insertOrReplaceImage(Story story, String expectedHeadId, PendingImage pending, String promptText,

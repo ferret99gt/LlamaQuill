@@ -55,7 +55,8 @@ class DatabaseMigrationTest
             assertFalse(columns(database, "app_settings").contains("use_ollama_templates"));
             assertFalse(columns(database, "app_settings").contains("an_placement"));
             assertTrue(columns(database, "app_settings").contains("selected_story_card_command_preset_id"));
-            assertTrue(columns(database, "app_settings").containsAll(List.of("comfy_dimension", "comfy_ratio")));
+            assertTrue(columns(database, "app_settings").containsAll(
+                    List.of("comfy_dimension", "comfy_ratio", "comfy_save_images")));
             assertFalse(columns(database, "app_settings").contains("comfy_width"));
             assertFalse(columns(database, "app_settings").contains("comfy_height"));
             assertTrue(columns(database, "stories").contains("story_card_generation_context"));
@@ -89,7 +90,9 @@ class DatabaseMigrationTest
                     1024,
                     ImageRatio.LANDSCAPE_4_3,
                     2,
-                    17);
+                    17).toBuilder()
+                            .comfySaveImages(true)
+                            .build();
             appSettings.save(expectedSettings);
             assertEquals(expectedSettings, appSettings.load().orElseThrow());
             AppSettings prosePresetSettings = expectedSettings.toBuilder()
@@ -366,9 +369,9 @@ class DatabaseMigrationTest
     }
 
     @Test
-    void normalizesAProvisionalSchemaTenDatabaseMissingImageBatchSize() throws Exception
+    void normalizesAProvisionalCurrentDatabaseMissingImageBatchSize() throws Exception
     {
-        AppPaths paths = paths("schema-ten-image-batch-normalization");
+        AppPaths paths = paths("current-image-batch-normalization");
         try (Database database = Database.open(paths))
         {
             new AppSettingsRepository(database).save(AppSettings.defaults());
@@ -394,6 +397,33 @@ class DatabaseMigrationTest
             assertTrue(Files.isRegularFile(report.migration().backup().orElseThrow()));
             assertTrue(columns(database, "images").contains("batch_size"));
             assertEquals(3, new ImageRepository(database).findById("image").orElseThrow().batchSize());
+        }
+    }
+
+    @Test
+    void migratesSchemaTenWithTemporaryComfyUiImagesAsTheDefault() throws Exception
+    {
+        AppPaths paths = paths("schema-ten-comfy-save-images");
+        try (Database database = Database.open(paths))
+        {
+            new AppSettingsRepository(database).save(
+                    AppSettings.defaults().toBuilder().comfySaveImages(true).build());
+        }
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + paths.databaseFile());
+             Statement statement = connection.createStatement())
+        {
+            statement.execute("ALTER TABLE app_settings DROP COLUMN comfy_save_images");
+            statement.execute("PRAGMA user_version = 10");
+        }
+
+        try (Database database = Database.open(paths))
+        {
+            Database.StartupReport report = database.startupReport();
+            assertEquals(10, report.migration().sourceSchema());
+            assertEquals(AppVersion.DATABASE_SCHEMA, report.migration().targetSchema());
+            assertTrue(Files.isRegularFile(report.migration().backup().orElseThrow()));
+            assertTrue(columns(database, "app_settings").contains("comfy_save_images"));
+            assertFalse(new AppSettingsRepository(database).load().orElseThrow().comfySaveImages());
         }
     }
 
