@@ -311,3 +311,7 @@
 .story-list .virtual-flow > .corner {
   -fx-background-color: transparent;
 }
+
+.story-card-list .virtual-flow > .corner {
+  -fx-background-color: #1f1f1f;
+}

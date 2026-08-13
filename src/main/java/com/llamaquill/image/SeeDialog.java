@@ -1,17 +1,26 @@
 package com.llamaquill.image;
 
+import com.llamaquill.model.SeePromptPreset;
+import com.llamaquill.model.ImageRatio;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
+import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
+import javafx.scene.control.CheckBox;
+import javafx.scene.control.ComboBox;
 import javafx.scene.control.ContentDisplay;
 import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
+import javafx.scene.control.Spinner;
+import javafx.scene.control.SpinnerValueFactory;
 import javafx.scene.control.TextArea;
+import javafx.scene.control.TextInputDialog;
 import javafx.scene.control.ToggleButton;
 import javafx.scene.control.ToggleGroup;
+import javafx.scene.control.Tooltip;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.HBox;
@@ -36,13 +45,15 @@ public final class SeeDialog
     @FunctionalInterface
     public interface PromptGenerator
     {
-        void generate(String request, Consumer<String> onSuccess, Consumer<Throwable> onFailure);
+        void generate(String stylePrompt, String request, boolean ignoreResponseLength,
+                Consumer<String> onSuccess, Consumer<Throwable> onFailure);
     }
 
     @FunctionalInterface
     public interface ImageGenerator
     {
-        void generate(String promptText, Consumer<List<ImageGenerationCoordinator.PendingImage>> onSuccess,
+        void generate(String promptText, int width, int height, int batchSize,
+                Consumer<List<ImageGenerationCoordinator.PendingImage>> onSuccess,
                 Consumer<Throwable> onFailure);
     }
 
@@ -53,6 +64,8 @@ public final class SeeDialog
     }
 
     public static void show(Stage owner, String headerText, String initialPrompt, String defaultRequest,
+            int defaultImageDimension, ImageRatio defaultImageRatio, int defaultImageBatchSize,
+            SeePromptPresetService presetService, String selectedPresetId, Consumer<String> selectPreset,
             String insertButtonText, Consumer<String> showInfo, BiConsumer<String, Throwable> showError,
             Consumer<String> setStatus, Runnable beginBusy, Runnable endBusy, PromptGenerator promptGenerator,
             ImageGenerator imageGenerator, ImageInserter imageInserter)
@@ -63,15 +76,62 @@ public final class SeeDialog
         dialog.initOwner(owner);
         dialog.setResizable(true);
 
+        ComboBox<SeePromptStyles.PresetChoice> presetChoice = new ComboBox<>();
+        presetChoice.setMaxWidth(Double.MAX_VALUE);
+        Button savePresetButton = new Button("Save");
+        Button deletePresetButton = new Button("Delete");
+        HBox presetRow = new HBox(8, presetChoice, savePresetButton, deletePresetButton);
+        HBox.setHgrow(presetChoice, Priority.ALWAYS);
+
+        TextArea stylePromptArea = new TextArea();
+        stylePromptArea.setWrapText(true);
+        stylePromptArea.setPrefRowCount(3);
+        stylePromptArea.setPromptText("The selected style prompt is inserted before the custom request.");
+
         TextArea requestArea = new TextArea();
         requestArea.setWrapText(true);
         requestArea.setPrefRowCount(3);
         requestArea.setPromptText("Optional. Leave blank to infer from the latest scene.");
 
+        CheckBox ignoreResponseLengthBox = new CheckBox("Ignore Response Length");
+        ignoreResponseLengthBox.setSelected(true);
+        ignoreResponseLengthBox.setTooltip(new Tooltip(
+                "Omit the saved Response Length for this prompt without changing the saved setting."));
+
         TextArea promptArea = new TextArea(initialPrompt == null ? "" : initialPrompt);
         promptArea.setWrapText(true);
         promptArea.setPrefRowCount(6);
         promptArea.setPromptText("Generated image prompt will appear here.");
+
+        Spinner<Integer> imageDimensionSpinner = buildSpinner(
+                ImageRatio.MIN_DIMENSION, ImageRatio.MAX_DIMENSION,
+                ImageRatio.normalizeDimension(defaultImageDimension), ImageRatio.DIMENSION_STEP);
+        imageDimensionSpinner.setPrefWidth(150);
+        imageDimensionSpinner.setTooltip(new Tooltip("The longer output edge in pixels."));
+        ComboBox<ImageRatio> imageRatioChoice = new ComboBox<>();
+        imageRatioChoice.getItems().setAll(ImageRatio.values());
+        imageRatioChoice.setValue(defaultImageRatio == null ? ImageRatio.SQUARE : defaultImageRatio);
+        imageRatioChoice.setPrefWidth(120);
+        Spinner<Integer> imageBatchSizeSpinner = buildSpinner(1, 32, defaultImageBatchSize, 1);
+        imageBatchSizeSpinner.setPrefWidth(110);
+        Label calculatedSizeLabel = new Label();
+        calculatedSizeLabel.setMinWidth(150);
+        Runnable updateCalculatedSize = () ->
+        {
+            ImageRatio ratio = imageRatioChoice.getValue() == null ? ImageRatio.SQUARE : imageRatioChoice.getValue();
+            ImageRatio.Dimensions dimensions = ratio.dimensions(imageDimensionSpinner.getValue());
+            calculatedSizeLabel.setText(dimensions.toString());
+        };
+        imageDimensionSpinner.valueProperty().addListener((observable, previous, current) -> updateCalculatedSize.run());
+        imageRatioChoice.valueProperty().addListener((observable, previous, current) -> updateCalculatedSize.run());
+        updateCalculatedSize.run();
+
+        VBox dimensionControl = new VBox(4, new Label("Image Dimension"), imageDimensionSpinner);
+        VBox ratioControl = new VBox(4, new Label("Image Ratio"), imageRatioChoice);
+        VBox batchControl = new VBox(4, new Label("Image Batch Size"), imageBatchSizeSpinner);
+        VBox calculatedControl = new VBox(4, new Label("Output Size"), calculatedSizeLabel);
+        HBox imageOptions = new HBox(12, dimensionControl, ratioControl, batchControl, calculatedControl);
+        imageOptions.setAlignment(Pos.BOTTOM_LEFT);
 
         ImageView selectedPreview = new ImageView();
         selectedPreview.setPreserveRatio(true);
@@ -97,23 +157,31 @@ public final class SeeDialog
         imageResultsBox.setPadding(new Insets(8));
         imageResultsBox.setStyle("-fx-border-color: rgba(255,255,255,0.12); -fx-border-width: 1; -fx-border-radius: 4;");
 
-        Button regeneratePromptButton = new Button("Regenerate Prompt");
+        Button generatePromptButton = new Button("Generate Prompt");
         Button createImagesButton = new Button("Create Images");
         Button insertImageButton = new Button(insertButtonText);
         Button cancelButton = new Button("Cancel");
         insertImageButton.setDisable(true);
 
-        Region spacer = new Region();
-        HBox.setHgrow(spacer, Priority.ALWAYS);
-        HBox rightButtons = new HBox(8, createImagesButton, insertImageButton, cancelButton);
-        HBox actions = new HBox(8, regeneratePromptButton, spacer, rightButtons);
-        actions.setAlignment(Pos.CENTER_LEFT);
+        Region promptActionSpacer = new Region();
+        HBox.setHgrow(promptActionSpacer, Priority.ALWAYS);
+        HBox promptActions = new HBox(8, ignoreResponseLengthBox, promptActionSpacer, generatePromptButton);
+        promptActions.setAlignment(Pos.CENTER_LEFT);
+
+        HBox actions = new HBox(8, createImagesButton, insertImageButton, cancelButton);
+        actions.setAlignment(Pos.CENTER_RIGHT);
 
         VBox content = new VBox(10,
-                new Label("Request"),
+                new Label("Style Preset"),
+                presetRow,
+                new Label("Style Prompt"),
+                stylePromptArea,
+                new Label("Custom Request"),
                 requestArea,
+                promptActions,
                 new Label("Image Prompt"),
                 promptArea,
+                imageOptions,
                 imageResultsBox,
                 actions);
         content.setPadding(new Insets(10));
@@ -134,6 +202,28 @@ public final class SeeDialog
             hiddenCancel.setVisible(false);
             hiddenCancel.setManaged(false);
         }
+
+        loadPresetChoices(presetService, presetChoice, selectedPresetId, showError);
+        SeePromptStyles.PresetChoice initialPreset = presetChoice.getValue() == null
+                ? findDefaultPreset(presetChoice.getItems())
+                : presetChoice.getValue();
+        presetChoice.setValue(initialPreset);
+        stylePromptArea.setText(initialPreset.prompt());
+        deletePresetButton.setDisable(initialPreset.builtIn());
+        presetChoice.setOnAction(event ->
+        {
+            SeePromptStyles.PresetChoice selected = presetChoice.getValue();
+            if (selected != null)
+            {
+                stylePromptArea.setText(selected.prompt());
+                deletePresetButton.setDisable(selected.builtIn());
+                selectPreset.accept(selected.id());
+            }
+        });
+        savePresetButton.setOnAction(event -> saveOrUpdatePreset(
+                owner, presetService, presetChoice, stylePromptArea, selectPreset, showInfo, showError));
+        deletePresetButton.setOnAction(event -> deletePreset(
+                owner, presetService, presetChoice, selectPreset, showInfo, showError));
 
         final List<ImageGenerationCoordinator.PendingImage>[] pendingImagesRef = new List[] { new ArrayList<>() };
         final int[] selectedIndexRef = new int[] { -1 };
@@ -215,7 +305,7 @@ public final class SeeDialog
 
         Runnable restoreButtons = () ->
         {
-            regeneratePromptButton.setDisable(false);
+            generatePromptButton.setDisable(false);
             createImagesButton.setDisable(false);
             insertImageButton.setDisable(selectedIndexRef[0] < 0);
             cancelButton.setDisable(false);
@@ -224,7 +314,7 @@ public final class SeeDialog
 
         cancelButton.setOnAction(event -> dialog.close());
 
-        regeneratePromptButton.setOnAction(event ->
+        generatePromptButton.setOnAction(event ->
         {
             String request = requestArea.getText().trim();
             if (request.isEmpty())
@@ -232,13 +322,13 @@ public final class SeeDialog
                 request = defaultRequest;
             }
 
-            regeneratePromptButton.setDisable(true);
+            generatePromptButton.setDisable(true);
             createImagesButton.setDisable(true);
             insertImageButton.setDisable(true);
             cancelButton.setDisable(true);
             beginBusy.run();
             setStatus.accept("Generating image prompt...");
-            promptGenerator.generate(request,
+            promptGenerator.generate(stylePromptArea.getText(), request, ignoreResponseLengthBox.isSelected(),
                     generated ->
                     {
                         restoreButtons.run();
@@ -266,13 +356,19 @@ public final class SeeDialog
                 showInfo.accept("Image prompt cannot be empty.");
                 return;
             }
-            regeneratePromptButton.setDisable(true);
+            generatePromptButton.setDisable(true);
             createImagesButton.setDisable(true);
             insertImageButton.setDisable(true);
             cancelButton.setDisable(true);
             beginBusy.run();
             setStatus.accept("Generating images...");
-            imageGenerator.generate(promptText,
+            int dimension = ImageRatio.normalizeDimension(readSpinnerValue(imageDimensionSpinner));
+            imageDimensionSpinner.getValueFactory().setValue(dimension);
+            int batchSize = readSpinnerValue(imageBatchSizeSpinner);
+            ImageRatio ratio = imageRatioChoice.getValue() == null ? ImageRatio.SQUARE : imageRatioChoice.getValue();
+            ImageRatio.Dimensions dimensions = ratio.dimensions(dimension);
+            updateCalculatedSize.run();
+            imageGenerator.generate(promptText, dimensions.width(), dimensions.height(), batchSize,
                     pending ->
                     {
                         restoreButtons.run();
@@ -327,5 +423,122 @@ public final class SeeDialog
         }
         refreshImageSelectionUi.run();
         dialog.showAndWait();
+    }
+
+    private static Spinner<Integer> buildSpinner(int min, int max, int value, int step)
+    {
+        Spinner<Integer> spinner = new Spinner<>();
+        spinner.setValueFactory(new SpinnerValueFactory.IntegerSpinnerValueFactory(min, max, value, step));
+        spinner.setEditable(true);
+        return spinner;
+    }
+
+    private static int readSpinnerValue(Spinner<Integer> spinner)
+    {
+        SpinnerValueFactory<Integer> factory = spinner.getValueFactory();
+        Integer fallback = factory.getValue();
+        try
+        {
+            Integer value = factory.getConverter().fromString(spinner.getEditor().getText());
+            if (value == null)
+            {
+                throw new IllegalArgumentException("Spinner value cannot be blank.");
+            }
+            factory.setValue(value);
+        }
+        catch (RuntimeException ignored)
+        {
+            factory.setValue(fallback);
+            spinner.getEditor().setText(factory.getConverter().toString(fallback));
+        }
+        return factory.getValue();
+    }
+
+    private static void loadPresetChoices(SeePromptPresetService service,
+            ComboBox<SeePromptStyles.PresetChoice> choices, String selectedId,
+            BiConsumer<String, Throwable> showError)
+    {
+        try
+        {
+            choices.getItems().setAll(service.listChoices());
+            SeePromptStyles.PresetChoice selected = choices.getItems().stream()
+                    .filter(choice -> choice.id().equals(selectedId))
+                    .findFirst()
+                    .orElseGet(() -> findDefaultPreset(choices.getItems()));
+            choices.setValue(selected);
+        }
+        catch (Exception e)
+        {
+            showError.accept("Failed to load See style presets", e);
+        }
+    }
+
+    private static SeePromptStyles.PresetChoice findDefaultPreset(List<SeePromptStyles.PresetChoice> choices)
+    {
+        return choices.stream()
+                .filter(choice -> choice.id().equals(SeePromptStyles.defaultPreset().id()))
+                .findFirst()
+                .orElse(SeePromptStyles.defaultPreset());
+    }
+
+    private static void saveOrUpdatePreset(Stage owner, SeePromptPresetService service,
+            ComboBox<SeePromptStyles.PresetChoice> choices, TextArea promptArea,
+            Consumer<String> selectPreset, Consumer<String> showInfo,
+            BiConsumer<String, Throwable> showError)
+    {
+        SeePromptStyles.PresetChoice selected = choices.getValue();
+        boolean update = selected != null && !selected.builtIn();
+        TextInputDialog nameDialog = new TextInputDialog(update ? selected.name() : "");
+        nameDialog.initOwner(owner);
+        nameDialog.setTitle("Save See Style");
+        nameDialog.setHeaderText(update ? "Update this reusable style" : "Save as a new reusable style");
+        nameDialog.setContentText("Preset name:");
+        nameDialog.showAndWait().ifPresent(name ->
+        {
+            try
+            {
+                SeePromptPreset saved = update
+                        ? service.update(selected.id(), name, promptArea.getText())
+                        : service.create(name, promptArea.getText());
+                loadPresetChoices(service, choices, saved.id(), showError);
+                selectPreset.accept(saved.id());
+                showInfo.accept(update ? "See style preset updated." : "See style preset saved.");
+            }
+            catch (Exception e)
+            {
+                showError.accept("Failed to save See style preset", e);
+            }
+        });
+    }
+
+    private static void deletePreset(Stage owner, SeePromptPresetService service,
+            ComboBox<SeePromptStyles.PresetChoice> choices, Consumer<String> selectPreset,
+            Consumer<String> showInfo, BiConsumer<String, Throwable> showError)
+    {
+        SeePromptStyles.PresetChoice selected = choices.getValue();
+        if (selected == null || selected.builtIn())
+        {
+            showInfo.accept("Built-in See style presets cannot be deleted.");
+            return;
+        }
+        Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
+        confirm.initOwner(owner);
+        confirm.setTitle("Delete See Style");
+        confirm.setHeaderText("Delete preset \"" + selected.name() + "\"?");
+        if (confirm.showAndWait().filter(ButtonType.OK::equals).isEmpty())
+        {
+            return;
+        }
+        try
+        {
+            service.delete(selected.id());
+            loadPresetChoices(service, choices, SeePromptStyles.NONE_ID, showError);
+            selectPreset.accept(SeePromptStyles.NONE_ID);
+            showInfo.accept("See style preset deleted.");
+        }
+        catch (Exception e)
+        {
+            showError.accept("Failed to delete See style preset", e);
+        }
     }
 }

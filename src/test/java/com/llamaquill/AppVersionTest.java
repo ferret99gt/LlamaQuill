@@ -11,8 +11,8 @@ class AppVersionTest
     void currentVersionIsTheFirstMigrationSuccessor()
     {
         assertEquals("0.1.0", AppVersion.FIRST_MIGRATION_SOURCE);
-        assertEquals("0.3.0", AppVersion.CURRENT);
-        assertEquals(5, AppVersion.DATABASE_SCHEMA);
+        assertEquals("0.4.0", AppVersion.CURRENT);
+        assertEquals(11, AppVersion.DATABASE_SCHEMA);
         assertTrue(AppVersion.displayName().endsWith(AppVersion.CURRENT));
     }
 }

@@ -4,6 +4,7 @@ import com.llamaquill.db.BlockRepository;
 import com.llamaquill.db.StoryCardRepository;
 import com.llamaquill.model.Block;
 import com.llamaquill.model.ChatMessage;
+import com.llamaquill.model.ConversationLayout;
 import com.llamaquill.model.GenerationSettings;
 import com.llamaquill.model.Story;
 import com.llamaquill.model.StoryCard;
@@ -30,6 +31,13 @@ public final class StoryPromptCoordinator
     public AuxiliaryGenerationService.Result generateResponse(
             Story story, String systemPrompt, String userPrompt, GenerationSettings settings) throws Exception
     {
+        return generateResponse(story, systemPrompt, userPrompt, settings, false, false);
+    }
+
+    public AuxiliaryGenerationService.Result generateResponse(
+            Story story, String systemPrompt, String userPrompt, GenerationSettings settings,
+            boolean overrideNumPredict, boolean forceRoleAwareTurns) throws Exception
+    {
         Objects.requireNonNull(story, "story");
         Objects.requireNonNull(settings, "settings");
 
@@ -41,6 +49,11 @@ public final class StoryPromptCoordinator
                         new ChatMessage("user", userPrompt)),
                 "",
                 null);
-        return auxiliaryGenerationService.generate(story, currentBlocks, currentCards, settings, input);
+        GenerationSettings promptSettings = overrideNumPredict ? settings.withoutNumPredict() : settings;
+        if (forceRoleAwareTurns)
+        {
+            promptSettings = promptSettings.withConversationLayout(ConversationLayout.ROLE_AWARE);
+        }
+        return auxiliaryGenerationService.generate(story, currentBlocks, currentCards, promptSettings, input);
     }
 }

@@ -3,6 +3,55 @@
 This changelog focuses on what changes for people using LlamaQuill. The Git history contains the
 implementation-level record.
 
+## 0.4.0
+
+Version 0.4.0 expands large-context story maintenance and local image generation. Existing
+databases are backed up and migrated automatically to schema 11.
+
+- LlamaQuill now starts with no story selected, keeping story content and details off screen until
+  a story is explicitly opened. A new installation also waits for the user to create or import its
+  first story instead of silently creating an Untitled Story.
+- When Ollama reports the exact prompt and context token counts for an oversized chat request,
+  LlamaQuill now recompiles against the corrected budget and retries once. This also lets the
+  existing per-model token calibration learn from the successful retry.
+- Response Length now has a practical maximum of 1000 tokens, giving the commonly used 50–500
+  range substantially more room on its Options slider.
+- Temperature can now be adjusted and persisted in hundredths instead of tenths.
+- The one-shot Prompt window can force Role-aware Turns for that request without changing the
+  model's saved conversation layout. The override is enabled by default so utility instructions
+  remain a distinct final user turn instead of blending into flattened story prose.
+- The most recently selected Story Card command preset is now saved globally and restored when
+  another Story Card is opened, including built-in presets such as Basic Prose Prompt.
+- Story Card generation now always uses Role-aware Turns for its request, keeping the command in a
+  distinct final user turn even when the model's saved conversation layout is Flattened.
+- Additional Generation Context is now saved with its story, restored in every Story Card dialog,
+  and copied when cloning Story Details.
+- Story Card generation can ignore the saved Response Length for a single request. The new option
+  is enabled by default and does not change the saved application setting.
+- Story Cards can compare the current entry with the most recently replaced entry recorded in
+  Notes, using a synchronized side-by-side word diff sized for smaller displays.
+- See prompt generation now always uses Role-aware Turns and can ignore the saved Response Length
+  for an individual request. The new non-persistent option is enabled by default.
+- See now offers story-specific visual style presets. None preserves the existing prompt flow;
+  Photo, Realistic, Anime, Digital Illustration, and Painterly are protected built-ins, and custom
+  styles can be saved, updated, and deleted. The style prompt remains separate from the optional
+  custom request and is inserted before it.
+- Image Width and Height have been replaced by global Image Dimension, Image Ratio, and Batch Size
+  defaults. Each See dialog starts from those defaults but can change them for its own generations
+  without overwriting Options; the calculated multiple-of-eight output size is shown before image
+  generation. Retrying an inserted image restores the Dimension, Ratio, and Batch Size used for
+  that image instead of reopening with the global defaults.
+- Options now includes a global Save Images to ComfyUI setting. It defaults off, using ComfyUI's
+  temporary Preview Image output so LlamaQuill generations do not permanently accumulate there;
+  enabling it uses each bundled workflow's original Save Image node and output path.
+- Each story can treat every Story Card as pinned during prompt compilation from the Story Cards
+  tab, without changing any card's individual Pinned value.
+- Story Card Additional Generation Context now saves when the field loses focus or its dialog is
+  closed, independently of creating or updating a card.
+- Kroma v0.2 Turbo is now the recommended See workflow, using its native Krea 2 ComfyUI pipeline.
+  The dormant Chroma2 Kaleidoscope workflow remains packaged for reference but is no longer
+  selectable.
+
 ## 0.3.0
 
 Version 0.3.0 focuses on how story context is assembled, inspected, and adapted to different

@@ -22,8 +22,9 @@ public class ImageRepository
         {
             try (PreparedStatement stmt = connection.prepareStatement("""
                     INSERT INTO images (
-                        id, story_id, prompt, mime_type, width, height, workflow_json, image_bytes, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        id, story_id, prompt, mime_type, width, height, batch_size,
+                        workflow_json, image_bytes, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """))
             {
                 stmt.setString(1, image.id());
@@ -32,9 +33,10 @@ public class ImageRepository
                 stmt.setString(4, image.mimeType());
                 stmt.setInt(5, image.width());
                 stmt.setInt(6, image.height());
-                stmt.setString(7, image.workflowJson());
-                stmt.setBytes(8, image.imageBytes());
-                stmt.setString(9, image.createdAt());
+                stmt.setInt(7, image.batchSize());
+                stmt.setString(8, image.workflowJson());
+                stmt.setBytes(9, image.imageBytes());
+                stmt.setString(10, image.createdAt());
                 stmt.executeUpdate();
             }
         });
@@ -45,7 +47,8 @@ public class ImageRepository
         return database.withConnection(connection ->
         {
             try (PreparedStatement stmt = connection.prepareStatement("""
-                    SELECT id, story_id, prompt, mime_type, width, height, workflow_json, image_bytes, created_at
+                    SELECT id, story_id, prompt, mime_type, width, height, batch_size,
+                           workflow_json, image_bytes, created_at
                     FROM images
                     WHERE id = ?
                     """))
@@ -86,6 +89,7 @@ public class ImageRepository
                 rs.getString("mime_type"),
                 rs.getInt("width"),
                 rs.getInt("height"),
+                rs.getInt("batch_size"),
                 rs.getString("workflow_json"),
                 rs.getBytes("image_bytes"),
                 rs.getString("created_at"));

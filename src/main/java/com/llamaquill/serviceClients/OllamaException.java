@@ -24,6 +24,21 @@ public class OllamaException extends IOException
         this.detail = cause == null || cause.getMessage() == null ? "" : cause.getMessage();
     }
 
+    public String endpoint()
+    {
+        return endpoint;
+    }
+
+    public int statusCode()
+    {
+        return statusCode;
+    }
+
+    public String detail()
+    {
+        return detail;
+    }
+
     public String diagnosticText()
     {
         StringBuilder text = new StringBuilder(getMessage());

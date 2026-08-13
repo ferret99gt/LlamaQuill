@@ -78,6 +78,37 @@ class PromptCompilerTest
     }
 
     @Test
+    void storyForcePinTreatsEveryCardAsPinnedWithoutChangingCardValues()
+    {
+        StoryCard first = card("first", "AbsentFirst", "First forced entry.", false);
+        StoryCard second = card("second", "AbsentSecond", "Second forced entry.", false);
+        Story forcedStory = new Story(
+                "story", "Test", "", "", "", "", true, "now", "now");
+
+        PromptCompilation forced = new PromptCompiler().compile(
+                forcedStory,
+                List.of(block("1", Role.ASSISTANT, "Nothing activates either card.")),
+                List.of(first, second),
+                settings(2048, false, 1, 100));
+
+        assertTrue(messageText(forced).contains("First forced entry."));
+        assertTrue(messageText(forced).contains("Second forced entry."));
+        assertEquals(Component.PINNED_STORY_CARD, cardEntry(forced, "first").component());
+        assertEquals(Component.PINNED_STORY_CARD, cardEntry(forced, "second").component());
+        assertFalse(first.pinned());
+        assertFalse(second.pinned());
+
+        PromptCompilation ordinary = new PromptCompiler().compile(
+                story("", "", ""),
+                List.of(block("1", Role.ASSISTANT, "Nothing activates either card.")),
+                List.of(first, second),
+                settings(2048, false, 1, 100));
+
+        assertFalse(messageText(ordinary).contains("First forced entry."));
+        assertFalse(messageText(ordinary).contains("Second forced entry."));
+    }
+
+    @Test
     void appliesTheSelectedModelWrappingToEachLoreEntryOnlyAtCompilation()
     {
         StoryCard first = card("first", "", "First entry.", true);
@@ -143,6 +174,15 @@ class PromptCompilerTest
         assertEquals(1_530, budget.estimationSafetyReserve());
         assertEquals(14_654, budget.inputLimit());
         assertTrue(worstAllowedActualInput + budget.responseReserve() <= budget.contextLimit());
+    }
+
+    @Test
+    void tightensTheRetryBudgetFromOllamasMeasuredContextError()
+    {
+        PromptBudget budget = PromptBudget.from(settings(50_176, false, 17, 100));
+
+        assertEquals(45_374, budget.inputLimit());
+        assertEquals(44_870, budget.correctedInputLimit(45_374, 50_472, 50_176));
     }
 
     @Test

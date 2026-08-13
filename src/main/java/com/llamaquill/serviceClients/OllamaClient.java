@@ -22,6 +22,8 @@ import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class OllamaClient implements AutoCloseable
 {
@@ -32,6 +34,12 @@ public class OllamaClient implements AutoCloseable
     private static final Duration STREAM_IDLE_TIMEOUT = Duration.ofMinutes(2);
     private static final int MAX_ERROR_BODY_BYTES = 4096;
     private static final int MAX_ERROR_MESSAGE_CHARS = 1000;
+    private static final Pattern CONTEXT_ERROR_TYPE_PATTERN = Pattern.compile(
+            "\\\"type\\\"\\s*:\\s*\\\"exceed_context_size_error\\\"");
+    private static final Pattern PROMPT_TOKEN_COUNT_PATTERN = Pattern.compile(
+            "\\\"n_prompt_tokens\\\"\\s*:\\s*(\\d+)");
+    private static final Pattern CONTEXT_TOKEN_COUNT_PATTERN = Pattern.compile(
+            "\\\"n_ctx\\\"\\s*:\\s*(\\d+)");
 
     private final HttpClient client;
     private volatile String host;
@@ -677,8 +685,74 @@ public class OllamaClient implements AutoCloseable
         String detail = extractErrorMessage(body);
         String safeDetail = truncate(detail, MAX_ERROR_MESSAGE_CHARS);
         String suffix = safeDetail.isBlank() ? "" : ": " + safeDetail;
-        return new OllamaException("Ollama returned status " + statusCode + " for " + path + suffix,
-                endpoint, statusCode, safeDetail);
+        String message = "Ollama returned status " + statusCode + " for " + path + suffix;
+        OllamaContextLimitException contextLimitError = contextLimitError(
+                message, path, endpoint, statusCode, safeDetail, body);
+        return contextLimitError == null
+                ? new OllamaException(message, endpoint, statusCode, safeDetail)
+                : contextLimitError;
+    }
+
+    private static OllamaContextLimitException contextLimitError(String message, String path, String endpoint,
+            int statusCode, String detail, String body)
+    {
+        if (statusCode != 400 || !"/api/chat".equals(path) || body == null || body.isBlank())
+        {
+            return null;
+        }
+        JSONObject root = parseErrorObject(body);
+        if (root != null)
+        {
+            JSONObject error = root.optJSONObject("error");
+            if (error != null && "exceed_context_size_error".equals(error.optString("type")))
+            {
+                return measuredContextLimitError(
+                        message, endpoint, statusCode, detail,
+                        error.optInt("n_prompt_tokens", -1), error.optInt("n_ctx", -1));
+            }
+        }
+
+        // Some Ollama-compatible servers prefix an otherwise valid JSON body
+        // with non-JSON bytes. The UI previously exposed the whole object in
+        // that case, and the context recovery path never saw its token counts.
+        // Limit this fallback to the exact structured error marker and fields.
+        if (!CONTEXT_ERROR_TYPE_PATTERN.matcher(body).find())
+        {
+            return null;
+        }
+        return measuredContextLimitError(
+                message, endpoint, statusCode, detail,
+                matchedPositiveInt(PROMPT_TOKEN_COUNT_PATTERN, body),
+                matchedPositiveInt(CONTEXT_TOKEN_COUNT_PATTERN, body));
+    }
+
+    private static OllamaContextLimitException measuredContextLimitError(String message, String endpoint,
+            int statusCode, String detail, int promptTokens, int contextLimit)
+    {
+        if (promptTokens <= 0 || contextLimit <= 0 || promptTokens <= contextLimit)
+        {
+            return null;
+        }
+        return new OllamaContextLimitException(
+                message, endpoint, statusCode, detail, promptTokens, contextLimit);
+    }
+
+    private static int matchedPositiveInt(Pattern pattern, String text)
+    {
+        Matcher matcher = pattern.matcher(text);
+        if (!matcher.find())
+        {
+            return -1;
+        }
+        try
+        {
+            long value = Long.parseLong(matcher.group(1));
+            return value <= Integer.MAX_VALUE ? (int) value : -1;
+        }
+        catch (NumberFormatException ignored)
+        {
+            return -1;
+        }
     }
 
     private static OllamaException invalidStream(int lineNumber, String detail, String endpoint)
@@ -693,13 +767,45 @@ public class OllamaClient implements AutoCloseable
         {
             return "";
         }
+        JSONObject parsed = parseErrorObject(body);
+        if (parsed != null)
+        {
+            return extractErrorMessage(parsed);
+        }
+        return truncate(body.trim(), MAX_ERROR_MESSAGE_CHARS);
+    }
+
+    private static JSONObject parseErrorObject(String body)
+    {
+        if (body == null || body.isBlank())
+        {
+            return null;
+        }
+        String candidate = body.strip();
+        if (!candidate.isEmpty() && candidate.charAt(0) == '\uFEFF')
+        {
+            candidate = candidate.substring(1).stripLeading();
+        }
         try
         {
-            return extractErrorMessage(new JSONObject(body));
+            return new JSONObject(candidate);
         }
         catch (JSONException ignored)
         {
-            return truncate(body.trim(), MAX_ERROR_MESSAGE_CHARS);
+            int objectStart = candidate.indexOf('{');
+            int objectEnd = candidate.lastIndexOf('}');
+            if (objectStart < 0 || objectEnd <= objectStart)
+            {
+                return null;
+            }
+            try
+            {
+                return new JSONObject(candidate.substring(objectStart, objectEnd + 1));
+            }
+            catch (JSONException alsoIgnored)
+            {
+                return null;
+            }
         }
     }
 

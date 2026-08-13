@@ -6,6 +6,9 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public final class StoryCardCommands
 {
@@ -21,6 +24,8 @@ public final class StoryCardCommands
             Write a high-density factual summary for {{title}}. Start with {{title}} name. Use short, punchy, declarative sentences. Prioritize permanent attributes and core identity. Omit unnecessary filler words (the, a, is). Avoid repeating facts, avoid meta-commentary, avoid transient details. Limit to 750 characters. No markdown. No empty lines.""";
 
     private static final DateTimeFormatter HISTORY_TIMESTAMP = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static final Pattern HISTORY_HEADER = Pattern.compile(
+            "(?m)^\\[Entry replaced (\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2})]\\R");
     private static final List<PresetChoice> BUILT_INS = List.of(
             new PresetChoice("builtin:basic-list", "Basic List Prompt", BASIC_LIST_PROMPT, true),
             new PresetChoice("builtin:basic-prose", "Basic Prose Prompt", BASIC_PROSE_PROMPT, true),
@@ -87,6 +92,27 @@ public final class StoryCardCommands
         return existing.isBlank() ? history : existing + "\n\n---\n\n" + history;
     }
 
+    public static Optional<GenerationHistoryEntry> latestGenerationHistory(String notes)
+    {
+        String value = notes == null ? "" : notes;
+        Matcher matcher = HISTORY_HEADER.matcher(value);
+        String timestamp = null;
+        int contentStart = -1;
+        while (matcher.find())
+        {
+            timestamp = matcher.group(1);
+            contentStart = matcher.end();
+        }
+        if (contentStart < 0)
+        {
+            return Optional.empty();
+        }
+        String entry = value.substring(contentStart).strip();
+        return entry.isBlank()
+                ? Optional.empty()
+                : Optional.of(new GenerationHistoryEntry(timestamp, entry));
+    }
+
     public static String normalizeName(String name)
     {
         return name == null ? "" : name.trim().toLowerCase(Locale.ROOT);
@@ -110,6 +136,15 @@ public final class StoryCardCommands
         public String toString()
         {
             return name;
+        }
+    }
+
+    public record GenerationHistoryEntry(String timestamp, String content)
+    {
+        public GenerationHistoryEntry
+        {
+            timestamp = timestamp == null ? "" : timestamp;
+            content = content == null ? "" : content;
         }
     }
 }

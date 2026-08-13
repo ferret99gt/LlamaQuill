@@ -62,6 +62,9 @@ class StoryCloneServiceTest
             assertEquals(source.systemPrompt(), clone.systemPrompt());
             assertEquals(source.plotEssentials(), clone.plotEssentials());
             assertEquals(source.authorNote(), clone.authorNote());
+            assertEquals(source.storyCardGenerationContext(), clone.storyCardGenerationContext());
+            assertTrue(clone.forcePinAllStoryCards());
+            assertEquals(source.selectedSeePromptPresetId(), clone.selectedSeePromptPresetId());
             assertNotEquals(source.id(), clone.id());
 
             List<StoryCard> clonedCards = fixture.cards.listForStory(clone.id());
@@ -88,7 +91,7 @@ class StoryCloneServiceTest
         {
             Story source = fixture.insertSource();
             StoryImage sourceImage = new StoryImage(
-                    "image", source.id(), "A moonlit archive", "image/png", 2, 3,
+                    "image", source.id(), "A moonlit archive", "image/png", 2, 3, 7,
                     "{\"workflow\":true}", new byte[] { 1, 2, 3 }, Timestamps.now());
             fixture.images.insert(sourceImage);
             fixture.blocks.insert(block("first", source.id(), Role.ASSISTANT, "Opening", 0));
@@ -100,6 +103,9 @@ class StoryCloneServiceTest
             assertEquals("", clone.systemPrompt());
             assertEquals("", clone.plotEssentials());
             assertEquals("", clone.authorNote());
+            assertEquals("", clone.storyCardGenerationContext());
+            assertFalse(clone.forcePinAllStoryCards());
+            assertEquals("builtin:none", clone.selectedSeePromptPresetId());
             assertTrue(fixture.cards.listForStory(clone.id()).isEmpty());
 
             List<Block> clonedBlocks = fixture.blocks.listForStory(clone.id());
@@ -113,6 +119,7 @@ class StoryCloneServiceTest
             assertEquals(clone.id(), clonedImage.storyId());
             assertEquals(sourceImage.prompt(), clonedImage.prompt());
             assertEquals(sourceImage.workflowJson(), clonedImage.workflowJson());
+            assertEquals(sourceImage.batchSize(), clonedImage.batchSize());
             assertArrayEquals(sourceImage.imageBytes(), clonedImage.imageBytes());
             assertTrue(fixture.images.findById(sourceImage.id()).isPresent());
         }
@@ -143,7 +150,8 @@ class StoryCloneServiceTest
     private static Story story(String id)
     {
         String now = Timestamps.now();
-        return new Story(id, "Source", "System", "Plot", "Author note", now, now);
+        return new Story(id, "Source", "System", "Plot", "Author note",
+                "Keep generated cards grounded in the source story.", true, "builtin:painterly", now, now);
     }
 
     private static Block block(String id, String storyId, Role role, String text, int position)
