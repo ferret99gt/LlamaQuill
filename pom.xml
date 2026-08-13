@@ -16,7 +16,7 @@
     <javafx.platform>win</javafx.platform>
     <javafx.maven.plugin.version>0.0.8</javafx.maven.plugin.version>
 
-    <junit.jupiter.version>6.1.2</junit.jupiter.version>
+    <junit.jupiter.version>6.1.3</junit.jupiter.version>
     <slf4j.version>2.0.18</slf4j.version>
     <jpackage.plugin.version>1.8.0</jpackage.plugin.version>
     <maven.antrun.plugin.version>3.2.0</maven.antrun.plugin.version>
