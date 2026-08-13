@@ -3,6 +3,7 @@ package com.llamaquill.settings;
 import com.llamaquill.model.AppSettings;
 import com.llamaquill.model.ModelSettings;
 import com.llamaquill.model.ConversationLayout;
+import com.llamaquill.model.ImageRatio;
 import com.llamaquill.model.StoryCardWrappingStyle;
 
 public final class SettingsCoordinator
@@ -110,6 +111,11 @@ public final class SettingsCoordinator
         return current.toBuilder().storyCardLookback(value).build();
     }
 
+    public static AppSettings withSelectedStoryCardCommandPreset(AppSettings current, String presetId)
+    {
+        return current.toBuilder().selectedStoryCardCommandPresetId(presetId).build();
+    }
+
     public static AppSettings withComfyWorkflow(AppSettings current, String workflow)
     {
         String trimmed = workflow == null ? "" : workflow.trim();
@@ -120,19 +126,24 @@ public final class SettingsCoordinator
         return current.toBuilder().comfyWorkflow(trimmed).build();
     }
 
-    public static AppSettings withComfyWidth(AppSettings current, int width)
+    public static AppSettings withComfyDimension(AppSettings current, int dimension)
     {
-        return current.toBuilder().comfyWidth(width).build();
+        return current.toBuilder().comfyDimension(dimension).build();
     }
 
-    public static AppSettings withComfyHeight(AppSettings current, int height)
+    public static AppSettings withComfyRatio(AppSettings current, ImageRatio ratio)
     {
-        return current.toBuilder().comfyHeight(height).build();
+        return current.toBuilder().comfyRatio(ratio).build();
     }
 
     public static AppSettings withComfyBatchSize(AppSettings current, int batchSize)
     {
         return current.toBuilder().comfyBatchSize(batchSize).build();
+    }
+
+    public static AppSettings withComfySaveImages(AppSettings current, boolean saveImages)
+    {
+        return current.toBuilder().comfySaveImages(saveImages).build();
     }
 
     public static AppSettings withOllamaKeepAliveMinutes(AppSettings current, int minutes)

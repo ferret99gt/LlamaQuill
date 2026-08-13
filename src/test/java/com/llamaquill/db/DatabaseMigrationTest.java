@@ -10,12 +10,15 @@ import com.llamaquill.AppVersion;
 import com.llamaquill.model.AppSettings;
 import com.llamaquill.model.Block;
 import com.llamaquill.model.ConversationLayout;
+import com.llamaquill.model.ImageRatio;
 import com.llamaquill.model.ModelSettings;
 import com.llamaquill.model.Role;
+import com.llamaquill.model.SeePromptPreset;
 import com.llamaquill.model.Story;
 import com.llamaquill.model.StoryCard;
 import com.llamaquill.model.StoryCardCommandPreset;
 import com.llamaquill.model.StoryCardWrappingStyle;
+import com.llamaquill.model.StoryImage;
 import com.llamaquill.util.Timestamps;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -46,15 +49,25 @@ class DatabaseMigrationTest
             assertTrue(database.startupReport().migration().freshDatabase());
             assertEquals(0, database.startupReport().migration().sourceSchema());
             assertEquals(AppVersion.DATABASE_SCHEMA, userVersion(database));
-            assertEquals("0.3.0", scalarText(database,
+            assertEquals("0.4.0", scalarText(database,
                     "SELECT app_version FROM schema_migrations WHERE schema_version = "
                             + AppVersion.DATABASE_SCHEMA));
             assertFalse(columns(database, "app_settings").contains("use_ollama_templates"));
             assertFalse(columns(database, "app_settings").contains("an_placement"));
+            assertTrue(columns(database, "app_settings").contains("selected_story_card_command_preset_id"));
+            assertTrue(columns(database, "app_settings").containsAll(
+                    List.of("comfy_dimension", "comfy_ratio", "comfy_save_images")));
+            assertFalse(columns(database, "app_settings").contains("comfy_width"));
+            assertFalse(columns(database, "app_settings").contains("comfy_height"));
+            assertTrue(columns(database, "stories").contains("story_card_generation_context"));
+            assertTrue(columns(database, "stories").contains("force_pin_all_story_cards"));
+            assertTrue(columns(database, "stories").contains("selected_see_prompt_preset_id"));
             assertTrue(columns(database, "story_cards").containsAll(List.of("type", "notes")));
             assertTrue(columns(database, "model_settings").containsAll(
                     List.of("story_card_wrapping_style", "conversation_layout")));
             assertTrue(tableExists(database, "story_card_command_presets"));
+            assertTrue(tableExists(database, "see_prompt_presets"));
+            assertTrue(columns(database, "images").contains("batch_size"));
             assertFalse(tableExists(database, "app_auto_cards"));
             assertFalse(tableExists(database, "story_auto_cards"));
             assertFalse(tableExists(database, "model_auto_cards"));
@@ -75,11 +88,19 @@ class DatabaseMigrationTest
                     12,
                     "SettingsWorkflow",
                     1024,
-                    768,
+                    ImageRatio.LANDSCAPE_4_3,
                     2,
-                    17);
+                    17).toBuilder()
+                            .comfySaveImages(true)
+                            .build();
             appSettings.save(expectedSettings);
             assertEquals(expectedSettings, appSettings.load().orElseThrow());
+            AppSettings prosePresetSettings = expectedSettings.toBuilder()
+                    .selectedStoryCardCommandPresetId("builtin:basic-prose")
+                    .build();
+            appSettings.save(prosePresetSettings);
+            assertEquals("builtin:basic-prose",
+                    appSettings.load().orElseThrow().selectedStoryCardCommandPresetId());
             assertTrue(columns(database, "app_settings").contains("ollama_keep_alive_minutes"));
 
             ModelSettingsRepository modelSettings = new ModelSettingsRepository(database);
@@ -104,7 +125,15 @@ class DatabaseMigrationTest
 
             StoryRepository stories = new StoryRepository(database);
             String now = Timestamps.now();
-            stories.insert(new Story("backup-story", "Backup", "", "", "", now, now));
+            Story forcePinnedStory = new Story(
+                    "backup-story", "Backup", "", "", "", "", true, "custom-see", now, now);
+            SeePromptPreset customSeePreset = new SeePromptPreset(
+                    "custom-see", "Woodcut", "Render as a woodcut print.", now, now);
+            SeePromptPresetRepository seePresets = new SeePromptPresetRepository(database);
+            seePresets.insert(customSeePreset);
+            stories.insert(forcePinnedStory);
+            assertEquals(forcePinnedStory, stories.findById(forcePinnedStory.id()).orElseThrow());
+            assertEquals(customSeePreset, seePresets.findById(customSeePreset.id()).orElseThrow());
             Path backup = database.createBackup();
             assertTrue(Files.isRegularFile(backup));
             try (Connection backupConnection = DriverManager.getConnection("jdbc:sqlite:" + backup);
@@ -123,7 +152,7 @@ class DatabaseMigrationTest
         AppPaths paths = paths("schema-four-prompt-options");
         AppSettings expectedAppSettings = new AppSettings(
                 "http://schema-four:11434", "http://comfy:8000", "schema-four-model",
-                false, 222, 61, 9, "ChromaHD", 720, 720, 4, 11);
+                false, 222, 61, 9, "ChromaHD", 720, ImageRatio.SQUARE, 4, 11);
         try (Database database = Database.open(paths))
         {
             new AppSettingsRepository(database).save(expectedAppSettings);
@@ -180,6 +209,221 @@ class DatabaseMigrationTest
             assertEquals("Character", card.type());
             assertEquals("Player-only note", card.notes());
             assertEquals(1, new StoryCardCommandPresetRepository(database).listAll().size());
+        }
+    }
+
+    @Test
+    void migratesSchemaFiveWithAStableDefaultStoryCardCommandSelection() throws Exception
+    {
+        AppPaths paths = paths("schema-five-preset-selection");
+        try (Database database = Database.open(paths))
+        {
+            String now = Timestamps.now();
+            new AppSettingsRepository(database).save(AppSettings.defaults());
+            new StoryCardCommandPresetRepository(database).insert(
+                    new StoryCardCommandPreset("preset", "Custom", "Write {{title}}.", now, now));
+        }
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + paths.databaseFile());
+             Statement statement = connection.createStatement())
+        {
+            statement.execute("ALTER TABLE app_settings DROP COLUMN selected_story_card_command_preset_id");
+            statement.execute("PRAGMA user_version = 5");
+        }
+
+        try (Database database = Database.open(paths))
+        {
+            Database.StartupReport report = database.startupReport();
+            assertEquals(5, report.migration().sourceSchema());
+            assertEquals(AppVersion.DATABASE_SCHEMA, report.migration().targetSchema());
+            assertTrue(Files.isRegularFile(report.migration().backup().orElseThrow()));
+            assertEquals(AppSettings.DEFAULT_STORY_CARD_COMMAND_PRESET_ID,
+                    new AppSettingsRepository(database).load().orElseThrow()
+                            .selectedStoryCardCommandPresetId());
+            assertEquals(1, new StoryCardCommandPresetRepository(database).listAll().size());
+        }
+    }
+
+    @Test
+    void migratesSchemaSixWithAnEmptyStoryCardGenerationContext() throws Exception
+    {
+        AppPaths paths = paths("schema-six-story-card-generation-context");
+        try (Database database = Database.open(paths))
+        {
+            String now = Timestamps.now();
+            new StoryRepository(database).insert(
+                    new Story("story", "Story", "", "", "", now, now));
+        }
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + paths.databaseFile());
+             Statement statement = connection.createStatement())
+        {
+            statement.execute("ALTER TABLE stories DROP COLUMN story_card_generation_context");
+            statement.execute("PRAGMA user_version = 6");
+        }
+
+        try (Database database = Database.open(paths))
+        {
+            Database.StartupReport report = database.startupReport();
+            assertEquals(6, report.migration().sourceSchema());
+            assertEquals(AppVersion.DATABASE_SCHEMA, report.migration().targetSchema());
+            assertTrue(Files.isRegularFile(report.migration().backup().orElseThrow()));
+            assertTrue(columns(database, "stories").contains("story_card_generation_context"));
+            assertEquals("", new StoryRepository(database).findById("story").orElseThrow()
+                    .storyCardGenerationContext());
+        }
+    }
+
+    @Test
+    void migratesSchemaSevenWithForcePinAllDisabled() throws Exception
+    {
+        AppPaths paths = paths("schema-seven-force-pin-all-story-cards");
+        try (Database database = Database.open(paths))
+        {
+            String now = Timestamps.now();
+            new StoryRepository(database).insert(
+                    new Story("story", "Story", "", "", "", now, now));
+        }
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + paths.databaseFile());
+             Statement statement = connection.createStatement())
+        {
+            statement.execute("ALTER TABLE stories DROP COLUMN force_pin_all_story_cards");
+            statement.execute("PRAGMA user_version = 7");
+        }
+
+        try (Database database = Database.open(paths))
+        {
+            Database.StartupReport report = database.startupReport();
+            assertEquals(7, report.migration().sourceSchema());
+            assertEquals(AppVersion.DATABASE_SCHEMA, report.migration().targetSchema());
+            assertTrue(Files.isRegularFile(report.migration().backup().orElseThrow()));
+            assertTrue(columns(database, "stories").contains("force_pin_all_story_cards"));
+            assertFalse(new StoryRepository(database).findById("story").orElseThrow()
+                    .forcePinAllStoryCards());
+        }
+    }
+
+    @Test
+    void migratesSchemaEightWithNoneAsTheStorySeeStyle() throws Exception
+    {
+        AppPaths paths = paths("schema-eight-see-style-selection");
+        try (Database database = Database.open(paths))
+        {
+            String now = Timestamps.now();
+            new StoryRepository(database).insert(
+                    new Story("story", "Story", "", "", "", now, now));
+        }
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + paths.databaseFile());
+             Statement statement = connection.createStatement())
+        {
+            statement.execute("ALTER TABLE stories DROP COLUMN selected_see_prompt_preset_id");
+            statement.execute("DROP TABLE see_prompt_presets");
+            statement.execute("PRAGMA user_version = 8");
+        }
+
+        try (Database database = Database.open(paths))
+        {
+            Database.StartupReport report = database.startupReport();
+            assertEquals(8, report.migration().sourceSchema());
+            assertEquals(AppVersion.DATABASE_SCHEMA, report.migration().targetSchema());
+            assertTrue(Files.isRegularFile(report.migration().backup().orElseThrow()));
+            assertTrue(columns(database, "stories").contains("selected_see_prompt_preset_id"));
+            assertTrue(tableExists(database, "see_prompt_presets"));
+            assertEquals("builtin:none", new StoryRepository(database).findById("story").orElseThrow()
+                    .selectedSeePromptPresetId());
+        }
+    }
+
+    @Test
+    void migratesSchemaNineImageSizeToLongEdgeAndNearestRatio() throws Exception
+    {
+        AppPaths paths = paths("schema-nine-image-size");
+        try (Database database = Database.open(paths))
+        {
+            new AppSettingsRepository(database).save(AppSettings.defaults());
+        }
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + paths.databaseFile());
+             Statement statement = connection.createStatement())
+        {
+            statement.execute("ALTER TABLE app_settings ADD COLUMN comfy_width INTEGER NOT NULL DEFAULT 720");
+            statement.execute("ALTER TABLE app_settings ADD COLUMN comfy_height INTEGER NOT NULL DEFAULT 720");
+            statement.execute("UPDATE app_settings SET comfy_width = 1280, comfy_height = 720");
+            statement.execute("ALTER TABLE app_settings DROP COLUMN comfy_dimension");
+            statement.execute("ALTER TABLE app_settings DROP COLUMN comfy_ratio");
+            statement.execute("ALTER TABLE images DROP COLUMN batch_size");
+            statement.execute("PRAGMA user_version = 9");
+        }
+
+        try (Database database = Database.open(paths))
+        {
+            Database.StartupReport report = database.startupReport();
+            assertEquals(9, report.migration().sourceSchema());
+            assertEquals(AppVersion.DATABASE_SCHEMA, report.migration().targetSchema());
+            assertTrue(Files.isRegularFile(report.migration().backup().orElseThrow()));
+            assertFalse(columns(database, "app_settings").contains("comfy_width"));
+            assertFalse(columns(database, "app_settings").contains("comfy_height"));
+            assertTrue(columns(database, "images").contains("batch_size"));
+            AppSettings migrated = new AppSettingsRepository(database).load().orElseThrow();
+            assertEquals(1280, migrated.comfyDimension());
+            assertEquals(ImageRatio.LANDSCAPE_16_9, migrated.comfyRatio());
+            assertEquals(4, migrated.comfyBatchSize());
+        }
+    }
+
+    @Test
+    void normalizesAProvisionalCurrentDatabaseMissingImageBatchSize() throws Exception
+    {
+        AppPaths paths = paths("current-image-batch-normalization");
+        try (Database database = Database.open(paths))
+        {
+            new AppSettingsRepository(database).save(AppSettings.defaults());
+            String now = Timestamps.now();
+            new StoryRepository(database).insert(new Story("story", "Story", "", "", "", now, now));
+            new ImageRepository(database).insert(new StoryImage(
+                    "image", "story", "Prompt", "image/png", 1024, 576, 3,
+                    "{\"6\":{\"class_type\":\"EmptyLatentImage\",\"inputs\":{"
+                            + "\"width\":1024,\"height\":576,\"batch_size\":3}}}",
+                    new byte[] { 1, 2, 3 }, now));
+        }
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + paths.databaseFile());
+             Statement statement = connection.createStatement())
+        {
+            statement.execute("ALTER TABLE images DROP COLUMN batch_size");
+        }
+
+        try (Database database = Database.open(paths))
+        {
+            Database.StartupReport report = database.startupReport();
+            assertEquals(AppVersion.DATABASE_SCHEMA, report.migration().sourceSchema());
+            assertEquals(AppVersion.DATABASE_SCHEMA, report.migration().targetSchema());
+            assertTrue(Files.isRegularFile(report.migration().backup().orElseThrow()));
+            assertTrue(columns(database, "images").contains("batch_size"));
+            assertEquals(3, new ImageRepository(database).findById("image").orElseThrow().batchSize());
+        }
+    }
+
+    @Test
+    void migratesSchemaTenWithTemporaryComfyUiImagesAsTheDefault() throws Exception
+    {
+        AppPaths paths = paths("schema-ten-comfy-save-images");
+        try (Database database = Database.open(paths))
+        {
+            new AppSettingsRepository(database).save(
+                    AppSettings.defaults().toBuilder().comfySaveImages(true).build());
+        }
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + paths.databaseFile());
+             Statement statement = connection.createStatement())
+        {
+            statement.execute("ALTER TABLE app_settings DROP COLUMN comfy_save_images");
+            statement.execute("PRAGMA user_version = 10");
+        }
+
+        try (Database database = Database.open(paths))
+        {
+            Database.StartupReport report = database.startupReport();
+            assertEquals(10, report.migration().sourceSchema());
+            assertEquals(AppVersion.DATABASE_SCHEMA, report.migration().targetSchema());
+            assertTrue(Files.isRegularFile(report.migration().backup().orElseThrow()));
+            assertTrue(columns(database, "app_settings").contains("comfy_save_images"));
+            assertFalse(new AppSettingsRepository(database).load().orElseThrow().comfySaveImages());
         }
     }
 

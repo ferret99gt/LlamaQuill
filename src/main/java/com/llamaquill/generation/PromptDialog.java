@@ -29,6 +29,7 @@ public final class PromptDialog
     public interface ResponseGenerator
     {
         void generate(String systemPrompt, String userPrompt, boolean overrideNumPredict,
+                boolean forceRoleAwareTurns,
                 Consumer<String> onSuccess, Consumer<Throwable> onFailure);
     }
 
@@ -60,6 +61,13 @@ public final class PromptDialog
         overrideNumPredict.setTooltip(new Tooltip(
                 "Omit Response Length for this Prompt without changing the saved Response Length setting."));
 
+        CheckBox forceRoleAwareTurns = new CheckBox("Force Role-aware Turn layout");
+        forceRoleAwareTurns.setSelected(true);
+        forceRoleAwareTurns.setTooltip(new Tooltip(
+                "Use Role-aware Turns for this Prompt without changing the model's saved Conversation Layout."));
+        HBox promptOverrides = new HBox(16, overrideNumPredict, forceRoleAwareTurns);
+        promptOverrides.setAlignment(Pos.CENTER_LEFT);
+
         Button generateButton = new Button("Generate Response");
         Button cancelButton = new Button("Cancel");
 
@@ -73,7 +81,7 @@ public final class PromptDialog
                 systemArea,
                 new Label("User Prompt"),
                 userArea,
-                overrideNumPredict,
+                promptOverrides,
                 new Label("Response"),
                 responseArea,
                 actions);
@@ -106,6 +114,7 @@ public final class PromptDialog
             setStatus.accept("Generating prompt response...");
             beginBusy.run();
             generator.generate(systemPrompt, userPrompt, overrideNumPredict.isSelected(),
+                    forceRoleAwareTurns.isSelected(),
                     response ->
                     {
                         restoreButtons.run();

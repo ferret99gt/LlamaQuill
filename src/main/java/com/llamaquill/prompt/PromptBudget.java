@@ -33,6 +33,11 @@ public record PromptBudget(int contextLimit, int responseReserve, int estimation
 
     public static PromptBudget from(GenerationSettings settings)
     {
+        return from(settings, Integer.MAX_VALUE);
+    }
+
+    public static PromptBudget from(GenerationSettings settings, int maximumInputTokens)
+    {
         Objects.requireNonNull(settings, "settings");
 
         int contextLimit = Math.max(0, settings.contextLimit());
@@ -41,13 +46,36 @@ public record PromptBudget(int contextLimit, int responseReserve, int estimation
                 : DEFAULT_RESPONSE_RESERVE;
         int responseReserve = Math.min(contextLimit, requestedResponseReserve);
         int remainingAfterResponse = contextLimit - responseReserve;
-        int inputLimit = safeEstimatedInputLimit(remainingAfterResponse);
+        int inputLimit = Math.min(
+                safeEstimatedInputLimit(remainingAfterResponse),
+                Math.max(0, maximumInputTokens));
         int safetyReserve = remainingAfterResponse - inputLimit;
         int requestedProtectedStoryTokens = Math.max(0, settings.minStoryWindow());
         int protectedStoryTokens = Math.min(requestedProtectedStoryTokens, inputLimit);
 
         return new PromptBudget(contextLimit, responseReserve, safetyReserve, inputLimit,
                 requestedProtectedStoryTokens, protectedStoryTokens);
+    }
+
+    /**
+     * Converts Ollama's measured prompt size into a tighter estimate-space
+     * ceiling for one retry. The configured response reserve and a fixed chat
+     * framing margin remain outside the retried prompt.
+     */
+    public int correctedInputLimit(int estimatedPromptTokens, int actualPromptTokens, int actualContextLimit)
+    {
+        if (estimatedPromptTokens <= 0 || actualPromptTokens <= 0 || actualContextLimit <= 0
+                || actualPromptTokens <= actualContextLimit)
+        {
+            return inputLimit;
+        }
+
+        int effectiveContextLimit = Math.min(contextLimit, actualContextLimit);
+        int safeActualPromptLimit = Math.max(0,
+                effectiveContextLimit - responseReserve - FIXED_ESTIMATION_SAFETY_RESERVE);
+        int correctedLimit = (int) Math.floor(
+                estimatedPromptTokens * (safeActualPromptLimit / (double) actualPromptTokens));
+        return Math.min(inputLimit, Math.max(0, correctedLimit));
     }
 
     private static int safeEstimatedInputLimit(int availableInputTokens)

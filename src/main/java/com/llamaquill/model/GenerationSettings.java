@@ -30,7 +30,8 @@ public record GenerationSettings(String modelName, String ollamaHost, int contex
                 ? Math.max(ModelSettings.MIN_PROMPT_TOKEN_SCALE,
                         Math.min(ModelSettings.MAX_PROMPT_TOKEN_SCALE, promptTokenScale))
                 : 1.0;
-        responseLength = Math.max(1, Math.min(32768, responseLength));
+        responseLength = Math.max(AppSettings.MIN_RESPONSE_LENGTH,
+                Math.min(AppSettings.MAX_RESPONSE_LENGTH, responseLength));
         temperature = Math.max(0.0, Math.min(5.0, temperature));
         topK = Math.max(0, Math.min(10000, topK));
         topP = Math.max(0.0, Math.min(1.0, topP));
@@ -149,5 +150,29 @@ public record GenerationSettings(String modelName, String ollamaHost, int contex
                 minStoryWindow, storyCardLookback,
                 ollamaKeepAliveMinutes,
                 storyCardWrappingStyle, conversationLayout);
+    }
+
+    public GenerationSettings withConversationLayout(ConversationLayout value)
+    {
+        ConversationLayout requestedLayout = value == null ? ConversationLayout.ROLE_AWARE : value;
+        if (requestedLayout == conversationLayout)
+        {
+            return this;
+        }
+        return new GenerationSettings(
+                modelName, ollamaHost, contextLimit, promptTokenScale,
+                responseLengthEnabled, responseLength,
+                temperatureEnabled, temperature,
+                topKEnabled, topK,
+                topPEnabled, topP,
+                minPEnabled, minP,
+                typicalPEnabled, typicalP,
+                presencePenaltyEnabled, presencePenalty,
+                frequencyPenaltyEnabled, frequencyPenalty,
+                repeatLastNEnabled, repeatLastN,
+                repetitionPenaltyEnabled, repetitionPenalty,
+                minStoryWindow, storyCardLookback,
+                ollamaKeepAliveMinutes,
+                storyCardWrappingStyle, requestedLayout);
     }
 }

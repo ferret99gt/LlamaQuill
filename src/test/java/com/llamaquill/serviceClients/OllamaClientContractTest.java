@@ -200,6 +200,43 @@ class OllamaClientContractTest
     }
 
     @Test
+    void exposesOllamasMeasuredTokensForContextLimitErrors()
+    {
+        StubOllamaClient client = new StubOllamaClient();
+        client.stringStatus = 400;
+        client.stringBody = """
+                \uFEFF{"error":{"code":400,"message":"request (58044 tokens) exceeds the available context size (57344 tokens), try increasing it","type":"exceed_context_size_error","n_prompt_tokens":58044,"n_ctx":57344}}
+                """;
+
+        IOException error = assertThrows(IOException.class, () -> client.chatNonStreaming(
+                List.of(new ChatMessage("user", "Generate.")), GenerationSettings.defaults()));
+
+        assertTrue(error instanceof OllamaContextLimitException);
+        OllamaContextLimitException contextError = (OllamaContextLimitException) error;
+        assertEquals(58_044, contextError.promptTokens());
+        assertEquals(57_344, contextError.contextLimit());
+        assertTrue(contextError.getMessage().contains("request (58044 tokens) exceeds"));
+    }
+
+    @Test
+    void recognizesContextMeasurementsFromAJsonBodyWithTransportNoise()
+    {
+        StubOllamaClient client = new StubOllamaClient();
+        client.streamStatus = 400;
+        client.streamBody = """
+                upstream detail: {"error":{"code":400,"message":"too large","type":"exceed_context_size_error","n_prompt_tokens":58044,"n_ctx":57344}}
+                """;
+
+        IOException error = assertThrows(IOException.class, () -> client.chat(
+                List.of(new ChatMessage("user", "Generate.")), GenerationSettings.defaults()));
+
+        assertTrue(error instanceof OllamaContextLimitException);
+        OllamaContextLimitException contextError = (OllamaContextLimitException) error;
+        assertEquals(58_044, contextError.promptTokens());
+        assertEquals(57_344, contextError.contextLimit());
+    }
+
+    @Test
     void removesAnExactReturnedAssistantPrefillAndPreservesOnlyTheGeneratedSuffix() throws Exception
     {
         StubOllamaClient client = new StubOllamaClient();

@@ -12,10 +12,13 @@ import com.llamaquill.model.Role;
 import com.llamaquill.model.Story;
 import com.llamaquill.model.StoryCard;
 import com.llamaquill.prompt.PromptAuxiliaryInput;
+import com.llamaquill.prompt.PromptBudget;
 import com.llamaquill.prompt.PromptCompilation;
 import com.llamaquill.prompt.PromptCompiler;
 import com.llamaquill.serviceClients.OllamaChatResult;
 import com.llamaquill.serviceClients.OllamaClient;
+import com.llamaquill.serviceClients.OllamaContextLimitException;
+import com.llamaquill.serviceClients.OllamaException;
 import com.llamaquill.util.Ids;
 import com.llamaquill.util.Timestamps;
 
@@ -67,28 +70,43 @@ public final class GenerationCoordinator
         PromptCompilation compilation = compileContinuation(
                 story, currentBlocks, currentCards, settings);
         String adjacentAssistantText = flattenedAdjacentAssistantText(currentBlocks, settings);
-        GeneratedText generated = generateContinuationWithFallback(
-                compilation, settings, activeObserver, adjacentAssistantText);
+        GeneratedText generated;
+        try
+        {
+            generated = generateContinuationWithFallback(
+                    compilation, settings, activeObserver, adjacentAssistantText);
+        }
+        catch (OllamaException error)
+        {
+            OllamaContextLimitException contextError = requireContextLimitError(error);
+            compilation = compileContinuationWithinInputLimit(
+                    story, currentBlocks, currentCards, settings,
+                    correctedInputLimit(compilation, contextError));
+            generated = generateContinuationWithFallback(
+                    compilation, settings, activeObserver, adjacentAssistantText);
+        }
         if (generated.text().isBlank())
         {
             return new ContinueResult(story, null, compilation.estimatedTokens(), ResultStatus.EMPTY,
                     generated.response());
         }
 
+        PromptCompilation completedCompilation = compilation;
+        GeneratedText completedGeneration = generated;
         return database.transaction(connection ->
         {
             if (!blockRepository.isCurrentHead(story.id(), expectedHeadId))
             {
-                return new ContinueResult(story, null, compilation.estimatedTokens(), ResultStatus.STALE,
-                        generated.response());
+                return new ContinueResult(story, null, completedCompilation.estimatedTokens(), ResultStatus.STALE,
+                        completedGeneration.response());
             }
             int position = blockRepository.nextPosition(story.id());
             Block block = new Block(Ids.newId(), story.id(), Role.ASSISTANT,
-                    generated.text(), Timestamps.now(), position);
+                    completedGeneration.text(), Timestamps.now(), position);
             blockRepository.insert(block);
             Story updatedStory = touchStory(story);
-            return new ContinueResult(updatedStory, block, compilation.estimatedTokens(), ResultStatus.APPLIED,
-                    generated.response());
+            return new ContinueResult(updatedStory, block, completedCompilation.estimatedTokens(), ResultStatus.APPLIED,
+                    completedGeneration.response());
         });
     }
 
@@ -115,8 +133,21 @@ public final class GenerationCoordinator
         PromptCompilation compilation = compileContinuation(
                 story, promptBlocks, currentCards, settings);
         String adjacentAssistantText = flattenedAdjacentAssistantText(promptBlocks, settings);
-        GeneratedText generated = generateContinuationWithFallback(
-                compilation, settings, activeObserver, adjacentAssistantText);
+        GeneratedText generated;
+        try
+        {
+            generated = generateContinuationWithFallback(
+                    compilation, settings, activeObserver, adjacentAssistantText);
+        }
+        catch (OllamaException error)
+        {
+            OllamaContextLimitException contextError = requireContextLimitError(error);
+            compilation = compileContinuationWithinInputLimit(
+                    story, promptBlocks, currentCards, settings,
+                    correctedInputLimit(compilation, contextError));
+            generated = generateContinuationWithFallback(
+                    compilation, settings, activeObserver, adjacentAssistantText);
+        }
         if (generated.text().isBlank())
         {
             return new RetryResult(null, compilation.estimatedTokens(), ResultStatus.EMPTY, generated.response());
@@ -176,8 +207,22 @@ public final class GenerationCoordinator
                         ? seedResult.seedBlock().text()
                         : "";
         activeObserver.onAttemptStarted("");
-        OllamaChatResult response = generateResponse(
-                compilation, settings, activeObserver, adjacentAssistantText);
+        OllamaChatResult response;
+        try
+        {
+            response = generateResponse(
+                    compilation, settings, activeObserver, adjacentAssistantText);
+        }
+        catch (OllamaException error)
+        {
+            OllamaContextLimitException contextError = requireContextLimitError(error);
+            compilation = promptCompiler.compileWithinInputLimit(
+                    story, currentBlocks, currentCards, settings, PromptAuxiliaryInput.none(),
+                    correctedInputLimit(compilation, contextError));
+            activeObserver.onAttemptStarted("");
+            response = generateResponse(
+                    compilation, settings, activeObserver, adjacentAssistantText);
+        }
         String cleaned = ContinuationJoiner.join(
                 adjacentAssistantText, normalizeOutput(response.content()));
         if (cleaned.isBlank())
@@ -186,19 +231,22 @@ public final class GenerationCoordinator
                     ResultStatus.EMPTY, response);
         }
 
+        PromptCompilation completedCompilation = compilation;
+        OllamaChatResult completedResponse = response;
         return database.transaction(connection ->
         {
             if (!blockRepository.isCurrentHead(story.id(), seedResult.seedBlock().id()))
             {
-                return new TurnResult(seedResult.updatedStory(), false, compilation.estimatedTokens(),
-                        ResultStatus.STALE, response);
+                return new TurnResult(seedResult.updatedStory(), false, completedCompilation.estimatedTokens(),
+                        ResultStatus.STALE, completedResponse);
             }
             int assistantPosition = blockRepository.nextPosition(story.id());
             Block assistantBlock = new Block(Ids.newId(), story.id(), Role.ASSISTANT, cleaned, Timestamps.now(),
                     assistantPosition);
             blockRepository.insert(assistantBlock);
             Story updatedStory = touchStory(seedResult.updatedStory());
-            return new TurnResult(updatedStory, true, compilation.estimatedTokens(), ResultStatus.APPLIED, response);
+            return new TurnResult(updatedStory, true, completedCompilation.estimatedTokens(),
+                    ResultStatus.APPLIED, completedResponse);
         });
     }
 
@@ -210,13 +258,45 @@ public final class GenerationCoordinator
     private PromptCompilation compileContinuation(Story story, List<Block> blocks,
             List<StoryCard> storyCards, GenerationSettings settings)
     {
+        return compileContinuationWithinInputLimit(
+                story, blocks, storyCards, settings, Integer.MAX_VALUE);
+    }
+
+    private PromptCompilation compileContinuationWithinInputLimit(Story story, List<Block> blocks,
+            List<StoryCard> storyCards, GenerationSettings settings, int maximumInputTokens)
+    {
         int assistantTailBlockCount = assistantTailBlockCountAfterContinuationCue(blocks);
         PromptAuxiliaryInput auxiliaryInput = new PromptAuxiliaryInput(
                 List.of(), "", null,
                 assistantTailBlockCount > 0 ? CONTINUE_PROMPT : "",
                 assistantTailBlockCount,
                 true);
-        return promptCompiler.compile(story, blocks, storyCards, settings, auxiliaryInput);
+        return promptCompiler.compileWithinInputLimit(
+                story, blocks, storyCards, settings, auxiliaryInput, maximumInputTokens);
+    }
+
+    private static int correctedInputLimit(PromptCompilation compilation, OllamaContextLimitException error)
+            throws OllamaContextLimitException
+    {
+        PromptBudget budget = compilation.contextReport().budget();
+        int correctedInputLimit = budget.correctedInputLimit(
+                compilation.estimatedTokens(), error.promptTokens(), error.contextLimit());
+        if (correctedInputLimit >= budget.inputLimit())
+        {
+            throw error;
+        }
+        return correctedInputLimit;
+    }
+
+    private static OllamaContextLimitException requireContextLimitError(OllamaException error)
+            throws OllamaException
+    {
+        OllamaContextLimitException contextError = OllamaContextLimitException.from(error);
+        if (contextError == null)
+        {
+            throw error;
+        }
+        return contextError;
     }
 
     private static int assistantTailBlockCountAfterContinuationCue(List<Block> blocks)

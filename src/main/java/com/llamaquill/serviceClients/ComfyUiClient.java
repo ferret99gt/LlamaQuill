@@ -14,6 +14,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
@@ -21,6 +22,12 @@ import java.util.concurrent.ThreadLocalRandom;
 public class ComfyUiClient
 {
     public static final String DEFAULT_HOST = "http://localhost:8000";
+
+    public enum ImageOutputMode
+    {
+        PREVIEW,
+        PERMANENT
+    }
 
     public record GeneratedImage(byte[] bytes, String mimeType, String filename, String subfolder, String type)
     {
@@ -71,6 +78,12 @@ public class ComfyUiClient
     public GenerationResult generateImages(String workflowTemplateJson, String promptText, int width, int height, int batchSize)
             throws IOException, InterruptedException
     {
+        return generateImages(workflowTemplateJson, promptText, width, height, batchSize, ImageOutputMode.PREVIEW);
+    }
+
+    public GenerationResult generateImages(String workflowTemplateJson, String promptText, int width, int height,
+            int batchSize, ImageOutputMode outputMode) throws IOException, InterruptedException
+    {
         if (workflowTemplateJson == null || workflowTemplateJson.isBlank())
         {
             throw new IOException("Workflow template is empty");
@@ -79,6 +92,7 @@ public class ComfyUiClient
         long seed = ThreadLocalRandom.current().nextLong(1L, 0x7fff_ffffL);
         String apiPromptJson = applyApiPromptTemplate(workflowTemplateJson, promptText == null ? "" : promptText, seed,
                 width, height, batchSize);
+        apiPromptJson = applyImageOutputMode(apiPromptJson, outputMode);
         JSONObject apiPrompt = new JSONObject(apiPromptJson);
         String promptId = enqueue(apiPrompt);
         List<ImageRef> refs = waitForImages(promptId, Duration.ofMinutes(3));
@@ -88,6 +102,32 @@ public class ComfyUiClient
             images.add(fetchImage(ref));
         }
         return new GenerationResult(apiPromptJson, images);
+    }
+
+    static String applyImageOutputMode(String apiPromptJson, ImageOutputMode outputMode)
+    {
+        Objects.requireNonNull(outputMode, "outputMode");
+        if (outputMode == ImageOutputMode.PERMANENT)
+        {
+            return apiPromptJson;
+        }
+
+        JSONObject workflow = new JSONObject(apiPromptJson);
+        for (String nodeId : workflow.keySet())
+        {
+            JSONObject node = workflow.optJSONObject(nodeId);
+            if (node == null || !"SaveImage".equals(node.optString("class_type")))
+            {
+                continue;
+            }
+            node.put("class_type", "PreviewImage");
+            JSONObject inputs = node.optJSONObject("inputs");
+            if (inputs != null)
+            {
+                inputs.remove("filename_prefix");
+            }
+        }
+        return workflow.toString();
     }
 
     private String applyApiPromptTemplate(String template, String promptText, long seed, int width, int height, int batchSize)

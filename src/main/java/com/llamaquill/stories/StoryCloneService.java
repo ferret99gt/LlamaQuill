@@ -52,6 +52,9 @@ public final class StoryCloneService
                     request.includeStoryDetails() ? source.systemPrompt() : "",
                     request.includeStoryDetails() ? source.plotEssentials() : "",
                     request.includeStoryDetails() ? source.authorNote() : "",
+                    request.includeStoryDetails() ? source.storyCardGenerationContext() : "",
+                    request.includeStoryDetails() && source.forcePinAllStoryCards(),
+                    request.includeStoryDetails() ? source.selectedSeePromptPresetId() : "builtin:none",
                     now,
                     now);
             storyRepository.insert(clone);
@@ -112,7 +115,7 @@ public final class StoryCloneService
         byte[] imageBytes = source.imageBytes() == null ? null : source.imageBytes().clone();
         imageRepository.insert(new StoryImage(
                 cloneImageId, cloneStoryId, source.prompt(), source.mimeType(), source.width(), source.height(),
-                source.workflowJson(), imageBytes, createdAt));
+                source.batchSize(), source.workflowJson(), imageBytes, createdAt));
         return cloneImageId;
     }
 

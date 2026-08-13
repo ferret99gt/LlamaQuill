@@ -9,7 +9,9 @@ import com.llamaquill.generation.AuxiliaryGenerationService;
 import com.llamaquill.model.AppSettings;
 import com.llamaquill.model.Block;
 import com.llamaquill.model.ChatMessage;
+import com.llamaquill.model.ConversationLayout;
 import com.llamaquill.model.GenerationSettings;
+import com.llamaquill.model.ImageRatio;
 import com.llamaquill.model.Role;
 import com.llamaquill.model.Story;
 import com.llamaquill.model.StoryCard;
@@ -69,6 +71,19 @@ public final class ImageGenerationCoordinator
     public AuxiliaryGenerationService.Result generateImagePromptResult(
             Story story, String request, GenerationSettings settings) throws Exception
     {
+        return generateImagePromptResult(story, request, settings, true);
+    }
+
+    public AuxiliaryGenerationService.Result generateImagePromptResult(
+            Story story, String request, GenerationSettings settings, boolean ignoreResponseLength) throws Exception
+    {
+        return generateImagePromptResult(story, "", request, settings, ignoreResponseLength);
+    }
+
+    public AuxiliaryGenerationService.Result generateImagePromptResult(
+            Story story, String stylePrompt, String request, GenerationSettings settings,
+            boolean ignoreResponseLength) throws Exception
+    {
         Objects.requireNonNull(story, "story");
         Objects.requireNonNull(settings, "settings");
 
@@ -76,6 +91,11 @@ public final class ImageGenerationCoordinator
         List<StoryCard> currentCards = storyCardRepository.listForStory(story.id());
         String userPrompt = """
                 Your job is to generate a prompt for an image generator that describes the most recent scene in the story. The prompt must describe each of the important subjects (gender, age, hair, eyes, build, clothing, and other visible details), what they are doing (eating, walking, talking, holding an object, using a weapon, etc), and where they are doing it (describe the room and theme, such as "an opulent castle bedroom during the morning").""";
+        String trimmedStylePrompt = stylePrompt == null ? "" : stylePrompt.trim();
+        if (!trimmedStylePrompt.isBlank())
+        {
+            userPrompt += "\n\n# Style preset\n" + trimmedStylePrompt;
+        }
         String trimmedRequest = request == null ? "" : request.trim();
         if (!trimmedRequest.isBlank())
         {
@@ -87,17 +107,33 @@ public final class ImageGenerationCoordinator
                         new ChatMessage("user", userPrompt)),
                 "",
                 null);
+        GenerationSettings seeSettings = settings.withConversationLayout(ConversationLayout.ROLE_AWARE);
+        if (ignoreResponseLength)
+        {
+            seeSettings = seeSettings.withoutNumPredict();
+        }
         return auxiliaryGenerationService.generate(
-                story, currentBlocks, currentCards, settings, auxiliaryInput);
+                story, currentBlocks, currentCards, seeSettings, auxiliaryInput);
     }
 
     public ComfyUiClient.GenerationResult generateImages(AppSettings appSettings, String promptText)
             throws IOException, InterruptedException
     {
         Objects.requireNonNull(appSettings, "appSettings");
+        ImageRatio.Dimensions dimensions = appSettings.comfyRatio().dimensions(appSettings.comfyDimension());
+        return generateImages(appSettings, promptText,
+                dimensions.width(), dimensions.height(), appSettings.comfyBatchSize());
+    }
+
+    public ComfyUiClient.GenerationResult generateImages(AppSettings appSettings, String promptText,
+            int width, int height, int batchSize) throws IOException, InterruptedException
+    {
+        Objects.requireNonNull(appSettings, "appSettings");
         String template = loadWorkflowTemplateJson(appSettings.comfyWorkflow());
-        return comfyUiClient.generateImages(template, promptText,
-                appSettings.comfyWidth(), appSettings.comfyHeight(), appSettings.comfyBatchSize());
+        ComfyUiClient.ImageOutputMode outputMode = appSettings.comfySaveImages()
+                ? ComfyUiClient.ImageOutputMode.PERMANENT
+                : ComfyUiClient.ImageOutputMode.PREVIEW;
+        return comfyUiClient.generateImages(template, promptText, width, height, batchSize, outputMode);
     }
 
     public ImageMutationResult insertOrReplaceImage(Story story, String expectedHeadId, PendingImage pending, String promptText,
@@ -107,7 +143,8 @@ public final class ImageGenerationCoordinator
         Objects.requireNonNull(story, "story");
         Objects.requireNonNull(pending, "pending");
 
-        StoryImage storyImage = createStoryImage(story.id(), promptText, pending.mimeType(), pending.workflowJson(), pending.bytes());
+        StoryImage storyImage = createStoryImage(story.id(), promptText, pending.mimeType(), pending.workflowJson(),
+                pending.bytes(), pending.batchSize());
         boolean replacingImage = replaceImageBlock != null && replaceImageBlock.role() == Role.IMAGE;
         String oldImageId = replacingImage ? replaceImageBlock.text() : null;
         ImageMutationResult result = database.transaction(connection ->
@@ -147,12 +184,12 @@ public final class ImageGenerationCoordinator
     }
 
     public ImageMutationResult replaceImageFromRetryHistory(Story story, Block headBlock, String prompt, byte[] bytes,
-            String mimeType, String workflowJson) throws SQLException
+            String mimeType, String workflowJson, int batchSize) throws SQLException
     {
         Objects.requireNonNull(story, "story");
         Objects.requireNonNull(headBlock, "headBlock");
 
-        StoryImage storyImage = createStoryImage(story.id(), prompt, mimeType, workflowJson, bytes);
+        StoryImage storyImage = createStoryImage(story.id(), prompt, mimeType, workflowJson, bytes, batchSize);
         String oldImageId = headBlock.text();
         ImageMutationResult result = database.transaction(connection ->
         {
@@ -234,7 +271,8 @@ public final class ImageGenerationCoordinator
         }
     }
 
-    private StoryImage createStoryImage(String storyId, String promptText, String mimeType, String workflowJson, byte[] bytes)
+    private StoryImage createStoryImage(String storyId, String promptText, String mimeType, String workflowJson,
+            byte[] bytes, int batchSize)
     {
         Image decoded = new Image(new ByteArrayInputStream(bytes == null ? new byte[0] : bytes));
         int width = (int) Math.round(decoded.getWidth());
@@ -246,6 +284,7 @@ public final class ImageGenerationCoordinator
                 mimeType == null || mimeType.isBlank() ? "image/png" : mimeType,
                 Math.max(0, width),
                 Math.max(0, height),
+                batchSize,
                 workflowJson == null ? "" : workflowJson,
                 bytes,
                 Timestamps.now());
@@ -256,8 +295,17 @@ public final class ImageGenerationCoordinator
         return storyRepository.touch(story.id(), Timestamps.now());
     }
 
-    public record PendingImage(byte[] bytes, String mimeType, String workflowJson)
+    public record PendingImage(byte[] bytes, String mimeType, String workflowJson, int batchSize)
     {
+        public PendingImage
+        {
+            batchSize = Math.max(1, batchSize);
+        }
+
+        public PendingImage(byte[] bytes, String mimeType, String workflowJson)
+        {
+            this(bytes, mimeType, workflowJson, 1);
+        }
     }
 
     public record ImageMutationResult(Story updatedStory, StoryImage storyImage, boolean replaced, boolean stale)

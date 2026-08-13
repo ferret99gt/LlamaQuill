@@ -7,6 +7,7 @@ import com.llamaquill.db.StoryCardRepository;
 import com.llamaquill.db.StoryRepository;
 import com.llamaquill.db.AppSettingsRepository;
 import com.llamaquill.db.ModelSettingsRepository;
+import com.llamaquill.db.SeePromptPresetRepository;
 import com.llamaquill.db.StoryCardCommandPresetRepository;
 import com.llamaquill.generation.AuxiliaryGenerationService;
 import com.llamaquill.generation.GenerationCoordinator;
@@ -15,10 +16,12 @@ import com.llamaquill.generation.PromptDialog;
 import com.llamaquill.generation.StoryPromptCoordinator;
 import com.llamaquill.image.ImageGenerationCoordinator;
 import com.llamaquill.image.SeeDialog;
+import com.llamaquill.image.SeePromptPresetService;
 import com.llamaquill.model.Block;
 import com.llamaquill.model.AppSettings;
 import com.llamaquill.model.ConversationLayout;
 import com.llamaquill.model.GenerationSettings;
+import com.llamaquill.model.ImageRatio;
 import com.llamaquill.model.ModelSettings;
 import com.llamaquill.model.Role;
 import com.llamaquill.model.Story;
@@ -117,7 +120,9 @@ public class App extends Application
     private static final int LEFT_SIDEBAR_WIDTH = 480;
     private static final int RIGHT_SIDEBAR_WIDTH = 480;
     private static final List<String> BUNDLED_COMFY_WORKFLOW_NAMES =
-            List.of("ChromaHD", "Chroma2Kaleidoscope");
+            List.of("ChromaHD", "Kroma");
+    private static final Set<String> INACTIVE_COMFY_WORKFLOW_NAMES =
+            Set.of("Chroma2Kaleidoscope", "Zeta-Chroma");
 
     private Database database;
     private StoryRepository storyRepository;
@@ -132,6 +137,7 @@ public class App extends Application
     private ImageGenerationCoordinator imageGenerationCoordinator;
     private StoryCardGenerationCoordinator storyCardGenerationCoordinator;
     private StoryCardPresetService storyCardPresetService;
+    private SeePromptPresetService seePromptPresetService;
     private StoryBlockService storyBlockService;
     private StoryCloneService storyCloneService;
     private StoryService storyService;
@@ -204,13 +210,15 @@ public class App extends Application
         private final byte[] bytes;
         private final String mimeType;
         private final String workflowJson;
+        private final int batchSize;
 
-        private ImageRetryHistoryEntry(String prompt, byte[] bytes, String mimeType, String workflowJson)
+        private ImageRetryHistoryEntry(String prompt, byte[] bytes, String mimeType, String workflowJson, int batchSize)
         {
             this.prompt = prompt == null ? "" : prompt;
             this.bytes = bytes;
             this.mimeType = mimeType == null ? "image/png" : mimeType;
             this.workflowJson = workflowJson == null ? "" : workflowJson;
+            this.batchSize = Math.max(1, batchSize);
         }
     }
 
@@ -257,6 +265,7 @@ public class App extends Application
             appSettingsRepository = new AppSettingsRepository(database);
             modelSettingsRepository = new ModelSettingsRepository(database);
             StoryCardCommandPresetRepository presetRepository = new StoryCardCommandPresetRepository(database);
+            SeePromptPresetRepository seePresetRepository = new SeePromptPresetRepository(database);
             promptCompiler = new PromptCompiler();
             aiDungeonImports = new AIDungeonImports(database, storyRepository, blockRepository, cardRepository,
                     imageRepository, DEFAULT_SYSTEM_PROMPT);
@@ -271,6 +280,7 @@ public class App extends Application
             storyCardGenerationCoordinator = new StoryCardGenerationCoordinator(
                     blockRepository, cardRepository, auxiliaryGenerationService);
             storyCardPresetService = new StoryCardPresetService(presetRepository);
+            seePromptPresetService = new SeePromptPresetService(seePresetRepository);
             imageGenerationCoordinator = new ImageGenerationCoordinator(database, imageRepository, blockRepository,
                     storyRepository, cardRepository, auxiliaryGenerationService, comfyUiClient);
             storyBlockService = new StoryBlockService(
@@ -284,11 +294,6 @@ public class App extends Application
             ollamaClient.setModel(activeModelSettings.modelName());
             settings = buildGenerationSettings();
             executor = Executors.newSingleThreadExecutor();
-
-            StoryService.StoryDocument initialDocument =
-                    storyService.loadOrCreate("Untitled Story", DEFAULT_SYSTEM_PROMPT);
-            storyWorkspace.open(initialDocument.story(), initialDocument.blocks());
-            retryHistory.activate(currentSession());
         }
         catch (SQLException e)
         {
@@ -332,7 +337,7 @@ public class App extends Application
                 this::showError);
         takeTurnButton.setOnAction(event -> showTurnInput(true));
 
-        statusLabel = new Label("Ready");
+        statusLabel = new Label("Select a story");
 
         storyLibraryController = new StoryLibraryController(
                 LEFT_SIDEBAR_WIDTH,
@@ -342,7 +347,8 @@ public class App extends Application
         storyCardLibraryController = new StoryCardLibraryController(
                 () -> showCardDialog(null),
                 this::showImportCardsDialog,
-                this::showCardDialog);
+                this::showCardDialog,
+                this::updateForcePinAllStoryCards);
 
         var statusBar = new HBox(statusLabel);
         statusBar.getStyleClass().add("status-bar");
@@ -357,11 +363,11 @@ public class App extends Application
         root.setRight(buildRightSidebar());
         root.setBottom(statusBar);
 
-        refreshStoryList(currentStory().id());
-        refreshCardList(currentStory().id());
-        populateStoryDetails(currentStory());
-        renderStoryBlocks(true);
-        setStoryDependentControlsEnabled(currentStory() != null);
+        refreshStoryList(null);
+        refreshCardList(null);
+        populateStoryDetails(null);
+        renderStoryBlocks(false);
+        setStoryDependentControlsEnabled(false);
 
         var scene = new Scene(root, 1280, 720);
         scene.getStylesheets().add(getClass().getResource("/styles.css").toExternalForm());
@@ -546,7 +552,7 @@ public class App extends Application
                     (ConversationLayout) change.value());
             case RESPONSE_LENGTH -> updateResponseLength(change.intValue());
             case RESPONSE_LENGTH_ENABLED -> updateResponseLengthEnabled(change.booleanValue());
-            case TEMPERATURE -> updateTemperature(roundTo(change.doubleValue(), 0.1));
+            case TEMPERATURE -> updateTemperature(roundTo(change.doubleValue(), 0.01));
             case TEMPERATURE_ENABLED -> updateTemperatureEnabled(change.booleanValue());
             case TOP_K -> updateTopK(change.intValue());
             case TOP_K_ENABLED -> updateTopKEnabled(change.booleanValue());
@@ -568,9 +574,10 @@ public class App extends Application
             case STORY_CARD_LOOKBACK -> updateStoryCardLookback(change.intValue());
             case COMFY_UI_URL -> updateComfyUiUrl(change.stringValue());
             case COMFY_WORKFLOW -> updateComfyWorkflow(change.stringValue());
-            case COMFY_WIDTH -> updateComfyWidth(change.intValue());
-            case COMFY_HEIGHT -> updateComfyHeight(change.intValue());
+            case COMFY_DIMENSION -> updateComfyDimension(change.intValue());
+            case COMFY_RATIO -> updateComfyRatio((ImageRatio) change.value());
             case COMFY_BATCH_SIZE -> updateComfyBatchSize(change.intValue());
+            case COMFY_SAVE_IMAGES -> updateComfySaveImages(change.booleanValue());
         }
     }
 
@@ -1078,23 +1085,23 @@ public class App extends Application
         persistAppSettings();
     }
 
-    private void updateComfyWidth(int value)
+    private void updateComfyDimension(int value)
     {
-        if (value == appSettings.comfyWidth())
+        if (value == appSettings.comfyDimension())
         {
             return;
         }
-        appSettings = SettingsCoordinator.withComfyWidth(appSettings, value);
+        appSettings = SettingsCoordinator.withComfyDimension(appSettings, value);
         persistAppSettings();
     }
 
-    private void updateComfyHeight(int value)
+    private void updateComfyRatio(ImageRatio value)
     {
-        if (value == appSettings.comfyHeight())
+        if (value == null || value == appSettings.comfyRatio())
         {
             return;
         }
-        appSettings = SettingsCoordinator.withComfyHeight(appSettings, value);
+        appSettings = SettingsCoordinator.withComfyRatio(appSettings, value);
         persistAppSettings();
     }
 
@@ -1105,6 +1112,16 @@ public class App extends Application
             return;
         }
         appSettings = SettingsCoordinator.withComfyBatchSize(appSettings, value);
+        persistAppSettings();
+    }
+
+    private void updateComfySaveImages(boolean value)
+    {
+        if (value == appSettings.comfySaveImages())
+        {
+            return;
+        }
+        appSettings = SettingsCoordinator.withComfySaveImages(appSettings, value);
         persistAppSettings();
     }
 
@@ -1149,14 +1166,21 @@ public class App extends Application
         {
             // Best effort discovery; defaults will still work.
         }
+        names.removeIf(name -> !isActiveComfyWorkflowName(name));
         names = new ArrayList<>(new java.util.LinkedHashSet<>(names));
         Collections.sort(names);
         return names;
     }
 
+    static boolean isActiveComfyWorkflowName(String name)
+    {
+        return name != null && !INACTIVE_COMFY_WORKFLOW_NAMES.contains(name);
+    }
+
     static List<String> bundledComfyWorkflowNames()
     {
         return BUNDLED_COMFY_WORKFLOW_NAMES.stream()
+                .filter(App::isActiveComfyWorkflowName)
                 .filter(name -> App.class.getResource("/comfyui/" + name + ".json") != null)
                 .toList();
     }
@@ -1415,6 +1439,9 @@ public class App extends Application
         try
         {
             storyCardLibraryController.setCards(storyCardService.listForStory(storyId));
+            Story active = currentStory();
+            storyCardLibraryController.setForcePinAll(
+                    active != null && storyId.equals(active.id()) && active.forcePinAllStoryCards());
         }
         catch (SQLException e)
         {
@@ -1499,6 +1526,10 @@ public class App extends Application
                 story.id(),
                 card,
                 storyCardPresetService,
+                appSettings.selectedStoryCardCommandPresetId(),
+                this::updateSelectedStoryCardCommandPreset,
+                story.storyCardGenerationContext(),
+                contextValue -> saveStoryCardGenerationContext(story, contextValue),
                 this::showInfo,
                 this::showError,
                 statusLabel::setText,
@@ -1540,6 +1571,75 @@ public class App extends Application
                 });
     }
 
+    private void updateSelectedStoryCardCommandPreset(String presetId)
+    {
+        AppSettings updated = SettingsCoordinator.withSelectedStoryCardCommandPreset(appSettings, presetId);
+        if (updated.equals(appSettings))
+        {
+            return;
+        }
+        appSettings = updated;
+        persistAppSettings();
+    }
+
+    private void saveSeePromptPresetSelection(Story dialogStory, String presetId)
+    {
+        Story base = currentStory() != null && currentStory().id().equals(dialogStory.id())
+                ? currentStory()
+                : dialogStory;
+        try
+        {
+            Story updated = storyService.updateSelectedSeePromptPreset(base, presetId);
+            if (updated != base && currentStory() != null && currentStory().id().equals(updated.id()))
+            {
+                storyWorkspace.updateStory(updated);
+                refreshStoryList(updated.id());
+            }
+        }
+        catch (SQLException e)
+        {
+            showError("Failed to save See style selection", e);
+        }
+    }
+
+    private void saveStoryCardGenerationContext(Story dialogStory, String contextValue) throws SQLException
+    {
+        Story base = currentStory() != null && currentStory().id().equals(dialogStory.id())
+                ? currentStory()
+                : dialogStory;
+        Story updated = storyService.updateStoryCardGenerationContext(base, contextValue);
+        if (updated != base && currentStory() != null && currentStory().id().equals(updated.id()))
+        {
+            storyWorkspace.updateStory(updated);
+        }
+    }
+
+    private void updateForcePinAllStoryCards(boolean forcePinAll)
+    {
+        Story story = currentStory();
+        if (story == null)
+        {
+            return;
+        }
+        try
+        {
+            Story updated = storyService.updateForcePinAllStoryCards(story, forcePinAll);
+            if (updated != story)
+            {
+                storyWorkspace.updateStory(updated);
+                refreshStoryList(updated.id());
+            }
+            statusLabel.setText(forcePinAll
+                    ? "All Story Cards will be pinned during prompt compilation"
+                    : "Story Card compilation restored to individual pins and triggers");
+        }
+        catch (SQLException e)
+        {
+            storyCardLibraryController.setForcePinAll(story.forcePinAllStoryCards());
+            showError("Failed to update Story Card pin policy", e);
+        }
+    }
+
     private void showPromptDialog()
     {
         StoryTaskContext context = captureStoryTaskContext();
@@ -1558,22 +1658,23 @@ public class App extends Application
                 text -> statusLabel.setText(text),
                 () -> setStoryActionButtonsBusy(true),
                 this::restoreStoryActionButtonsState,
-                (systemPrompt, userPrompt, overrideNumPredict, onSuccess, onFailure) -> submitStoryTask(
-                        context.session(), "Story Prompt",
-                        () -> storyPromptCoordinator.generateResponse(
-                                story,
-                                systemPrompt,
-                                userPrompt,
-                                overrideNumPredict
-                                        ? context.generationSettings().withoutNumPredict()
-                                        : context.generationSettings()),
-                        result ->
-                        {
-                            recordOllamaResponse(
-                                    result.compilation().estimatedTokens(), result.response());
-                            onSuccess.accept(result.content());
-                        },
-                        onFailure));
+                (systemPrompt, userPrompt, overrideNumPredict, forceRoleAwareTurns, onSuccess, onFailure) ->
+                        submitStoryTask(
+                                context.session(), "Story Prompt",
+                                () -> storyPromptCoordinator.generateResponse(
+                                        story,
+                                        systemPrompt,
+                                        userPrompt,
+                                        context.generationSettings(),
+                                        overrideNumPredict,
+                                        forceRoleAwareTurns),
+                                result ->
+                                {
+                                    recordOllamaResponse(
+                                            result.compilation().estimatedTokens(), result.response());
+                                    onSuccess.accept(result.content());
+                                },
+                                onFailure));
     }
 
     private void showSeeDialog()
@@ -1581,7 +1682,7 @@ public class App extends Application
         showSeeDialog(null, null);
     }
 
-    private void showSeeDialog(String initialPrompt, Block replaceImageBlock)
+    private void showSeeDialog(StoryImage retryImage, Block replaceImageBlock)
     {
         StoryTaskContext context = captureStoryTaskContext();
         if (context == null)
@@ -1594,22 +1695,41 @@ public class App extends Application
         Story story = context.story();
         StorySession session = context.session();
         String expectedHeadId = replaceImageBlock == null ? session.headBlockId() : replaceImageBlock.id();
+        String initialPrompt = retryImage == null ? null : retryImage.prompt();
+        int imageDimension = retryImage == null
+                ? context.appSettings().comfyDimension()
+                : Math.max(retryImage.width(), retryImage.height());
+        ImageRatio imageRatio = retryImage == null
+                ? context.appSettings().comfyRatio()
+                : ImageRatio.nearest(retryImage.width(), retryImage.height());
+        int imageBatchSize = retryImage == null
+                ? context.appSettings().comfyBatchSize()
+                : retryImage.batchSize();
         SeeDialog.show(
                 primaryStage,
                 header,
                 initialPrompt,
                 DEFAULT_SEE_REQUEST,
+                imageDimension,
+                imageRatio,
+                imageBatchSize,
+                seePromptPresetService,
+                story.selectedSeePromptPresetId(),
+                presetId -> saveSeePromptPresetSelection(story, presetId),
                 insertLabel,
                 this::showInfo,
                 this::showError,
                 textValue -> statusLabel.setText(textValue),
                 () -> setStoryActionButtonsBusy(true),
                 this::restoreStoryActionButtonsState,
-                (request, onSuccess, onFailure) -> submitStoryTask(session, "Image Prompt",
+                (stylePrompt, request, ignoreResponseLength, onSuccess, onFailure) -> submitStoryTask(
+                        session, "Image Prompt",
                         () -> imageGenerationCoordinator.generateImagePromptResult(
                                 story,
+                                stylePrompt,
                                 request,
-                                context.generationSettings()),
+                                context.generationSettings(),
+                                ignoreResponseLength),
                         result ->
                         {
                             recordOllamaResponse(
@@ -1617,18 +1737,19 @@ public class App extends Application
                             onSuccess.accept(result.content());
                         },
                         onFailure),
-                (promptText, onSuccess, onFailure) -> submitStoryTask(session, "Image Generation",
+                (promptText, width, height, batchSize, onSuccess, onFailure) -> submitStoryTask(
+                        session, "Image Generation",
                         () ->
                         {
                             ComfyUiClient.GenerationResult result = imageGenerationCoordinator.generateImages(
-                                    context.appSettings(), promptText);
+                                    context.appSettings(), promptText, width, height, batchSize);
                             List<ImageGenerationCoordinator.PendingImage> pending = new ArrayList<>();
                             if (result != null && result.images() != null)
                             {
                                 for (ComfyUiClient.GeneratedImage image : result.images())
                                 {
                                     pending.add(new ImageGenerationCoordinator.PendingImage(
-                                            image.bytes(), image.mimeType(), result.workflowJson()));
+                                            image.bytes(), image.mimeType(), result.workflowJson(), batchSize));
                                 }
                             }
                             return pending;
@@ -1659,7 +1780,8 @@ public class App extends Application
                         {
                             StoryImage storyImage = result.storyImage();
                             retryHistory.add(currentSession(), new ImageRetryHistoryEntry(storyImage.prompt(),
-                                    storyImage.imageBytes(), storyImage.mimeType(), storyImage.workflowJson()));
+                                    storyImage.imageBytes(), storyImage.mimeType(), storyImage.workflowJson(),
+                                    storyImage.batchSize()));
                             updateRetryCountLabel();
                         }
                     }
@@ -1918,7 +2040,7 @@ public class App extends Application
         {
             seedImageRetryHistoryIfNeeded(head);
             StoryImage image = loadStoryImage(head.text());
-            showSeeDialog(image == null ? null : image.prompt(), head);
+            showSeeDialog(image, head);
             return;
         }
         if (head.role() == Role.USER)
@@ -2096,7 +2218,8 @@ public class App extends Application
             return;
         }
         retryHistory.add(currentSession(),
-                new ImageRetryHistoryEntry(image.prompt(), image.imageBytes(), image.mimeType(), image.workflowJson()));
+                new ImageRetryHistoryEntry(image.prompt(), image.imageBytes(), image.mimeType(), image.workflowJson(),
+                        image.batchSize()));
         updateRetryCountLabel();
     }
 
@@ -2107,7 +2230,8 @@ public class App extends Application
             return;
         }
         ImageGenerationCoordinator.ImageMutationResult result = imageGenerationCoordinator.replaceImageFromRetryHistory(
-                currentStory(), headBlock, imageEntry.prompt, imageEntry.bytes, imageEntry.mimeType, imageEntry.workflowJson);
+                currentStory(), headBlock, imageEntry.prompt, imageEntry.bytes, imageEntry.mimeType,
+                imageEntry.workflowJson, imageEntry.batchSize);
         if (result.stale())
         {
             statusLabel.setText("Retry selection was stale; the story was not changed.");
