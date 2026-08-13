@@ -10,6 +10,8 @@ public record AppSettings(String ollamaUrl, String comfyUiUrl, String selectedMo
         boolean comfySaveImages, int ollamaKeepAliveMinutes, String selectedStoryCardCommandPresetId)
 {
     public static final String DEFAULT_COMFY_WORKFLOW = "ChromaHD";
+    public static final int MIN_RESPONSE_LENGTH = 1;
+    public static final int MAX_RESPONSE_LENGTH = 1000;
     public static final int DEFAULT_COMFY_DIMENSION = 720;
     public static final ImageRatio DEFAULT_COMFY_RATIO = ImageRatio.SQUARE;
     public static final int DEFAULT_COMFY_BATCH_SIZE = 4;
@@ -27,7 +29,7 @@ public record AppSettings(String ollamaUrl, String comfyUiUrl, String selectedMo
         selectedModel = selectedModel == null || selectedModel.isBlank()
                 ? OllamaClient.DEFAULT_MODEL
                 : selectedModel.trim();
-        responseLength = Math.max(1, Math.min(32768, responseLength));
+        responseLength = Math.max(MIN_RESPONSE_LENGTH, Math.min(MAX_RESPONSE_LENGTH, responseLength));
         minStoryPercent = Math.max(MIN_STORY_PERCENT, Math.min(MAX_STORY_PERCENT, minStoryPercent));
         storyCardLookback = Math.max(0, Math.min(100, storyCardLookback));
         comfyWorkflow = comfyWorkflow == null || comfyWorkflow.isBlank()

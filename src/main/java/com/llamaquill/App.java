@@ -552,7 +552,7 @@ public class App extends Application
                     (ConversationLayout) change.value());
             case RESPONSE_LENGTH -> updateResponseLength(change.intValue());
             case RESPONSE_LENGTH_ENABLED -> updateResponseLengthEnabled(change.booleanValue());
-            case TEMPERATURE -> updateTemperature(roundTo(change.doubleValue(), 0.1));
+            case TEMPERATURE -> updateTemperature(roundTo(change.doubleValue(), 0.01));
             case TEMPERATURE_ENABLED -> updateTemperatureEnabled(change.booleanValue());
             case TOP_K -> updateTopK(change.intValue());
             case TOP_K_ENABLED -> updateTopKEnabled(change.booleanValue());

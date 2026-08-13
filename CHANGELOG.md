@@ -11,6 +11,9 @@ implementation-level record.
 - When Ollama reports the exact prompt and context token counts for an oversized chat request,
   LlamaQuill now recompiles against the corrected budget and retries once. This also lets the
   existing per-model token calibration learn from the successful retry.
+- Response Length now has a practical maximum of 1000 tokens, giving the commonly used 50–500
+  range substantially more room on its Options slider.
+- Temperature can now be adjusted and persisted in hundredths instead of tenths.
 - The one-shot Prompt window can force Role-aware Turns for that request without changing the
   model's saved conversation layout. The override is enabled by default so utility instructions
   remain a distinct final user turn instead of blending into flattened story prose.

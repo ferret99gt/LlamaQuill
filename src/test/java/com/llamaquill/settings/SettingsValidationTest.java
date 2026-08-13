@@ -60,12 +60,12 @@ class SettingsValidationTest
                 original, ConversationLayout.FLATTENED_WITH_PREFILL);
 
         assertEquals(original, original.toBuilder().build());
-        ModelSettings updated = SettingsCoordinator.withTemperature(original, 0.0);
+        ModelSettings updated = SettingsCoordinator.withTemperature(original, 0.57);
 
         assertEquals(131072, updated.contextLimit());
         assertEquals(1.4, updated.promptTokenScale());
         assertTrue(updated.temperatureEnabled());
-        assertEquals(0.0, updated.temperature());
+        assertEquals(0.57, updated.temperature());
         assertTrue(updated.typicalPEnabled());
         assertEquals(0.73, updated.typicalP());
         assertTrue(updated.repeatLastNEnabled());
@@ -129,7 +129,7 @@ class SettingsValidationTest
                 100);
 
         assertEquals("http://localhost:11434", settings.ollamaUrl());
-        assertEquals(32768, settings.responseLength());
+        assertEquals(AppSettings.MAX_RESPONSE_LENGTH, settings.responseLength());
         assertEquals(AppSettings.MIN_STORY_PERCENT, settings.minStoryPercent());
         assertEquals(0, settings.storyCardLookback());
         assertEquals(64, settings.comfyDimension());

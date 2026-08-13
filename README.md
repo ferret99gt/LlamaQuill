@@ -68,7 +68,8 @@ Face provides a private visibility option.
 Response length and every sampling control have separate enable switches. A disabled control is
 omitted from the Ollama request so the model's own default can apply. When Response Length is
 disabled, LlamaQuill still reserves 200 estimated tokens inside its prompt budget so the model
-has space to answer.
+has space to answer. The enabled Response Length range is 1–1000 tokens, keeping the common
+50–500 range practical to adjust. Temperature can be adjusted in hundredths.
 
 The global **Ollama Model Keep Alive** setting retains the selected model for 5–30 minutes after
 each request, reducing reload delays when returning to a story.

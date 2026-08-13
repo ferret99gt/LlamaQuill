@@ -189,8 +189,10 @@ public final class SettingsPaneController
                 1);
         ollamaKeepAliveSlider.setTooltip(new Tooltip(
                 "How long Ollama keeps the model loaded after each LlamaQuill chat request."));
-        responseLengthSlider = buildIntSlider(1, 32768, appSettings.responseLength(), 1);
-        temperatureSlider = buildDoubleSlider(0.0, 5.0, modelSettings.temperature(), 0.1);
+        responseLengthSlider = buildIntSlider(
+                AppSettings.MIN_RESPONSE_LENGTH, AppSettings.MAX_RESPONSE_LENGTH,
+                appSettings.responseLength(), 1);
+        temperatureSlider = buildDoubleSlider(0.0, 5.0, modelSettings.temperature(), 0.01);
         topKSlider = buildIntSlider(0, 10000, modelSettings.topK(), 1);
         topPSlider = buildDoubleSlider(0.0, 1.0, modelSettings.topP(), 0.01);
         minPSlider = buildDoubleSlider(0.0, 1.0, modelSettings.minP(), 0.001);

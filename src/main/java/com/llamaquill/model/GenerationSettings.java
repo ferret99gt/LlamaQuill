@@ -30,7 +30,8 @@ public record GenerationSettings(String modelName, String ollamaHost, int contex
                 ? Math.max(ModelSettings.MIN_PROMPT_TOKEN_SCALE,
                         Math.min(ModelSettings.MAX_PROMPT_TOKEN_SCALE, promptTokenScale))
                 : 1.0;
-        responseLength = Math.max(1, Math.min(32768, responseLength));
+        responseLength = Math.max(AppSettings.MIN_RESPONSE_LENGTH,
+                Math.min(AppSettings.MAX_RESPONSE_LENGTH, responseLength));
         temperature = Math.max(0.0, Math.min(5.0, temperature));
         topK = Math.max(0, Math.min(10000, topK));
         topP = Math.max(0.0, Math.min(1.0, topP));
