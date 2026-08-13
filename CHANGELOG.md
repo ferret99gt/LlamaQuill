@@ -3,7 +3,10 @@
 This changelog focuses on what changes for people using LlamaQuill. The Git history contains the
 implementation-level record.
 
-## Unreleased
+## 0.4.0
+
+Version 0.4.0 expands large-context story maintenance and local image generation. Existing
+databases are backed up and migrated automatically to schema 11.
 
 - LlamaQuill now starts with no story selected, keeping story content and details off screen until
   a story is explicitly opened. A new installation also waits for the user to create or import its
